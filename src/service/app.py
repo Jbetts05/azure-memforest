@@ -12,6 +12,8 @@ from fastapi.responses import JSONResponse
 from src import __version__
 from src.service.auth import AuthError, AuthProvider
 from src.service.azure_readiness import build_azure_readiness_checks
+from src.cloud.cosmos_jobs import CosmosJobStatusService, job_store_from_env
+from src.service.jobs import JobRecordingCommandService
 from src.service.jobs import service_bus_command_service_from_env
 from src.service.middleware import REQUEST_ID_HEADER, RequestIdMiddleware
 from src.service.readiness import ReadinessCheck, default_not_configured_checks, evaluate_readiness
@@ -49,7 +51,14 @@ def create_app(
     )
     app.add_middleware(RequestIdMiddleware)
     app.state.auth_provider = auth_provider
-    app.state.memory_command_service = service_bus_command_service_from_env(os.environ)
+    job_store = job_store_from_env(os.environ)
+    command_service = service_bus_command_service_from_env(os.environ)
+    app.state.memory_command_service = (
+        JobRecordingCommandService(command_service, job_store)
+        if command_service is not None and job_store is not None
+        else command_service
+    )
+    app.state.job_status_service = CosmosJobStatusService(job_store) if job_store is not None else None
     app.include_router(memory_router)
     app.add_exception_handler(_RouteError, route_error_handler)
 
@@ -106,6 +115,8 @@ def create_app(
         return {
             "name": SERVICE_NAME,
             "version": __version__,
+            "git_sha": os.getenv("AZURE_MEMFOREST_GIT_SHA", "unknown"),
+            "image_dirty": os.getenv("AZURE_MEMFOREST_IMAGE_DIRTY", "unknown"),
         }
 
     return app

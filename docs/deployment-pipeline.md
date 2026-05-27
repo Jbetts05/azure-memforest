@@ -55,10 +55,7 @@ concurrency:
 5. Build and push the image with ACR Tasks:
 
    ```powershell
-   az acr build `
-     --registry memforestexampleacr `
-     --image azure-memforest-api:${{ github.sha }} `
-     .
+   .\scripts\build_acr.ps1 -Registry memforestexampleacr -Repository azure-memforest-api
    ```
 
 6. Run `az deployment group what-if` for visibility. Do not fail solely because the diff is non-empty; role assignments and provider defaults can be noisy.

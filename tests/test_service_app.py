@@ -117,6 +117,8 @@ def test_version_endpoint_returns_minimal_service_identity() -> None:
     assert response.json() == {
         "name": "azure-memforest-api",
         "version": __version__,
+        "git_sha": "unknown",
+        "image_dirty": "unknown",
     }
 
 
