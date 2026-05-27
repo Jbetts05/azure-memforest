@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
-from fastapi import FastAPI, status
+import logging
+
+from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
 
 from src import __version__
+from src.service.middleware import REQUEST_ID_HEADER, RequestIdMiddleware
 from src.service.readiness import ReadinessCheck, default_not_configured_checks, evaluate_readiness
 from src.service.settings import ServiceSettings, load_service_settings
 
 
 SERVICE_NAME = "azure-memforest-api"
+log = logging.getLogger(__name__)
 
 
 def create_app(
@@ -27,6 +31,25 @@ def create_app(
         title="Azure-MemForest API",
         version=__version__,
     )
+    app.add_middleware(RequestIdMiddleware)
+
+    @app.exception_handler(Exception)
+    async def unhandled_exception(request: Request, exc: Exception) -> JSONResponse:
+        request_id = getattr(request.state, "request_id", "")
+        log.error(
+            "Unhandled service exception request_id=%s",
+            request_id,
+            exc_info=(type(exc), exc, exc.__traceback__),
+        )
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            headers={REQUEST_ID_HEADER: request_id} if request_id else None,
+            content={
+                "status": "error",
+                "error": "internal_server_error",
+                "request_id": request_id,
+            },
+        )
 
     @app.get("/health/live")
     def live() -> dict[str, str]:
