@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 
 from src import __version__
 from src.service.auth import AuthError, AuthProvider
+from src.service.azure_readiness import build_azure_readiness_checks
 from src.service.middleware import REQUEST_ID_HEADER, RequestIdMiddleware
 from src.service.readiness import ReadinessCheck, default_not_configured_checks, evaluate_readiness
 from src.service.routes import _RouteError, route_error_handler, router as memory_router
@@ -28,7 +29,7 @@ def create_app(
     """Create the HTTP API without loading model clients or user state."""
 
     settings = settings or load_service_settings()
-    configured_readiness_checks = readiness_checks or default_not_configured_checks()
+    configured_readiness_checks = readiness_checks or _default_readiness_checks()
 
     app = FastAPI(
         title="Azure-MemForest API",
@@ -95,3 +96,8 @@ def create_app(
         }
 
     return app
+
+
+def _default_readiness_checks() -> list[ReadinessCheck]:
+    checks = build_azure_readiness_checks()
+    return checks if checks else default_not_configured_checks()

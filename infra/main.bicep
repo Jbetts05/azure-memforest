@@ -372,6 +372,10 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
               value: appInsights.properties.ConnectionString
             }
             {
+              name: 'AZURE_CLIENT_ID'
+              value: appIdentity.properties.clientId
+            }
+            {
               name: 'AZURE_COSMOS_ENDPOINT'
               value: cosmosAccount.properties.documentEndpoint
             }

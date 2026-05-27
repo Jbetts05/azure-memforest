@@ -10,7 +10,7 @@ from typing import Mapping
 @dataclass(frozen=True)
 class ServiceSettings:
     environment: str = "local"
-    readiness_timeout_seconds: float = 2.0
+    readiness_timeout_seconds: float = 10.0
 
 
 def load_service_settings(environ: Mapping[str, str] | None = None) -> ServiceSettings:
@@ -21,7 +21,7 @@ def load_service_settings(environ: Mapping[str, str] | None = None) -> ServiceSe
         environment=str(values.get("AZURE_MEMFOREST_ENV", "local") or "local"),
         readiness_timeout_seconds=_positive_float(
             values.get("AZURE_MEMFOREST_READINESS_TIMEOUT_SECONDS"),
-            default=2.0,
+            default=10.0,
         ),
     )
 
