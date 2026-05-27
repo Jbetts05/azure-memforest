@@ -13,6 +13,15 @@ $env:PIP_REQUIRE_VIRTUALENV = "true"
 
 Use the `.venv` interpreter explicitly in commands and automation. The `.venv/` directory is intentionally ignored by git.
 
+## Running the local service
+
+The HTTP service factory is intentionally side-effect-light and does not load model clients or user state at import time.
+
+```powershell
+$env:PIP_REQUIRE_VIRTUALENV = "true"
+.\.venv\Scripts\python.exe -m uvicorn src.service.app:create_app --factory --host 127.0.0.1 --port 8000
+```
+
 ## Azure deployment safety
 
 Do not create, modify, or deploy Azure resources until the deployment decisions in `docs/azure-decisions.md` are confirmed.
