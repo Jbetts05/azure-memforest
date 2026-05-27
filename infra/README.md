@@ -23,7 +23,7 @@ az deployment group create `
   --parameters containerImage="<acr-login-server>/azure-memforest-api:<tag>"
 ```
 
-The current template includes the hosting foundation, Cosmos DB account/database foundation, Azure AI Search recall foundation, and Blob snapshot storage foundation. Redis, Service Bus, and model endpoint resources should be added in the implementation slices that first use them.
+The current template includes the hosting foundation, Cosmos DB account/database foundation, Azure AI Search recall foundation, Blob snapshot storage foundation, and Service Bus write-plane foundation. Redis and model endpoint resources should be added in the implementation slices that first use them.
 
 ## Current dev deployment
 
@@ -43,6 +43,8 @@ The initial dev hosting foundation has been deployed to:
 | Azure AI Search | `memforestexamplesearch` |
 | Recall index name | `memforest-recall` |
 | Snapshot container | `snapshots` |
+| Service Bus namespace | `memforestexamplesb` |
+| Writes queue | `memforest-writes` |
 
 Azure AI Search is deployed in `eastus` for the current dev environment because `eastus2` returned `InsufficientResourcesAvailable` for new Search services on 2026-05-27. Revisit this topology before production.
 
@@ -62,3 +64,5 @@ Expected current behavior:
 - `/health/ready` returns `503` until real Azure dependency checks are wired.
 
 Cosmos containers and Azure AI Search indexes are intentionally not declared in Bicep yet. Store/search adapters will create or migrate containers and indexes idempotently with the correct partition keys, vector dimensions, model versions, and indexing policies when those adapters are implemented. The Blob `snapshots` container is declared in Bicep because it has no schema or partition-key coupling.
+
+The Service Bus writes queue has sessions enabled for per-tenant/user write ordering. The dev namespace uses Standard SKU; private endpoints require Premium and should be revisited before production.

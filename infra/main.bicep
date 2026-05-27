@@ -50,19 +50,32 @@ param searchPublicNetworkAccess string = 'enabled'
 @description('Public network access setting for dev Storage account. Set to Disabled when private endpoints are added.')
 param storagePublicNetworkAccess string = 'Enabled'
 
+@allowed([
+  'Enabled'
+  'Disabled'
+])
+@description('Public network access setting for dev Service Bus namespace. Premium is required before private endpoints are added.')
+param serviceBusPublicNetworkAccess string = 'Enabled'
+
 @description('Azure AI Search index name reserved for tree/root recall.')
 param searchRecallIndexName string = 'memforest-recall'
+
+@description('Service Bus queue name for ordered write jobs.')
+param serviceBusWritesQueueName string = 'memforest-writes'
 
 var normalizedName = toLower(replace('${appName}-${environmentName}', '_', '-'))
 var acrName = replace(take('${replace(normalizedName, '-', '')}acr', 50), '_', '')
 var cosmosName = take('${replace(normalizedName, '-', '')}cosmos', 44)
 var searchName = take('${replace(normalizedName, '-', '')}search', 60)
 var storageName = '${take(replace(normalizedName, '-', ''), 9)}st${uniqueString(resourceGroup().id)}'
+var serviceBusName = take('${replace(normalizedName, '-', '')}sb', 50)
 var acrPullRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
 var cosmosDataContributorRoleDefinitionId = '${cosmosAccount.id}/sqlRoleDefinitions/00000000-0000-0000-0000-000000000002'
 var searchServiceContributorRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7ca78c08-252a-4471-8644-bb5ff32d4ba0')
 var searchIndexDataContributorRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '8ebe5a00-799e-43f5-93ac-243d3dce84a7')
 var storageBlobDataContributorRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
+var serviceBusDataSenderRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '69a216fc-b8fb-44d8-bc22-1f3c2cd27a39')
+var serviceBusDataReceiverRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4f6d3b9b-027b-4f4c-9142-0e5a2a2247e0')
 
 resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   name: '${normalizedName}-law'
@@ -245,6 +258,54 @@ resource storageBlobDataContributorAssignment 'Microsoft.Authorization/roleAssig
   }
 }
 
+resource serviceBusNamespace 'Microsoft.ServiceBus/namespaces@2024-01-01' = {
+  name: serviceBusName
+  location: location
+  tags: tags
+  sku: {
+    name: 'Standard'
+    tier: 'Standard'
+  }
+  properties: {
+    disableLocalAuth: true
+    minimumTlsVersion: '1.2'
+    publicNetworkAccess: serviceBusPublicNetworkAccess
+  }
+}
+
+resource writesQueue 'Microsoft.ServiceBus/namespaces/queues@2024-01-01' = {
+  name: serviceBusWritesQueueName
+  parent: serviceBusNamespace
+  properties: {
+    requiresSession: true
+    lockDuration: 'PT2M'
+    maxDeliveryCount: 5
+    defaultMessageTimeToLive: 'P14D'
+    deadLetteringOnMessageExpiration: true
+    enablePartitioning: false
+  }
+}
+
+resource serviceBusSenderAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(serviceBusNamespace.id, appIdentity.id, 'servicebus-data-sender')
+  scope: serviceBusNamespace
+  properties: {
+    roleDefinitionId: serviceBusDataSenderRoleDefinitionId
+    principalId: appIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource serviceBusReceiverAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(serviceBusNamespace.id, appIdentity.id, 'servicebus-data-receiver')
+  scope: serviceBusNamespace
+  properties: {
+    roleDefinitionId: serviceBusDataReceiverRoleDefinitionId
+    principalId: appIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
 resource acrPullAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(containerRegistry.id, appIdentity.id, 'acr-pull')
   scope: containerRegistry
@@ -342,6 +403,14 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
               name: 'AZURE_STORAGE_SNAPSHOT_CONTAINER'
               value: snapshotsContainer.name
             }
+            {
+              name: 'AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE'
+              value: '${serviceBusNamespace.name}.servicebus.windows.net'
+            }
+            {
+              name: 'AZURE_SERVICEBUS_WRITES_QUEUE_NAME'
+              value: writesQueue.name
+            }
           ]
           resources: {
             cpu: json('0.5')
@@ -361,6 +430,8 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
     searchServiceContributorAssignment
     searchIndexDataContributorAssignment
     storageBlobDataContributorAssignment
+    serviceBusSenderAssignment
+    serviceBusReceiverAssignment
   ]
 }
 
@@ -378,6 +449,9 @@ output searchRecallIndexName string = searchRecallIndexName
 output storageAccountName string = storageAccount.name
 output storageBlobEndpoint string = storageAccount.properties.primaryEndpoints.blob
 output storageSnapshotContainerName string = snapshotsContainer.name
+output serviceBusNamespaceName string = serviceBusNamespace.name
+output serviceBusFullyQualifiedNamespace string = '${serviceBusNamespace.name}.servicebus.windows.net'
+output serviceBusWritesQueueName string = writesQueue.name
 
 @secure()
 output applicationInsightsConnectionString string = appInsights.properties.ConnectionString
