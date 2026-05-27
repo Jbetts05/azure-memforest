@@ -10,6 +10,7 @@ from src.evaluation.benchmark_summary import (
     parse_judge_value,
     summarize_benchmark_file,
 )
+from src.evaluation.benchmark_diff import diff_benchmark_summaries, main as benchmark_diff_main
 from src.observability import InMemoryTraceSink, TraceEvent, TraceEventType
 
 
@@ -146,3 +147,120 @@ def test_default_benchmark_paths_are_stable() -> None:
         "longmemeval_per_question_30b.csv",
         "longmemeval_per_question_4b.csv",
     ]
+
+
+def test_benchmark_diff_detects_regressions_beyond_tolerance(tmp_path: Path) -> None:
+    baseline_dir = tmp_path / "baseline"
+    candidate_dir = tmp_path / "candidate"
+    baseline_dir.mkdir()
+    candidate_dir.mkdir()
+    baseline_path = baseline_dir / "locomo_per_question_30b.csv"
+    candidate_path = candidate_dir / "locomo_per_question_30b.csv"
+    header = "method,model_size,question_type,qid,question,gold_answer,answer_1,judge_1,answer_2,judge_2,answer_3,judge_3,answer_4,judge_4,answer_5,judge_5,answer_6,judge_6,answer_7,judge_7,answer_8,judge_8"
+    baseline_path.write_text(
+        "\n".join([
+            header,
+            "memforest,30b,single,q1,Q,G,A,WRONG,A,WRONG,A,WRONG,A,WRONG,A,WRONG,A,WRONG,A,WRONG,A,CORRECT",
+        ]),
+        encoding="utf-8",
+    )
+    candidate_path.write_text(
+        "\n".join([
+            header,
+            "memforest,30b,single,q1,Q,G,A,WRONG,A,WRONG,A,WRONG,A,WRONG,A,WRONG,A,WRONG,A,WRONG,A,WRONG",
+        ]),
+        encoding="utf-8",
+    )
+
+    result = diff_benchmark_summaries(
+        summarize_benchmark_file(baseline_path),
+        summarize_benchmark_file(candidate_path),
+        k_values=[1, 8],
+        tolerance=0.0,
+        include_question_types=True,
+    )
+
+    failed = [delta for delta in result.deltas if delta.status == "fail"]
+    assert not result.ok
+    assert [(delta.question_type, delta.k) for delta in failed] == [("ALL", 8), ("single", 8)]
+
+
+def test_benchmark_diff_allows_regressions_within_tolerance(tmp_path: Path) -> None:
+    baseline_dir = tmp_path / "baseline"
+    candidate_dir = tmp_path / "candidate"
+    baseline_dir.mkdir()
+    candidate_dir.mkdir()
+    baseline_path = baseline_dir / "locomo_per_question_30b.csv"
+    candidate_path = candidate_dir / "locomo_per_question_30b.csv"
+    header = "method,model_size,question_type,qid,question,gold_answer,answer_1,judge_1,answer_2,judge_2,answer_3,judge_3,answer_4,judge_4,answer_5,judge_5,answer_6,judge_6,answer_7,judge_7,answer_8,judge_8"
+    baseline_path.write_text(
+        "\n".join([
+            header,
+            "memforest,30b,single,q1,Q,G,A,CORRECT,A,CORRECT,A,CORRECT,A,CORRECT,A,CORRECT,A,CORRECT,A,CORRECT,A,CORRECT",
+            "memforest,30b,single,q2,Q,G,A,WRONG,A,WRONG,A,WRONG,A,WRONG,A,WRONG,A,WRONG,A,WRONG,A,WRONG",
+        ]),
+        encoding="utf-8",
+    )
+    candidate_path.write_text(
+        "\n".join([
+            header,
+            "memforest,30b,single,q1,Q,G,A,WRONG,A,CORRECT,A,CORRECT,A,CORRECT,A,CORRECT,A,CORRECT,A,CORRECT,A,CORRECT",
+            "memforest,30b,single,q2,Q,G,A,WRONG,A,WRONG,A,WRONG,A,WRONG,A,WRONG,A,WRONG,A,WRONG,A,WRONG",
+        ]),
+        encoding="utf-8",
+    )
+
+    result = diff_benchmark_summaries(
+        summarize_benchmark_file(baseline_path),
+        summarize_benchmark_file(candidate_path),
+        k_values=[1],
+        tolerance=0.5,
+        include_question_types=True,
+    )
+
+    assert result.ok
+
+
+def test_benchmark_diff_reports_candidate_only_methods_without_failing(tmp_path: Path) -> None:
+    baseline_dir = tmp_path / "baseline"
+    candidate_dir = tmp_path / "candidate"
+    baseline_dir.mkdir()
+    candidate_dir.mkdir()
+    baseline_path = baseline_dir / "locomo_per_question_30b.csv"
+    candidate_path = candidate_dir / "locomo_per_question_30b.csv"
+    header = "method,model_size,question_type,qid,question,gold_answer,answer_1,judge_1,answer_8,judge_8"
+    baseline_path.write_text(
+        "\n".join([header, "memforest,30b,single,q1,Q,G,A,CORRECT,A,CORRECT"]),
+        encoding="utf-8",
+    )
+    candidate_path.write_text(
+        "\n".join([
+            header,
+            "memforest,30b,single,q1,Q,G,A,CORRECT,A,CORRECT",
+            "newmethod,30b,single,q1,Q,G,A,CORRECT,A,CORRECT",
+        ]),
+        encoding="utf-8",
+    )
+
+    result = diff_benchmark_summaries(
+        summarize_benchmark_file(baseline_path),
+        summarize_benchmark_file(candidate_path),
+        k_values=[1],
+    )
+
+    assert result.ok
+    assert any("newmethod" in key for key in result.missing_baseline_keys)
+
+
+def test_benchmark_diff_cli_fails_for_missing_candidate_files(tmp_path: Path) -> None:
+    candidate_dir = tmp_path / "candidate"
+    candidate_dir.mkdir()
+
+    exit_code = benchmark_diff_main([
+        "--repo-root",
+        str(ROOT),
+        "--candidate-dir",
+        str(candidate_dir),
+    ])
+
+    assert exit_code == 1

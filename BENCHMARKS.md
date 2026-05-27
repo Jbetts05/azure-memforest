@@ -46,6 +46,22 @@ $env:PIP_REQUIRE_VIRTUALENV = "true"
 
 The default table reports cumulative pass@k rollups by `method` and `model_size`, matching the README's `judge_1..judge_k` aggregation pattern. JSON output also includes per-`question_type` groups and an order-invariant unbiased pass@k value with denominators for future Azure parity analysis.
 
+Run the parity diff gate with:
+
+```powershell
+$env:PIP_REQUIRE_VIRTUALENV = "true"
+.\.venv\Scripts\python.exe -m src.evaluation.benchmark_diff --repo-root . --candidate-dir benchmark --k 1 --k 8 --tolerance 0.000000001
+```
+
+By default the gate compares candidate CSVs with the frozen `benchmark/baseline_summary.json` snapshot, checks pass@1 and pass@8, includes per-question-type rows, and fails only when a candidate regresses beyond tolerance. Candidate-only methods are reported; missing candidate files or baseline keys fail.
+
+Regenerate the frozen snapshot only when intentionally updating the paper baseline:
+
+```powershell
+$env:PIP_REQUIRE_VIRTUALENV = "true"
+.\.venv\Scripts\python.exe -m src.evaluation.benchmark_summary --repo-root . --json > benchmark\baseline_summary.json
+```
+
 ## Provenance and license
 
 The checked-in `LICENSE` file is MIT. Preserve the upstream copyright and permission notice in copies or substantial portions of the software.
