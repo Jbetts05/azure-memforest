@@ -10,6 +10,8 @@ from threading import RLock
 from types import MappingProxyType
 from typing import Any, Mapping, Protocol
 
+TRACE_EVENT_SCHEMA_VERSION = 1
+
 
 class TraceEventType(StrEnum):
     QUERY_STARTED = "query_started"
@@ -54,6 +56,7 @@ class TraceEvent:
 
     query_id: str
     event_type: TraceEventType
+    schema_version: int = TRACE_EVENT_SCHEMA_VERSION
     event_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     timestamp_unix: float = field(default_factory=time.time)
     tenant_id: str | None = None

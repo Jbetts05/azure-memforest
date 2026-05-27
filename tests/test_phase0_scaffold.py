@@ -77,6 +77,7 @@ def test_in_memory_trace_sink_filters_by_query() -> None:
         TraceEventType.QUERY_STARTED,
         TraceEventType.QUERY_COMPLETED,
     ]
+    assert q1_events[0].schema_version == 1
 
 
 def test_node_index_supports_basic_local_lookup_and_search(tmp_path: Path) -> None:
