@@ -11,6 +11,7 @@ from src import __version__
 from src.service.auth import AuthError, AuthProvider
 from src.service.middleware import REQUEST_ID_HEADER, RequestIdMiddleware
 from src.service.readiness import ReadinessCheck, default_not_configured_checks, evaluate_readiness
+from src.service.routes import _RouteError, route_error_handler, router as memory_router
 from src.service.settings import ServiceSettings, load_service_settings
 
 
@@ -35,6 +36,8 @@ def create_app(
     )
     app.add_middleware(RequestIdMiddleware)
     app.state.auth_provider = auth_provider
+    app.include_router(memory_router)
+    app.add_exception_handler(_RouteError, route_error_handler)
 
     @app.exception_handler(AuthError)
     async def auth_exception(request: Request, exc: AuthError) -> JSONResponse:

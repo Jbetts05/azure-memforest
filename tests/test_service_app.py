@@ -402,3 +402,171 @@ def test_dev_header_auth_rejects_unsafe_values_without_echoing_them() -> None:
         "request_id": "auth-2",
     }
     assert "bad value" not in response.text
+
+
+def test_ingest_route_requires_auth_provider() -> None:
+    client = TestClient(create_app())
+
+    response = client.post(
+        "/v1/users/user-1/sessions/session-1:ingest",
+        headers={"x-request-id": "api-1", "Idempotency-Key": "idem-1"},
+        json={"turns": [{"role": "user", "content": "hello"}]},
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "status": "error",
+        "error": "auth_not_configured",
+        "request_id": "api-1",
+    }
+
+
+def test_ingest_route_requires_idempotency_key() -> None:
+    client = TestClient(create_app(auth_provider=DevHeaderAuthProvider(environment="test")))
+
+    response = client.post(
+        "/v1/users/user-1/sessions/session-1:ingest",
+        headers={TENANT_ID_HEADER: "tenant-1", ACTOR_ID_HEADER: "user-1", "x-request-id": "api-2"},
+        json={"turns": [{"role": "user", "content": "hello"}]},
+    )
+
+    assert response.status_code == 400
+    assert response.json() == {
+        "status": "error",
+        "error": "idempotency_key_required",
+        "request_id": "api-2",
+    }
+
+
+def test_ingest_route_rejects_unsafe_idempotency_key() -> None:
+    client = TestClient(create_app(auth_provider=DevHeaderAuthProvider(environment="test")))
+
+    response = client.post(
+        "/v1/users/user-1/sessions/session-1:ingest",
+        headers={
+            TENANT_ID_HEADER: "tenant-1",
+            ACTOR_ID_HEADER: "user-1",
+            "x-request-id": "api-2b",
+            "Idempotency-Key": "bad value",
+        },
+        json={"turns": [{"role": "user", "content": "hello"}]},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"] == "idempotency_key_required"
+
+
+def test_query_route_rejects_user_mismatch_without_admin_role() -> None:
+    client = TestClient(create_app(auth_provider=DevHeaderAuthProvider(environment="test")))
+
+    response = client.post(
+        "/v1/users/other-user/query",
+        headers={TENANT_ID_HEADER: "tenant-1", ACTOR_ID_HEADER: "user-1", "x-request-id": "api-3"},
+        json={"question": "Where is Bob?"},
+    )
+
+    assert response.status_code == 403
+    assert response.json() == {
+        "status": "error",
+        "error": "forbidden",
+        "request_id": "api-3",
+    }
+
+
+def test_query_route_returns_service_not_configured_when_auth_succeeds() -> None:
+    client = TestClient(create_app(auth_provider=DevHeaderAuthProvider(environment="test")))
+
+    response = client.post(
+        "/v1/users/user-1/query",
+        headers={TENANT_ID_HEADER: "tenant-1", ACTOR_ID_HEADER: "user-1", "x-request-id": "api-4"},
+        json={"question": "Where is Bob?"},
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "status": "error",
+        "error": "service_not_configured",
+        "request_id": "api-4",
+    }
+
+
+def test_memory_routes_call_injected_services_with_actor_context() -> None:
+    class FakeCommandService:
+        async def submit_ingest_session(self, actor, *, user_id, session_id, request, idempotency_key):
+            self.actor = actor
+            self.idempotency_key = idempotency_key
+            return {
+                "job_id": "job-1",
+                "status": "accepted",
+                "tenant_id": actor.tenant.tenant_id,
+                "user_id": user_id,
+                "session_id": session_id,
+            }
+
+        async def submit_delete_session(self, actor, *, user_id, session_id, idempotency_key):
+            return {
+                "job_id": "job-delete",
+                "status": "accepted",
+                "tenant_id": actor.tenant.tenant_id,
+                "user_id": user_id,
+                "session_id": session_id,
+            }
+
+    class FakeQueryService:
+        async def query(self, actor, *, user_id, request):
+            return {
+                "query_id": "query-1",
+                "status": "succeeded",
+                "facts": [
+                    {
+                        "fact_id": "fact-1",
+                        "text": "Bob moved to Davis.",
+                    }
+                ],
+            }
+
+    class FakeJobService:
+        async def get_job(self, actor, *, user_id, job_id):
+            return {
+                "job_id": job_id,
+                "status": "running",
+                "tenant_id": actor.tenant.tenant_id,
+                "user_id": user_id,
+            }
+
+    command_service = FakeCommandService()
+    app = create_app(auth_provider=DevHeaderAuthProvider(environment="test"))
+    app.state.memory_command_service = command_service
+    app.state.memory_query_service = FakeQueryService()
+    app.state.job_status_service = FakeJobService()
+    client = TestClient(app)
+    headers = {
+        TENANT_ID_HEADER: "tenant-1",
+        ACTOR_ID_HEADER: "user-1",
+        ROLES_HEADER: "memory.admin",
+        "Idempotency-Key": "idem-1",
+    }
+
+    ingest_response = client.post(
+        "/v1/users/other-user/sessions/session-1:ingest",
+        headers=headers,
+        json={"turns": [{"role": "user", "content": "hello"}]},
+    )
+    query_response = client.post(
+        "/v1/users/other-user/query",
+        headers=headers,
+        json={"question": "Where is Bob?"},
+    )
+    job_response = client.get(
+        "/v1/users/other-user/jobs/job-1",
+        headers=headers,
+    )
+
+    assert ingest_response.status_code == 202
+    assert ingest_response.json()["tenant_id"] == "tenant-1"
+    assert command_service.actor.actor_id == "user-1"
+    assert command_service.idempotency_key == "idem-1"
+    assert query_response.status_code == 200
+    assert query_response.json()["facts"][0]["fact_id"] == "fact-1"
+    assert job_response.status_code == 200
+    assert job_response.json()["job_id"] == "job-1"
