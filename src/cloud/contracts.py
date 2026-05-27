@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Mapping, Protocol
 
+from src.cloud.schema import SCHEMA_VERSION
+
 
 @dataclass(frozen=True)
 class RecallCandidate:
@@ -23,6 +25,7 @@ class RecallCandidate:
     user_id: str | None = None
     forest_version: str | None = None
     embedding_model_version: str | None = None
+    schema_version: int = SCHEMA_VERSION
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -42,6 +45,7 @@ class StoredTreeNode:
     tenant_id: str | None = None
     user_id: str | None = None
     forest_version: str | None = None
+    schema_version: int = SCHEMA_VERSION
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -62,6 +66,7 @@ class FactLocation:
     tenant_id: str | None = None
     user_id: str | None = None
     forest_version: str | None = None
+    schema_version: int = SCHEMA_VERSION
     time_start: float | None = None
     time_end: float | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)

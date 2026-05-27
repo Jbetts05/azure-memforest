@@ -18,6 +18,15 @@ from src.cloud.contracts import (
 )
 from src.cloud.azure_models import AzureOpenAIModelClient
 from src.cloud.config import AzureModelDeployment, AzureOpenAIConfig, CloudConfig, load_cloud_config
+from src.cloud.schema import (
+    SCHEMA_VERSION,
+    CloudRecordMetadata,
+    DeletionMetadata,
+    EmbeddingMetadata,
+    MigrationRecord,
+    partition_key,
+    require_tenant_scope,
+)
 from src.cloud.local_adapters import (
     FactManagerStoreAdapter,
     InMemoryFactLocationIndex,
@@ -46,11 +55,18 @@ __all__ = [
     "AzureOpenAIConfig",
     "AzureOpenAIModelClient",
     "CloudConfig",
+    "CloudRecordMetadata",
+    "DeletionMetadata",
+    "EmbeddingMetadata",
     "FactManagerStoreAdapter",
     "InMemoryFactLocationIndex",
     "InMemorySummaryCache",
+    "MigrationRecord",
     "NodeIndexBrowseEmbeddingAdapter",
     "NodeIndexRecallAdapter",
     "TreeStoreNodeAdapter",
+    "SCHEMA_VERSION",
     "load_cloud_config",
+    "partition_key",
+    "require_tenant_scope",
 ]
