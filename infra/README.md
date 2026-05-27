@@ -37,7 +37,7 @@ The initial dev hosting foundation has been deployed to:
 | Container App | `memforest-example-api` |
 | FQDN | `memforest-api.example.invalid` |
 | ACR | `memforestexampleacr.azurecr.io` |
-| Image | `memforestexampleacr.azurecr.io/azure-memforest-api:46fab33dd550` |
+| Image | `memforestexampleacr.azurecr.io/azure-memforest-api:d06d77ec0a40` |
 | Cosmos DB account | `memforestexamplecosmos` |
 | Cosmos DB database | `memforest` |
 | Azure AI Search | `memforestexamplesearch` |
