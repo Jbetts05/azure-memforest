@@ -16,7 +16,6 @@ from src.cloud.contracts import (
     TreeNodeStore,
     TreeSnapshotStore,
 )
-from src.cloud.azure_models import AzureOpenAIModelClient
 from src.cloud.config import AzureModelDeployment, AzureOpenAIConfig, CloudConfig, load_cloud_config
 from src.cloud.schema import (
     SCHEMA_VERSION,
@@ -53,7 +52,6 @@ __all__ = [
     "TreeSnapshotStore",
     "AzureModelDeployment",
     "AzureOpenAIConfig",
-    "AzureOpenAIModelClient",
     "CloudConfig",
     "CloudRecordMetadata",
     "DeletionMetadata",
