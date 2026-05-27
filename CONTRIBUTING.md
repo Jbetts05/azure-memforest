@@ -22,6 +22,15 @@ $env:PIP_REQUIRE_VIRTUALENV = "true"
 .\.venv\Scripts\python.exe -m uvicorn src.service.app:create_app --factory --host 127.0.0.1 --port 8000
 ```
 
+The service container can be built locally without pushing to a registry:
+
+```powershell
+docker build --pull --tag azure-memforest-api:local .
+docker run --rm -p 8000:8000 azure-memforest-api:local
+```
+
+`/health/live` should return 200. `/health/ready` intentionally returns 503 until real configuration and Azure dependency checks are wired.
+
 ## Azure deployment safety
 
 Do not create, modify, or deploy Azure resources until the deployment decisions in `docs/azure-decisions.md` are confirmed.
