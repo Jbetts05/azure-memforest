@@ -46,3 +46,17 @@ jobs:
 
       - name: Build service image
         run: docker build --pull --tag azure-memforest-api:ci .
+
+  iac-validate:
+    name: IaC validate
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install pinned Bicep CLI
+        run: az bicep install --version v0.41.2
+
+      - name: Build Bicep template
+        run: az bicep build --file infra/main.bicep --stdout > /dev/null
