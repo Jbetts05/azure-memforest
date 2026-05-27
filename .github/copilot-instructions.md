@@ -10,11 +10,13 @@
 ## Commands to use
 
 - Install Python dependencies:
-  - `python -m pip install -r requirements.txt`
+  - `python -m venv .venv`
+  - `.\.venv\Scripts\python.exe -m pip install -r requirements.txt`
 - Run a Python snippet or import module code directly from `src/`.
 - `pytest` is available from the pinned dependencies, but there are no checked-in tests in this snapshot. When a test file is added, run it individually with:
-  - `pytest path/to/test.py -q`
+  - `.\.venv\Scripts\python.exe -m pytest path/to/test.py -q`
 - No repository-level lint command is configured in this checkout.
+- Always use the repo-local `.venv`; never install packages into the user's local/global Python environment.
 
 ## High-level architecture
 
