@@ -43,6 +43,13 @@ param cosmosPublicNetworkAccess string = 'Enabled'
 @description('Public network access setting for dev Azure AI Search service. Set to disabled when private endpoints are added.')
 param searchPublicNetworkAccess string = 'enabled'
 
+@allowed([
+  'Enabled'
+  'Disabled'
+])
+@description('Public network access setting for dev Storage account. Set to Disabled when private endpoints are added.')
+param storagePublicNetworkAccess string = 'Enabled'
+
 @description('Azure AI Search index name reserved for tree/root recall.')
 param searchRecallIndexName string = 'memforest-recall'
 
@@ -50,10 +57,12 @@ var normalizedName = toLower(replace('${appName}-${environmentName}', '_', '-'))
 var acrName = replace(take('${replace(normalizedName, '-', '')}acr', 50), '_', '')
 var cosmosName = take('${replace(normalizedName, '-', '')}cosmos', 44)
 var searchName = take('${replace(normalizedName, '-', '')}search', 60)
+var storageName = '${take(replace(normalizedName, '-', ''), 9)}st${uniqueString(resourceGroup().id)}'
 var acrPullRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
 var cosmosDataContributorRoleDefinitionId = '${cosmosAccount.id}/sqlRoleDefinitions/00000000-0000-0000-0000-000000000002'
 var searchServiceContributorRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7ca78c08-252a-4471-8644-bb5ff32d4ba0')
 var searchIndexDataContributorRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '8ebe5a00-799e-43f5-93ac-243d3dce84a7')
+var storageBlobDataContributorRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
 
 resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   name: '${normalizedName}-law'
@@ -179,6 +188,63 @@ resource searchIndexDataContributorAssignment 'Microsoft.Authorization/roleAssig
   }
 }
 
+resource storageAccount 'Microsoft.Storage/storageAccounts@2023-05-01' = {
+  name: storageName
+  location: location
+  tags: tags
+  sku: {
+    name: 'Standard_LRS'
+  }
+  kind: 'StorageV2'
+  properties: {
+    accessTier: 'Hot'
+    allowBlobPublicAccess: false
+    allowCrossTenantReplication: false
+    allowSharedKeyAccess: false
+    defaultToOAuthAuthentication: true
+    minimumTlsVersion: 'TLS1_2'
+    publicNetworkAccess: storagePublicNetworkAccess
+    supportsHttpsTrafficOnly: true
+    networkAcls: {
+      bypass: 'AzureServices'
+      defaultAction: 'Allow'
+    }
+  }
+}
+
+resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2023-05-01' = {
+  name: 'default'
+  parent: storageAccount
+  properties: {
+    deleteRetentionPolicy: {
+      enabled: true
+      days: 7
+    }
+    containerDeleteRetentionPolicy: {
+      enabled: true
+      days: 7
+    }
+  }
+}
+
+resource snapshotsContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = {
+  name: 'snapshots'
+  parent: blobService
+  properties: {
+    publicAccess: 'None'
+  }
+}
+
+resource storageBlobDataContributorAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(storageAccount.id, appIdentity.id, 'storage-blob-data-contributor')
+  scope: storageAccount
+  properties: {
+    roleDefinitionId: storageBlobDataContributorRoleDefinitionId
+    principalId: appIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
 resource acrPullAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(containerRegistry.id, appIdentity.id, 'acr-pull')
   scope: containerRegistry
@@ -264,6 +330,18 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
               name: 'AZURE_SEARCH_RECALL_INDEX_NAME'
               value: searchRecallIndexName
             }
+            {
+              name: 'AZURE_STORAGE_ACCOUNT_NAME'
+              value: storageAccount.name
+            }
+            {
+              name: 'AZURE_STORAGE_BLOB_ENDPOINT'
+              value: storageAccount.properties.primaryEndpoints.blob
+            }
+            {
+              name: 'AZURE_STORAGE_SNAPSHOT_CONTAINER'
+              value: snapshotsContainer.name
+            }
           ]
           resources: {
             cpu: json('0.5')
@@ -282,6 +360,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
     cosmosDataContributorAssignment
     searchServiceContributorAssignment
     searchIndexDataContributorAssignment
+    storageBlobDataContributorAssignment
   ]
 }
 
@@ -296,6 +375,9 @@ output cosmosDatabaseName string = cosmosDatabase.properties.resource.id
 output searchServiceName string = searchService.name
 output searchEndpoint string = 'https://${searchService.name}.search.windows.net'
 output searchRecallIndexName string = searchRecallIndexName
+output storageAccountName string = storageAccount.name
+output storageBlobEndpoint string = storageAccount.properties.primaryEndpoints.blob
+output storageSnapshotContainerName string = snapshotsContainer.name
 
 @secure()
 output applicationInsightsConnectionString string = appInsights.properties.ConnectionString
