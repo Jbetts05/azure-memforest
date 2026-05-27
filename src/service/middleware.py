@@ -7,6 +7,8 @@ import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from src.service.trace_context import TRACEPARENT_HEADER, parse_traceparent
+
 REQUEST_ID_HEADER = "x-request-id"
 _REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 
@@ -27,7 +29,13 @@ class RequestIdMiddleware:
             return
 
         request_id = _request_id_from_scope(scope)
-        scope.setdefault("state", {})["request_id"] = request_id
+        state = scope.setdefault("state", {})
+        state["request_id"] = request_id
+        trace_context = _trace_context_from_scope(scope)
+        if trace_context is not None:
+            state["trace_id"] = trace_context.trace_id
+            state["trace_parent_id"] = trace_context.parent_id
+            state["trace_flags"] = trace_context.trace_flags
 
         async def send_with_request_id(message: dict[str, Any]) -> None:
             if message.get("type") == "http.response.start":
@@ -53,3 +61,10 @@ def _request_id_from_scope(scope: dict[str, Any]) -> str:
         if raw_name.decode("latin-1").lower() == REQUEST_ID_HEADER:
             return sanitize_request_id(raw_value.decode("latin-1"))
     return sanitize_request_id(None)
+
+
+def _trace_context_from_scope(scope: dict[str, Any]):
+    for raw_name, raw_value in scope.get("headers") or []:
+        if raw_name.decode("latin-1").lower() == TRACEPARENT_HEADER:
+            return parse_traceparent(raw_value.decode("latin-1"))
+    return None

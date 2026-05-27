@@ -19,7 +19,8 @@ The HTTP service factory is intentionally side-effect-light and does not load mo
 
 ```powershell
 $env:PIP_REQUIRE_VIRTUALENV = "true"
-.\.venv\Scripts\python.exe -m uvicorn src.service.app:create_app --factory --host 127.0.0.1 --port 8000
+$env:HOST = "127.0.0.1"
+.\.venv\Scripts\python.exe -m src.service
 ```
 
 The service container can be built locally without pushing to a registry:
@@ -29,7 +30,7 @@ docker build --pull --tag azure-memforest-api:local .
 docker run --rm -p 8000:8000 azure-memforest-api:local
 ```
 
-`/health/live` should return 200. `/health/ready` intentionally returns 503 until readiness checks are wired through `create_app(readiness_checks=...)`.
+`/health/live` should return 200. `/health/ready` intentionally returns 503 until readiness checks are wired through `create_app(readiness_checks=...)`. The service supports sanitized `x-request-id` correlation and parses W3C `traceparent` for log correlation, but it does not log request or response bodies by default.
 
 ## Azure deployment safety
 

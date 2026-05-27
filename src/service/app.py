@@ -36,9 +36,11 @@ def create_app(
     @app.exception_handler(Exception)
     async def unhandled_exception(request: Request, exc: Exception) -> JSONResponse:
         request_id = getattr(request.state, "request_id", "")
+        trace_id = getattr(request.state, "trace_id", "")
         log.error(
             "Unhandled service exception request_id=%s",
             request_id,
+            extra={"request_id": request_id, "trace_id": trace_id},
             exc_info=(type(exc), exc, exc.__traceback__),
         )
         return JSONResponse(
