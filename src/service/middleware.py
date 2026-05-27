@@ -39,7 +39,11 @@ class RequestIdMiddleware:
 
         async def send_with_request_id(message: dict[str, Any]) -> None:
             if message.get("type") == "http.response.start":
-                headers = list(message.get("headers") or [])
+                headers = [
+                    (name, value)
+                    for name, value in list(message.get("headers") or [])
+                    if name.decode("latin-1").lower() != REQUEST_ID_HEADER
+                ]
                 headers.append((REQUEST_ID_HEADER.encode("latin-1"), request_id.encode("latin-1")))
                 message["headers"] = headers
             await send(message)

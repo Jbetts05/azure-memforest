@@ -5,11 +5,21 @@ import sys
 import json
 import logging
 
+import pytest
+from fastapi import Depends, HTTPException, Request
 from fastapi.testclient import TestClient
-from fastapi import HTTPException, Request
 
 from src import __version__
 from src.service.app import create_app
+from src.service.auth import (
+    ACTOR_ID_HEADER,
+    ROLES_HEADER,
+    SCOPES_HEADER,
+    TENANT_ID_HEADER,
+    AuthNotConfigured,
+    DevHeaderAuthProvider,
+    get_actor_context,
+)
 from src.service.logging import JsonLogFormatter
 from src.service.readiness import ReadinessCheckResult, StaticReadinessCheck
 from src.service.settings import ServiceSettings, load_service_settings
@@ -20,6 +30,7 @@ def test_service_app_import_is_side_effect_light() -> None:
     code = """
 import sys
 import src.service.app as app
+import src.service.auth as auth
 import src.service.middleware as middleware
 import src.service.logging as service_logging
 import src.service.readiness as readiness
@@ -34,6 +45,7 @@ forbidden = [
 ]
 loaded = [name for name in forbidden if name in sys.modules]
 assert hasattr(app, 'create_app')
+assert hasattr(auth, 'get_actor_context')
 assert hasattr(middleware, 'RequestIdMiddleware')
 assert hasattr(service_logging, 'JsonLogFormatter')
 assert hasattr(readiness, 'evaluate_readiness')
@@ -306,3 +318,87 @@ def test_json_log_formatter_handles_records_without_context() -> None:
     assert payload["message"] == "safe message"
     assert "request_id" not in payload
     assert "trace_id" not in payload
+
+
+def test_dev_header_auth_provider_returns_actor_context() -> None:
+    app = create_app(auth_provider=DevHeaderAuthProvider(environment="test"))
+
+    @app.get("/__actor")
+    async def actor(ctx=Depends(get_actor_context)):
+        return {
+            "tenant_id": ctx.tenant.tenant_id,
+            "actor_id": ctx.actor_id,
+            "scopes": list(ctx.scopes),
+            "roles": list(ctx.roles),
+            "auth_scheme": ctx.auth_scheme,
+        }
+
+    client = TestClient(app)
+    response = client.get(
+        "/__actor",
+        headers={
+            TENANT_ID_HEADER: "tenant-1",
+            ACTOR_ID_HEADER: "actor@example.com",
+            SCOPES_HEADER: "memory.read,memory.write",
+            ROLES_HEADER: "admin",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "tenant_id": "tenant-1",
+        "actor_id": "actor@example.com",
+        "scopes": ["memory.read", "memory.write"],
+        "roles": ["admin"],
+        "auth_scheme": "dev-header",
+    }
+
+
+def test_dev_header_auth_provider_refuses_production_environment() -> None:
+    with pytest.raises(ValueError, match="only allowed"):
+        DevHeaderAuthProvider(environment="production")
+
+
+def test_auth_dependency_fails_closed_when_not_configured() -> None:
+    app = create_app()
+
+    @app.get("/__actor")
+    async def actor(ctx=Depends(get_actor_context)):
+        return {"actor_id": ctx.actor_id}
+
+    client = TestClient(app)
+    response = client.get("/__actor", headers={"x-request-id": "auth-1"})
+
+    assert response.status_code == 503
+    assert response.headers["x-request-id"] == "auth-1"
+    assert response.json() == {
+        "status": "error",
+        "error": "auth_not_configured",
+        "request_id": "auth-1",
+    }
+
+
+def test_dev_header_auth_rejects_unsafe_values_without_echoing_them() -> None:
+    app = create_app(auth_provider=DevHeaderAuthProvider(environment="test"))
+
+    @app.get("/__actor")
+    async def actor(ctx=Depends(get_actor_context)):
+        return {"actor_id": ctx.actor_id}
+
+    client = TestClient(app)
+    response = client.get(
+        "/__actor",
+        headers={
+            "x-request-id": "auth-2",
+            TENANT_ID_HEADER: "tenant-1",
+            ACTOR_ID_HEADER: "bad value with spaces",
+        },
+    )
+
+    assert response.status_code == 401
+    assert response.json() == {
+        "status": "error",
+        "error": "unauthorized",
+        "request_id": "auth-2",
+    }
+    assert "bad value" not in response.text
