@@ -26,9 +26,18 @@ param maxReplicas int = 1
 @description('Tags applied to all supported resources.')
 param tags object = {}
 
+@allowed([
+  'Enabled'
+  'Disabled'
+])
+@description('Public network access setting for dev Cosmos account. Set to Disabled when private endpoints are added.')
+param cosmosPublicNetworkAccess string = 'Enabled'
+
 var normalizedName = toLower(replace('${appName}-${environmentName}', '_', '-'))
 var acrName = replace(take('${replace(normalizedName, '-', '')}acr', 50), '_', '')
+var cosmosName = take('${replace(normalizedName, '-', '')}cosmos', 44)
 var acrPullRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
+var cosmosDataContributorRoleDefinitionId = '${cosmosAccount.id}/sqlRoleDefinitions/00000000-0000-0000-0000-000000000002'
 
 resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   name: '${normalizedName}-law'
@@ -70,6 +79,53 @@ resource appIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-3
   name: '${normalizedName}-id'
   location: location
   tags: tags
+}
+
+resource cosmosAccount 'Microsoft.DocumentDB/databaseAccounts@2024-05-15' = {
+  name: cosmosName
+  location: location
+  tags: tags
+  kind: 'GlobalDocumentDB'
+  properties: {
+    databaseAccountOfferType: 'Standard'
+    consistencyPolicy: {
+      defaultConsistencyLevel: 'Session'
+    }
+    locations: [
+      {
+        locationName: location
+        failoverPriority: 0
+        isZoneRedundant: false
+      }
+    ]
+    publicNetworkAccess: cosmosPublicNetworkAccess
+    disableLocalAuth: true
+    capabilities: [
+      {
+        name: 'EnableServerless'
+      }
+    ]
+  }
+}
+
+resource cosmosDatabase 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024-05-15' = {
+  name: 'memforest'
+  parent: cosmosAccount
+  properties: {
+    resource: {
+      id: 'memforest'
+    }
+  }
+}
+
+resource cosmosDataContributorAssignment 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2024-05-15' = {
+  name: guid(cosmosAccount.id, appIdentity.id, 'cosmos-data-contributor')
+  parent: cosmosAccount
+  properties: {
+    roleDefinitionId: cosmosDataContributorRoleDefinitionId
+    principalId: appIdentity.properties.principalId
+    scope: cosmosAccount.id
+  }
 }
 
 resource acrPullAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
@@ -137,6 +193,14 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
               name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
               value: appInsights.properties.ConnectionString
             }
+            {
+              name: 'AZURE_COSMOS_ENDPOINT'
+              value: cosmosAccount.properties.documentEndpoint
+            }
+            {
+              name: 'AZURE_COSMOS_DATABASE_NAME'
+              value: cosmosDatabase.properties.resource.id
+            }
           ]
           resources: {
             cpu: json('0.5')
@@ -152,6 +216,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
   }
   dependsOn: [
     acrPullAssignment
+    cosmosDataContributorAssignment
   ]
 }
 
@@ -160,6 +225,9 @@ output containerAppFqdn string = containerApp.properties.configuration.ingress.f
 output containerRegistryLoginServer string = containerRegistry.properties.loginServer
 output managedIdentityClientId string = appIdentity.properties.clientId
 output applicationInsightsName string = appInsights.name
+output cosmosAccountName string = cosmosAccount.name
+output cosmosEndpoint string = cosmosAccount.properties.documentEndpoint
+output cosmosDatabaseName string = cosmosDatabase.properties.resource.id
 
 @secure()
 output applicationInsightsConnectionString string = appInsights.properties.ConnectionString

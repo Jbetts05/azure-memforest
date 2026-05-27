@@ -23,7 +23,7 @@ az deployment group create `
   --parameters containerImage="<acr-login-server>/azure-memforest-api:<tag>"
 ```
 
-The current template is the hosting foundation only. Cosmos DB, Azure AI Search, Redis, Service Bus, and model endpoint resources should be added in the implementation slices that first use them.
+The current template includes the hosting foundation and the Cosmos DB account/database foundation. Azure AI Search, Redis, Service Bus, and model endpoint resources should be added in the implementation slices that first use them.
 
 ## Current dev deployment
 
@@ -37,6 +37,8 @@ The initial dev hosting foundation has been deployed to:
 | FQDN | `memforest-api.example.invalid` |
 | ACR | `memforestexampleacr.azurecr.io` |
 | Image | `memforestexampleacr.azurecr.io/azure-memforest-api:5497651751c4` |
+| Cosmos DB account | `memforestexamplecosmos` |
+| Cosmos DB database | `memforest` |
 
 Verification:
 
@@ -52,3 +54,5 @@ Expected current behavior:
 - `/health/live` returns `200` with `{"status":"ok"}`.
 - `/version` returns `200` with service name/version.
 - `/health/ready` returns `503` until real Azure dependency checks are wired.
+
+Cosmos containers are intentionally not declared in Bicep yet. Store adapters will create or migrate containers idempotently with the correct partition keys and indexing policies when those adapters are implemented.
