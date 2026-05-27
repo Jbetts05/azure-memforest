@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from threading import RLock
 from types import MappingProxyType
-from typing import Any, Mapping
+from typing import Any, Mapping, Protocol
 
 
 class TraceEventType(StrEnum):
@@ -29,6 +29,18 @@ class TraceEventType(StrEnum):
     ANSWER_GENERATED = "answer_generated"
     QUERY_COMPLETED = "query_completed"
     SERVICE_CALL = "service_call"
+
+
+class TraceSink(Protocol):
+    """Structured trace sink.
+
+    In-process development sinks may raise to surface instrumentation bugs.
+    Remote sink adapters should isolate transient telemetry failures internally
+    so query serving is not coupled to telemetry availability.
+    """
+
+    def emit(self, event: "TraceEvent") -> None:
+        ...
 
 
 @dataclass(frozen=True)

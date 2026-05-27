@@ -12,10 +12,14 @@ LLM call budget (per query):
 from __future__ import annotations
 
 import json
+import time
+import uuid
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from src.observability import TraceEvent, TraceEventType
 from src.query.browser import TreeBrowser
 from src.query.planner import BrowsePlan, BrowsePlanner
 from src.query.reranker import FactReranker
@@ -28,6 +32,7 @@ if TYPE_CHECKING:
     from src.build.tree_types import TreeCard
     from src.config.query_config import QueryConfig
     from src.extraction.fact_manager import FactManager
+    from src.observability import TraceSink
     from src.utils.types import ManagedFact
 
 
@@ -45,6 +50,7 @@ class QueryResult:
     query_emb: list[float]               # normalized query embedding (for diagnostics)
     planner_explanation: str = ""        # planner's reasoning (for debug)
     n_raw_facts: int = 0                 # count before reranking
+    query_id: str = ""                   # trace correlation id
 
 
 class ForestQuery:
@@ -60,6 +66,7 @@ class ForestQuery:
         fact_loader: "FactLoader | None" = None,
         fact_manager: "FactManager | None" = None,
         config: "QueryConfig",
+        trace_sink: "TraceSink | None" = None,
     ) -> None:
         self._emb_client = embedding_client
         self._chat_client = chat_client
@@ -68,6 +75,7 @@ class ForestQuery:
         self._fact_manager = fact_manager
         self._fact_loader = fact_loader or NullFactLoader()
         self._config = config
+        self._trace_sink = trace_sink
 
         self._retriever = ForestRetriever(
             embedding_client=embedding_client,
@@ -100,6 +108,7 @@ class ForestQuery:
         top_k: int | None = None,
         beam_width: int | None = None,
         max_facts: int | None = None,
+        query_id: str | None = None,
     ) -> QueryResult:
         """Run the full pipeline for one question.
 
@@ -114,17 +123,61 @@ class ForestQuery:
         Returns:
             QueryResult with recalled trees, browse plans, and top_k reranked facts.
         """
+        query_id = query_id or str(uuid.uuid4())
+        query_start = time.perf_counter()
+
+        self._emit_trace(
+            query_id,
+            TraceEventType.QUERY_STARTED,
+            attributes={
+                "question_length": len(question),
+                "top_k_override": top_k is not None,
+                "beam_width_override": beam_width is not None,
+                "max_facts_override": max_facts is not None,
+            },
+        )
+
         # max_facts semantics: None → use config default; 0 or negative → no cap
         n_facts = max_facts if max_facts is not None else self._config.browse.max_facts
         rerank_top_k: int | None = n_facts if n_facts and n_facts > 0 else None
 
         # 1. Recall: M4 augmented FAISS → top_k trees + query_emb
+        recall_start = time.perf_counter()
+        self._emit_trace(
+            query_id,
+            TraceEventType.EMBEDDING_REQUESTED,
+            attributes={"purpose": "query_recall", "text_length": len(question)},
+        )
+        self._emit_trace(
+            query_id,
+            TraceEventType.RECALL_SEARCH_STARTED,
+            attributes={
+                "top_k": top_k if top_k is not None else self._config.recall.top_k,
+                "direction": self._config.recall.direction,
+            },
+        )
         tree_cards, query_emb = self._retriever.recall_with_query_emb(
             question,
             top_k=top_k,
         )
+        recall_duration_ms = _elapsed_ms(recall_start)
+        for card in tree_cards:
+            self._emit_trace(
+                query_id,
+                TraceEventType.RECALL_TREE_SELECTED,
+                tree_id=card.tree_id,
+                duration_ms=recall_duration_ms,
+                attributes={
+                    "tree_type": card.tree_type,
+                    "label_length": len(card.label),
+                    "item_count": card.item_count,
+                    "time_start": card.time_start,
+                    "time_end": card.time_end,
+                },
+            )
 
         # 2. Plan: sub-query decomposition (1 LLM call if planner enabled)
+        plan_start = time.perf_counter()
         browse_plans = self._planner.plan(question, tree_cards)
         question_type = "simple"
         planner_explanation = ""
@@ -135,19 +188,73 @@ class ForestQuery:
             dec = self._planner._last_decomposition  # type: ignore[attr-defined]
             question_type = dec.question_type
             planner_explanation = dec.explanation
+        browse_type_counts = Counter(plan.browse_type for plan in browse_plans)
+        self._emit_trace(
+            query_id,
+            TraceEventType.PLANNER_RESULT,
+            duration_ms=_elapsed_ms(plan_start),
+            attributes={
+                "question_type": question_type,
+                "plan_count": len(browse_plans),
+                "browse_type_counts": dict(browse_type_counts),
+                "explanation_length": len(planner_explanation),
+            },
+        )
 
         # 3. Browse: parallel embedding beam search → fact/cell ids
+        browse_start = time.perf_counter()
+        for plan in browse_plans:
+            self._emit_trace(
+                query_id,
+                TraceEventType.BROWSE_TREE_STARTED,
+                tree_id=plan.tree_id,
+                attributes={
+                    "browse_type": plan.browse_type,
+                    "sub_query_length": len(plan.sub_query),
+                    "anchor_label_length": len(plan.anchor_label),
+                },
+            )
         raw_ids = self._browser.browse_all(
             browse_plans,
             query_emb=query_emb,
             beam_width=beam_width,
         )
+        self._emit_trace(
+            query_id,
+            TraceEventType.LEAF_IDS_RETURNED,
+            duration_ms=_elapsed_ms(browse_start),
+            attributes={
+                "raw_id_count": len(raw_ids),
+                "unique_raw_id_count": len(set(raw_ids)),
+            },
+        )
 
         # 4. Load facts from raw_ids
+        load_start = time.perf_counter()
         facts = self._fact_loader.load(raw_ids, tree_store=self._tree_store)
+        self._emit_trace(
+            query_id,
+            TraceEventType.FACTS_LOADED,
+            duration_ms=_elapsed_ms(load_start),
+            attributes={
+                "requested_id_count": len(raw_ids),
+                "loaded_fact_count": len(facts),
+            },
+        )
 
         # 5. Rerank: sort by cos_sim(fact_emb, query_emb), optionally truncate
+        rerank_start = time.perf_counter()
         top_facts = self._reranker.rerank(facts, query_emb, top_k=rerank_top_k)
+        self._emit_trace(
+            query_id,
+            TraceEventType.FACTS_RERANKED,
+            duration_ms=_elapsed_ms(rerank_start),
+            attributes={
+                "input_fact_count": len(facts),
+                "output_fact_count": len(top_facts),
+                "top_k": rerank_top_k,
+            },
+        )
 
         # 6. Session date injection for temporal questions
         session_date: str | None = None
@@ -158,7 +265,7 @@ class ForestQuery:
         elif session_alias_map:
             session_date = _extract_session_date(session_alias_map)
 
-        return QueryResult(
+        result = QueryResult(
             question=question,
             question_type=question_type,
             recalled_trees=tree_cards,
@@ -169,7 +276,21 @@ class ForestQuery:
             query_emb=query_emb,
             planner_explanation=planner_explanation,
             n_raw_facts=len(facts),
+            query_id=query_id,
         )
+        self._emit_trace(
+            query_id,
+            TraceEventType.QUERY_COMPLETED,
+            duration_ms=_elapsed_ms(query_start),
+            attributes={
+                "recalled_tree_count": len(tree_cards),
+                "browse_plan_count": len(browse_plans),
+                "raw_id_count": len(raw_ids),
+                "top_fact_count": len(top_facts),
+                "question_type": question_type,
+            },
+        )
+        return result
 
     def build_context(self, result: QueryResult) -> str:
         """Render QueryResult into a text context block for LLM reasoning.
@@ -190,6 +311,37 @@ class ForestQuery:
             lines.append(f"{i}. {fact.fact_text}{time_tag}")
 
         return "\n".join(lines)
+
+    def _emit_trace(
+        self,
+        query_id: str,
+        event_type: TraceEventType,
+        *,
+        tree_id: str | None = None,
+        node_id: str | None = None,
+        fact_id: str | None = None,
+        score: float | None = None,
+        service_name: str | None = None,
+        duration_ms: float | None = None,
+        cache_hit: bool | None = None,
+        attributes: dict | None = None,
+    ) -> None:
+        if self._trace_sink is None:
+            return
+        self._trace_sink.emit(
+            TraceEvent(
+                query_id=query_id,
+                event_type=event_type,
+                tree_id=tree_id,
+                node_id=node_id,
+                fact_id=fact_id,
+                score=score,
+                service_name=service_name,
+                duration_ms=duration_ms,
+                cache_hit=cache_hit,
+                attributes=attributes or {},
+            )
+        )
 
 
 # ── FactLoader interface ──────────────────────────────────────────────────────
@@ -385,6 +537,10 @@ def _render_fact_time_tag(time_start: float | None, time_end: float | None) -> s
     except (ValueError, OverflowError, OSError):
         return f" [{start_text}]"
     return f" [{start_text} -> {end_text}]"
+
+
+def _elapsed_ms(start: float) -> float:
+    return (time.perf_counter() - start) * 1000.0
 
 
 def _cell_to_stub_fact(cell_id: str, cell: "object") -> "ManagedFact":
