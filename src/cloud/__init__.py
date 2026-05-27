@@ -16,6 +16,14 @@ from src.cloud.contracts import (
     TreeNodeStore,
     TreeSnapshotStore,
 )
+from src.cloud.local_adapters import (
+    FactManagerStoreAdapter,
+    InMemoryFactLocationIndex,
+    InMemorySummaryCache,
+    NodeIndexBrowseEmbeddingAdapter,
+    NodeIndexRecallAdapter,
+    TreeStoreNodeAdapter,
+)
 
 __all__ = [
     "BrowseEmbeddingStore",
@@ -32,4 +40,10 @@ __all__ = [
     "TraceSink",
     "TreeNodeStore",
     "TreeSnapshotStore",
+    "FactManagerStoreAdapter",
+    "InMemoryFactLocationIndex",
+    "InMemorySummaryCache",
+    "NodeIndexBrowseEmbeddingAdapter",
+    "NodeIndexRecallAdapter",
+    "TreeStoreNodeAdapter",
 ]

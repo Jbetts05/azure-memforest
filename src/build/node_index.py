@@ -92,6 +92,10 @@ class NodeIndex:
     def remove_tree(self, tree_id: str) -> None:
         """Remove all entries belonging to tree_id."""
         with self._lock:
+            removed_node_ids = {
+                e.node_id for e in self._entries
+                if e.tree_id == tree_id
+            }
             # Remove from search index
             keep = [
                 (e, emb)
@@ -104,7 +108,7 @@ class NodeIndex:
             prefix = tree_id + ":"
             self._emb_store = {
                 k: v for k, v in self._emb_store.items()
-                if not k.startswith(prefix) and k != tree_id
+                if k not in removed_node_ids and not k.startswith(prefix) and k != tree_id
             }
             self._faiss_index = None
 
