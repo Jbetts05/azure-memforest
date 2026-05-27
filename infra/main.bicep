@@ -156,6 +156,108 @@ resource cosmosDatabase 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024
   }
 }
 
+var userScopedCosmosContainers = [
+  'sessions'
+  'turns'
+  'facts'
+  'tree_nodes'
+  'fact_locations'
+]
+
+var tenantScopedCosmosContainers = [
+  'manifests'
+  'deletions'
+]
+
+resource userScopedCosmosContainersResource 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-05-15' = [for containerName in userScopedCosmosContainers: {
+  name: containerName
+  parent: cosmosDatabase
+  properties: {
+    resource: {
+      id: containerName
+      partitionKey: {
+        paths: [
+          '/tenant_user_key'
+        ]
+        kind: 'Hash'
+      }
+    }
+  }
+}]
+
+resource tenantScopedCosmosContainersResource 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-05-15' = [for containerName in tenantScopedCosmosContainers: {
+  name: containerName
+  parent: cosmosDatabase
+  properties: {
+    resource: {
+      id: containerName
+      partitionKey: {
+        paths: [
+          '/tenant_id'
+        ]
+        kind: 'Hash'
+      }
+    }
+  }
+}]
+
+resource jobsCosmosContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-05-15' = {
+  name: 'jobs'
+  parent: cosmosDatabase
+  properties: {
+    resource: {
+      id: 'jobs'
+      defaultTtl: 2592000
+      partitionKey: {
+        paths: [
+          '/tenant_id'
+        ]
+        kind: 'Hash'
+      }
+    }
+  }
+}
+
+resource queryTracesCosmosContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-05-15' = {
+  name: 'query_traces'
+  parent: cosmosDatabase
+  properties: {
+    resource: {
+      id: 'query_traces'
+      defaultTtl: 604800
+      partitionKey: {
+        paths: [
+          '/tenant_id'
+        ]
+        kind: 'Hash'
+      }
+      indexingPolicy: {
+        indexingMode: 'consistent'
+        automatic: true
+        includedPaths: [
+          {
+            path: '/tenant_id/?'
+          }
+          {
+            path: '/user_id/?'
+          }
+          {
+            path: '/query_id/?'
+          }
+          {
+            path: '/timestamp_unix/?'
+          }
+        ]
+        excludedPaths: [
+          {
+            path: '/*'
+          }
+        ]
+      }
+    }
+  }
+}
+
 resource cosmosDataContributorAssignment 'Microsoft.DocumentDB/databaseAccounts/sqlRoleAssignments@2024-05-15' = {
   name: guid(cosmosAccount.id, appIdentity.id, 'cosmos-data-contributor')
   parent: cosmosAccount

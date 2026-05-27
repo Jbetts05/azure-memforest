@@ -28,6 +28,24 @@ tenant_id:user_id
 
 Tenant-wide records may use `tenant_id` alone. `tenant_id` and `user_id` values used in partition keys must not contain `:`. Cloud adapters must filter by tenant at the service boundary and at the storage/index layer. Contract tests for cloud adapters must include cross-tenant isolation cases.
 
+## Cosmos containers
+
+The dev deployment declares these source-of-truth containers:
+
+| Container | Partition key | TTL |
+| --- | --- | --- |
+| `sessions` | `/tenant_user_key` | none |
+| `turns` | `/tenant_user_key` | none |
+| `facts` | `/tenant_user_key` | none |
+| `tree_nodes` | `/tenant_user_key` | none |
+| `fact_locations` | `/tenant_user_key` | none |
+| `manifests` | `/tenant_id` | none |
+| `jobs` | `/tenant_id` | 30 days |
+| `deletions` | `/tenant_id` | none |
+| `query_traces` | `/tenant_id` | 7 days |
+
+Adapters must use deterministic document IDs for logical upsert keys. Unique key policies are not declared on containers because they are immutable and the adapter-owned deterministic ID strategy is easier to evolve during early implementation.
+
 ## Deletion semantics
 
 Soft delete means a source-of-truth record is tombstoned and excluded from queries immediately. Projection stores such as Azure AI Search, browse embedding stores, Redis caches, and trace views must drop or hide tombstoned records during asynchronous propagation.
