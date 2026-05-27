@@ -16,6 +16,8 @@ from src.cloud.contracts import (
     TreeNodeStore,
     TreeSnapshotStore,
 )
+from src.cloud.azure_models import AzureOpenAIModelClient
+from src.cloud.config import AzureModelDeployment, AzureOpenAIConfig, CloudConfig, load_cloud_config
 from src.cloud.local_adapters import (
     FactManagerStoreAdapter,
     InMemoryFactLocationIndex,
@@ -40,10 +42,15 @@ __all__ = [
     "TraceSink",
     "TreeNodeStore",
     "TreeSnapshotStore",
+    "AzureModelDeployment",
+    "AzureOpenAIConfig",
+    "AzureOpenAIModelClient",
+    "CloudConfig",
     "FactManagerStoreAdapter",
     "InMemoryFactLocationIndex",
     "InMemorySummaryCache",
     "NodeIndexBrowseEmbeddingAdapter",
     "NodeIndexRecallAdapter",
     "TreeStoreNodeAdapter",
+    "load_cloud_config",
 ]

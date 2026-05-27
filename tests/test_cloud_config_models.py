@@ -1,0 +1,151 @@
+from __future__ import annotations
+
+import pytest
+
+from src.api.json_parse import parse_json_object
+from src.cloud.azure_models import AzureOpenAIModelClient
+from src.cloud.config import AzureModelDeployment, AzureOpenAIConfig, load_cloud_config
+
+
+class _Message:
+    content = '{"ok": true}'
+
+
+class _Choice:
+    message = _Message()
+
+
+class _ChatResponse:
+    choices = [_Choice()]
+
+
+class _EmbeddingItem:
+    def __init__(self, embedding):
+        self.embedding = embedding
+
+
+class _EmbeddingResponse:
+    def __init__(self, embeddings):
+        self.data = [_EmbeddingItem(embedding) for embedding in embeddings]
+
+
+class _FakeCompletions:
+    def __init__(self):
+        self.last_model = ""
+
+    def create(self, **kwargs):
+        self.last_model = kwargs["model"]
+        return _ChatResponse()
+
+
+class _FakeEmbeddings:
+    def __init__(self, embeddings):
+        self._embeddings = embeddings
+        self.last_model = ""
+
+    def create(self, **kwargs):
+        self.last_model = kwargs["model"]
+        return _EmbeddingResponse(self._embeddings[: len(kwargs["input"])])
+
+
+class _FakeChat:
+    def __init__(self):
+        self.completions = _FakeCompletions()
+
+
+class _FakeClient:
+    def __init__(self, embeddings=None):
+        self.chat = _FakeChat()
+        self.embeddings = _FakeEmbeddings(embeddings or [[1.0, 2.0]])
+
+
+def test_load_cloud_config_reads_safe_env_without_api_key_value() -> None:
+    config = load_cloud_config(
+        {
+            "AZURE_MEMFOREST_ENV": "dev",
+            "AZURE_TENANT_ID": "tenant",
+            "AZURE_SUBSCRIPTION_ID": "subscription",
+            "AZURE_RESOURCE_GROUP": "azure-memforest",
+            "AZURE_LOCATION": "eastus2",
+            "AZURE_OPENAI_ENDPOINT": "https://example.openai.azure.com",
+            "AZURE_OPENAI_API_VERSION": "2024-10-21",
+            "AZURE_OPENAI_CHAT_DEPLOYMENT": "chat-deployment",
+            "AZURE_OPENAI_EMBEDDING_DEPLOYMENT": "embedding-deployment",
+            "AZURE_OPENAI_EMBEDDING_DIMENSION": "2",
+            "AZURE_OPENAI_API_KEY_ENV": "CUSTOM_KEY_ENV",
+        }
+    )
+
+    assert config.environment == "dev"
+    assert config.resource_group == "azure-memforest"
+    assert config.azure_openai is not None
+    assert config.azure_openai.api_key_env == "CUSTOM_KEY_ENV"
+    assert config.azure_openai.embedding_dimension == 2
+    assert config.azure_openai.chat_deployments["default"].deployment_name == "chat-deployment"
+
+
+def test_azure_model_client_routes_role_to_deployment_and_parses_json() -> None:
+    fake_client = _FakeClient()
+    config = AzureOpenAIConfig(
+        endpoint="https://example.openai.azure.com",
+        api_version="2024-10-21",
+        chat_deployments={
+            "planner": AzureModelDeployment(role="planner", deployment_name="planner-deployment"),
+        },
+        use_managed_identity=True,
+    )
+    client = AzureOpenAIModelClient(config, openai_client=fake_client)
+
+    result = client.generate_json(
+        system_prompt="system",
+        user_prompt="user",
+        model_name="planner",
+    )
+
+    assert result == {"ok": True}
+    assert fake_client.chat.completions.last_model == "planner-deployment"
+
+
+def test_azure_model_client_embeddings_validate_dimension() -> None:
+    fake_client = _FakeClient(embeddings=[[1.0, 2.0], [3.0, 4.0]])
+    config = AzureOpenAIConfig(
+        endpoint="https://example.openai.azure.com",
+        api_version="2024-10-21",
+        embedding_deployment="embedding-deployment",
+        embedding_dimension=2,
+    )
+    client = AzureOpenAIModelClient(config, openai_client=fake_client)
+
+    embeddings = client.embed_texts(["a", "b"])
+
+    assert embeddings == [[1.0, 2.0], [3.0, 4.0]]
+    assert fake_client.embeddings.last_model == "embedding-deployment"
+
+
+def test_azure_model_client_rejects_embedding_dimension_mismatch() -> None:
+    fake_client = _FakeClient(embeddings=[[1.0, 2.0, 3.0]])
+    config = AzureOpenAIConfig(
+        endpoint="https://example.openai.azure.com",
+        api_version="2024-10-21",
+        embedding_deployment="embedding-deployment",
+        embedding_dimension=2,
+    )
+    client = AzureOpenAIModelClient(config, openai_client=fake_client)
+
+    with pytest.raises(ValueError, match="embedding dimension"):
+        client.embed_texts(["a"])
+
+
+def test_azure_model_client_managed_identity_requires_provider_or_client() -> None:
+    config = AzureOpenAIConfig(
+        endpoint="https://example.openai.azure.com",
+        api_version="2024-10-21",
+        use_managed_identity=True,
+    )
+
+    with pytest.raises(RuntimeError, match="azure-identity"):
+        AzureOpenAIModelClient(config)
+
+
+def test_parse_json_object_is_shared_and_handles_fenced_json() -> None:
+    assert parse_json_object('```json\n{"ok": true}\n```') == {"ok": True}

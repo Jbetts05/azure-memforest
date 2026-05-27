@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-import json
 import time
 from typing import TYPE_CHECKING, Any
 
 from openai import OpenAI
 
+from src.api.json_parse import parse_json_object
 from src.config.api import ChatCompletionConfig, EmbeddingConfig
 from src.extraction.pipeline import JsonExtractionBackend
 
@@ -87,7 +87,7 @@ class OpenAIChatClient:
                 end_time=end_time,
             )
 
-        return _parse_json_object(content)
+        return parse_json_object(content)
 
 
 class OpenAIEmbeddingClient:
@@ -158,77 +158,6 @@ class OpenAIJsonBackend(JsonExtractionBackend):
             step_label=self.step_label,
             trace=trace,
         )
-
-
-def _parse_json_object(text: str) -> dict[str, Any]:
-    raw = str(text or "").strip()
-    if raw.startswith("```"):
-        lines = raw.splitlines()
-        if len(lines) >= 3 and lines[-1].strip().startswith("```"):
-            raw = "\n".join(lines[1:-1]).strip()
-            if raw.startswith("json"):
-                raw = raw[4:].strip()
-    try:
-        parsed = json.loads(raw)
-    except json.JSONDecodeError:
-        start = raw.find("{")
-        end = raw.rfind("}")
-        if start < 0 or end <= start:
-            # Truncated response with no closing brace — try summary extraction
-            return _extract_summary_from_truncated(raw)
-        try:
-            parsed = json.loads(raw[start : end + 1])
-        except json.JSONDecodeError:
-            return _extract_summary_from_truncated(raw)
-    if not isinstance(parsed, dict):
-        return {}
-    # If parsed dict has no "summary" key but raw has a partial "summary" value,
-    # attempt extraction (e.g. model wrote summary mid-object then got cut off)
-    if "summary" not in parsed:
-        fallback = _extract_summary_from_truncated(raw)
-        if fallback.get("summary"):
-            return fallback
-    return parsed
-
-
-def _extract_summary_from_truncated(raw: str) -> dict[str, Any]:
-    """Last-resort extraction of a 'summary' value from truncated JSON text.
-
-    Handles the common failure where the model writes:
-        {"summary": "long prose that gets cut off without closing quote/brace"}
-    """
-    import re
-    # Find: "summary": "..."  allowing for truncation before closing quote
-    m = re.search(r'"summary"\s*:\s*"(.*)', raw, re.DOTALL)
-    if not m:
-        return {}
-    raw_value = m.group(1)
-    # Try to find the end of the string value (unescaped closing quote)
-    end = _find_json_string_end(raw_value)
-    if end >= 0:
-        value = raw_value[:end]
-    else:
-        # Truncated before closing quote — use whatever text we have,
-        # strip trailing incomplete word after last sentence-ending punctuation
-        value = raw_value.rstrip()
-        last_stop = max(value.rfind("."), value.rfind("!"), value.rfind("?"))
-        if last_stop > len(value) // 2:
-            value = value[: last_stop + 1]
-    value = value.replace('\\"', '"').replace("\\n", " ").strip()
-    return {"summary": value} if value else {}
-
-
-def _find_json_string_end(s: str) -> int:
-    """Return index of the closing unescaped double-quote in a JSON string body."""
-    i = 0
-    while i < len(s):
-        if s[i] == "\\" and i + 1 < len(s):
-            i += 2  # skip escape sequence
-        elif s[i] == '"':
-            return i
-        else:
-            i += 1
-    return -1  # not found (truncated)
 
 
 def _maybe_int(value: Any) -> int | None:
