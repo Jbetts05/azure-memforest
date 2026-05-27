@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import os
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
@@ -10,6 +12,7 @@ from fastapi.responses import JSONResponse
 from src import __version__
 from src.service.auth import AuthError, AuthProvider
 from src.service.azure_readiness import build_azure_readiness_checks
+from src.service.jobs import service_bus_command_service_from_env
 from src.service.middleware import REQUEST_ID_HEADER, RequestIdMiddleware
 from src.service.readiness import ReadinessCheck, default_not_configured_checks, evaluate_readiness
 from src.service.routes import _RouteError, route_error_handler, router as memory_router
@@ -31,12 +34,22 @@ def create_app(
     settings = settings or load_service_settings()
     configured_readiness_checks = readiness_checks or _default_readiness_checks()
 
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        yield
+        service = getattr(app.state, "memory_command_service", None)
+        close = getattr(service, "close", None)
+        if close is not None:
+            await close()
+
     app = FastAPI(
         title="Azure-MemForest API",
         version=__version__,
+        lifespan=lifespan,
     )
     app.add_middleware(RequestIdMiddleware)
     app.state.auth_provider = auth_provider
+    app.state.memory_command_service = service_bus_command_service_from_env(os.environ)
     app.include_router(memory_router)
     app.add_exception_handler(_RouteError, route_error_handler)
 

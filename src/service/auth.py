@@ -14,6 +14,7 @@ SCOPES_HEADER = "x-auth-scopes"
 ROLES_HEADER = "x-auth-roles"
 
 _SAFE_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:@-]{1,128}$")
+_SAFE_PARTITION_ID_PATTERN = re.compile(r"^[A-Za-z0-9._@-]{1,128}$")
 _DEV_ENVIRONMENTS = {"local", "test", "dev"}
 
 
@@ -90,7 +91,11 @@ async def get_actor_context(request: Request) -> ActorContext:
 
 def _require_safe_header(request: Request, header_name: str) -> str:
     value = request.headers.get(header_name, "")
-    if not _is_safe_id(value):
+    if header_name in (TENANT_ID_HEADER, ACTOR_ID_HEADER):
+        safe = _is_safe_partition_id(value)
+    else:
+        safe = _is_safe_id(value)
+    if not safe:
         raise Unauthorized()
     return value
 
@@ -107,3 +112,7 @@ def _parse_csv_header(request: Request, header_name: str) -> tuple[str, ...]:
 
 def _is_safe_id(value: str) -> bool:
     return bool(_SAFE_ID_PATTERN.fullmatch(str(value or "").strip()))
+
+
+def _is_safe_partition_id(value: str) -> bool:
+    return bool(_SAFE_PARTITION_ID_PATTERN.fullmatch(str(value or "").strip()))

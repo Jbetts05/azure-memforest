@@ -404,6 +404,27 @@ def test_dev_header_auth_rejects_unsafe_values_without_echoing_them() -> None:
     assert "bad value" not in response.text
 
 
+def test_dev_header_auth_rejects_colon_in_partition_ids() -> None:
+    app = create_app(auth_provider=DevHeaderAuthProvider(environment="test"))
+
+    @app.get("/__actor")
+    async def actor(ctx=Depends(get_actor_context)):
+        return {"actor_id": ctx.actor_id}
+
+    client = TestClient(app)
+    response = client.get(
+        "/__actor",
+        headers={
+            "x-request-id": "auth-3",
+            TENANT_ID_HEADER: "tenant:1",
+            ACTOR_ID_HEADER: "user-1",
+        },
+    )
+
+    assert response.status_code == 401
+    assert response.json()["error"] == "unauthorized"
+
+
 def test_ingest_route_requires_auth_provider() -> None:
     client = TestClient(create_app())
 
