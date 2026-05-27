@@ -33,11 +33,24 @@ param tags object = {}
 @description('Public network access setting for dev Cosmos account. Set to Disabled when private endpoints are added.')
 param cosmosPublicNetworkAccess string = 'Enabled'
 
+@allowed([
+  'enabled'
+  'disabled'
+])
+@description('Public network access setting for dev Azure AI Search service. Set to disabled when private endpoints are added.')
+param searchPublicNetworkAccess string = 'enabled'
+
+@description('Azure AI Search index name reserved for tree/root recall.')
+param searchRecallIndexName string = 'memforest-recall'
+
 var normalizedName = toLower(replace('${appName}-${environmentName}', '_', '-'))
 var acrName = replace(take('${replace(normalizedName, '-', '')}acr', 50), '_', '')
 var cosmosName = take('${replace(normalizedName, '-', '')}cosmos', 44)
+var searchName = take('${replace(normalizedName, '-', '')}search', 60)
 var acrPullRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
 var cosmosDataContributorRoleDefinitionId = '${cosmosAccount.id}/sqlRoleDefinitions/00000000-0000-0000-0000-000000000002'
+var searchServiceContributorRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7ca78c08-252a-4471-8644-bb5ff32d4ba0')
+var searchIndexDataContributorRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '8ebe5a00-799e-43f5-93ac-243d3dce84a7')
 
 resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   name: '${normalizedName}-law'
@@ -128,6 +141,41 @@ resource cosmosDataContributorAssignment 'Microsoft.DocumentDB/databaseAccounts/
   }
 }
 
+resource searchService 'Microsoft.Search/searchServices@2024-06-01-preview' = {
+  name: searchName
+  location: location
+  tags: tags
+  sku: {
+    name: 'basic'
+  }
+  properties: {
+    replicaCount: 1
+    partitionCount: 1
+    publicNetworkAccess: searchPublicNetworkAccess
+    disableLocalAuth: true
+  }
+}
+
+resource searchServiceContributorAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(searchService.id, appIdentity.id, 'search-service-contributor')
+  scope: searchService
+  properties: {
+    roleDefinitionId: searchServiceContributorRoleDefinitionId
+    principalId: appIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource searchIndexDataContributorAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(searchService.id, appIdentity.id, 'search-index-data-contributor')
+  scope: searchService
+  properties: {
+    roleDefinitionId: searchIndexDataContributorRoleDefinitionId
+    principalId: appIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
 resource acrPullAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(containerRegistry.id, appIdentity.id, 'acr-pull')
   scope: containerRegistry
@@ -201,6 +249,18 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
               name: 'AZURE_COSMOS_DATABASE_NAME'
               value: cosmosDatabase.properties.resource.id
             }
+            {
+              name: 'AZURE_SEARCH_ENDPOINT'
+              value: 'https://${searchService.name}.search.windows.net'
+            }
+            {
+              name: 'AZURE_SEARCH_SERVICE_NAME'
+              value: searchService.name
+            }
+            {
+              name: 'AZURE_SEARCH_RECALL_INDEX_NAME'
+              value: searchRecallIndexName
+            }
           ]
           resources: {
             cpu: json('0.5')
@@ -217,6 +277,8 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
   dependsOn: [
     acrPullAssignment
     cosmosDataContributorAssignment
+    searchServiceContributorAssignment
+    searchIndexDataContributorAssignment
   ]
 }
 
@@ -228,6 +290,9 @@ output applicationInsightsName string = appInsights.name
 output cosmosAccountName string = cosmosAccount.name
 output cosmosEndpoint string = cosmosAccount.properties.documentEndpoint
 output cosmosDatabaseName string = cosmosDatabase.properties.resource.id
+output searchServiceName string = searchService.name
+output searchEndpoint string = 'https://${searchService.name}.search.windows.net'
+output searchRecallIndexName string = searchRecallIndexName
 
 @secure()
 output applicationInsightsConnectionString string = appInsights.properties.ConnectionString
