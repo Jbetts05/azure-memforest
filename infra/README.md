@@ -24,3 +24,31 @@ az deployment group create `
 ```
 
 The current template is the hosting foundation only. Cosmos DB, Azure AI Search, Redis, Service Bus, and model endpoint resources should be added in the implementation slices that first use them.
+
+## Current dev deployment
+
+The initial dev hosting foundation has been deployed to:
+
+| Setting | Value |
+| --- | --- |
+| Resource group | `azure-memforest` |
+| Region | `eastus2` |
+| Container App | `memforest-example-api` |
+| FQDN | `memforest-api.example.invalid` |
+| ACR | `memforestexampleacr.azurecr.io` |
+| Image | `memforestexampleacr.azurecr.io/azure-memforest-api:5497651751c4` |
+
+Verification:
+
+```powershell
+$base = "https://memforest-api.example.invalid"
+Invoke-WebRequest "$base/health/live" -UseBasicParsing
+Invoke-WebRequest "$base/version" -UseBasicParsing
+Invoke-WebRequest "$base/health/ready" -UseBasicParsing -SkipHttpErrorCheck
+```
+
+Expected current behavior:
+
+- `/health/live` returns `200` with `{"status":"ok"}`.
+- `/version` returns `200` with service name/version.
+- `/health/ready` returns `503` until real Azure dependency checks are wired.
