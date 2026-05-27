@@ -195,7 +195,11 @@ class InMemoryFactLocationIndex:
                 if not (
                     item.tree_id == location.tree_id
                     and item.node_id == location.node_id
+                    and item.tree_type == location.tree_type
                     and item.level == location.level
+                    and item.tenant_id == location.tenant_id
+                    and item.user_id == location.user_id
+                    and item.forest_version == location.forest_version
                 )
             ]
             existing.append(location)

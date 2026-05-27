@@ -172,15 +172,29 @@ class BrowseEmbeddingStore(Protocol):
 
 
 class FactLocationIndex(Protocol):
-    """Durable inverted index for fact-to-tree back-projection."""
+    """Durable inverted index for fact-to-tree back-projection.
+
+    Implementations may be scoped to one tenant/user or multi-tenant. Within a
+    single implementation scope, upserting the same logical location replaces
+    the prior record. The logical key is fact_id, tree_id, node_id, tree_type,
+    level, tenant_id, user_id, and forest_version.
+    """
 
     def get_locations(self, fact_ids: list[str]) -> dict[str, list[FactLocation]]:
+        """Return locations for requested facts.
+
+        Missing fact IDs may be absent from the returned mapping; callers should
+        treat `result.get(fact_id, [])` as the portable lookup shape. Returned
+        lists must be independent of internal storage.
+        """
         ...
 
     def upsert_locations(self, locations: list[FactLocation]) -> None:
+        """Insert or replace fact locations by logical location key."""
         ...
 
     def delete_locations_for_tree(self, tree_id: str) -> None:
+        """Remove all locations for a tree within the implementation scope."""
         ...
 
 
@@ -188,12 +202,15 @@ class SummaryCache(Protocol):
     """Content-hash summary cache contract."""
 
     def get(self, content_hash: str) -> str | None:
+        """Return cached summary text, or None when absent."""
         ...
 
     def put(self, content_hash: str, summary: str, *, metadata: dict[str, Any] | None = None) -> None:
+        """Store or replace a summary for a content hash."""
         ...
 
     def delete(self, content_hash: str) -> None:
+        """Delete a cached summary. Deleting an absent key is a no-op."""
         ...
 
 
