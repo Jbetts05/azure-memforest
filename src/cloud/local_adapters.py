@@ -67,12 +67,12 @@ class NodeIndexRecallAdapter:
             },
         )
 
-    def upsert_candidates(self, candidates: list[RecallCandidate]) -> None:
+    def upsert_documents(self, documents: list[Any]) -> None:
         raise NotImplementedError(
             "Local recall writes must use NodeIndex.add_node(entry, embedding, searchable=True)."
         )
 
-    def delete_by_tree(self, tree_id: str) -> None:
+    def delete_by_tree(self, tree_id: str, *, tenant_id: str | None = None) -> None:
         self._node_index.remove_tree(tree_id)
 
 

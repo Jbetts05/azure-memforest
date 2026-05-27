@@ -33,6 +33,27 @@ class RecallCandidate:
 
 
 @dataclass(frozen=True)
+class RecallDocument:
+    """One write-side recall document projected into a recall index."""
+
+    tree_id: str
+    node_id: str
+    tenant_id: str
+    user_id: str
+    tree_type: str
+    forest_version: str
+    embedding_model_version: str
+    summary: str
+    embedding: tuple[float, ...]
+    schema_version: int = SCHEMA_VERSION
+    metadata: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "embedding", tuple(self.embedding))
+        object.__setattr__(self, "metadata", _freeze_mapping(self.metadata))
+
+
+@dataclass(frozen=True)
 class StoredTreeNode:
     """Cloud-portable tree node payload for random-access browsing."""
 
@@ -156,10 +177,10 @@ class RecallIndex(Protocol):
     def search(self, query_embedding: list[float], *, top_k: int, filters: dict[str, Any] | None = None) -> list[RecallCandidate]:
         ...
 
-    def upsert_candidates(self, candidates: list[RecallCandidate]) -> None:
+    def upsert_documents(self, documents: list[RecallDocument]) -> None:
         ...
 
-    def delete_by_tree(self, tree_id: str) -> None:
+    def delete_by_tree(self, tree_id: str, *, tenant_id: str | None = None) -> None:
         ...
 
 
