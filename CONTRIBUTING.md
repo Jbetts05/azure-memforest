@@ -29,7 +29,7 @@ docker build --pull --tag azure-memforest-api:local .
 docker run --rm -p 8000:8000 azure-memforest-api:local
 ```
 
-`/health/live` should return 200. `/health/ready` intentionally returns 503 until real configuration and Azure dependency checks are wired.
+`/health/live` should return 200. `/health/ready` intentionally returns 503 until readiness checks are wired through `create_app(readiness_checks=...)`.
 
 ## Azure deployment safety
 
