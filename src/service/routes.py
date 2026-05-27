@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Header, Request, status
 from fastapi.responses import JSONResponse
 
 from src.service.auth import ActorContext, Forbidden, get_actor_context
+from src.cloud.cosmos_jobs import JobNotFound
 from src.service.middleware import REQUEST_ID_HEADER
 from src.service.schemas import (
     DeleteSessionResponse,
@@ -93,7 +94,14 @@ async def get_job_status(
 ):
     _enforce_user_access(actor, user_id)
     service = _required_service(request, "job_status_service")
-    return await service.get_job(actor, user_id=user_id, job_id=job_id)
+    try:
+        return await service.get_job(actor, user_id=user_id, job_id=job_id)
+    except JobNotFound:
+        return _error_response(
+            request,
+            status_code=status.HTTP_404_NOT_FOUND,
+            error="job_not_found",
+        )
 
 
 def _enforce_user_access(actor: ActorContext, user_id: str) -> None:

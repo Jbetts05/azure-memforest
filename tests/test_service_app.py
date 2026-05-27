@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from src import __version__
 from src.service.app import create_app
+from src.cloud.cosmos_jobs import JobNotFound
 from src.service.auth import (
     ACTOR_ID_HEADER,
     ROLES_HEADER,
@@ -591,3 +592,77 @@ def test_memory_routes_call_injected_services_with_actor_context() -> None:
     assert query_response.json()["facts"][0]["fact_id"] == "fact-1"
     assert job_response.status_code == 200
     assert job_response.json()["job_id"] == "job-1"
+
+
+def test_ingest_route_preserves_session_id_from_recording_service() -> None:
+    from src.cloud.cosmos_jobs import CosmosJobStore
+    from src.service.jobs import JobRecordingCommandService
+
+    class FakeContainer:
+        def __init__(self):
+            self.items = {}
+
+        def create_item(self, item, *, partition_key):
+            self.items[(partition_key, item["id"])] = item
+
+        def read_item(self, *, item, partition_key):
+            return self.items[(partition_key, item)]
+
+    class InnerCommandService:
+        async def submit_ingest_session(self, actor, *, user_id, session_id, request, idempotency_key):
+            return {
+                "job_id": "unused",
+                "status": "accepted",
+                "tenant_id": actor.tenant.tenant_id,
+                "user_id": user_id,
+                "session_id": session_id,
+            }
+
+        async def submit_delete_session(self, actor, *, user_id, session_id, idempotency_key):
+            raise AssertionError("not used")
+
+    app = create_app(auth_provider=DevHeaderAuthProvider(environment="test"))
+    app.state.memory_command_service = JobRecordingCommandService(
+        InnerCommandService(),
+        CosmosJobStore(container=FakeContainer()),
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/v1/users/user-1/sessions/session-abc:ingest",
+        headers={
+            TENANT_ID_HEADER: "tenant-1",
+            ACTOR_ID_HEADER: "user-1",
+            "Idempotency-Key": "idem-route",
+        },
+        json={"turns": [{"role": "user", "content": "hello"}]},
+    )
+
+    assert response.status_code == 202
+    assert response.json()["session_id"] == "session-abc"
+
+
+def test_job_status_route_returns_404_for_missing_job() -> None:
+    class MissingJobService:
+        async def get_job(self, actor, *, user_id, job_id):
+            raise JobNotFound()
+
+    app = create_app(auth_provider=DevHeaderAuthProvider(environment="test"))
+    app.state.job_status_service = MissingJobService()
+    client = TestClient(app)
+
+    response = client.get(
+        "/v1/users/user-1/jobs/missing",
+        headers={
+            TENANT_ID_HEADER: "tenant-1",
+            ACTOR_ID_HEADER: "user-1",
+            "x-request-id": "job-404",
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {
+        "status": "error",
+        "error": "job_not_found",
+        "request_id": "job-404",
+    }

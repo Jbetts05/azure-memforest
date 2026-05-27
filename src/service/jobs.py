@@ -235,3 +235,80 @@ def _job_id(
         separators=(",", ":"),
     )
     return "job_" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+class JobRecordingCommandService(MemoryCommandService):
+    """Decorator that records accepted job status after publish succeeds."""
+
+    def __init__(self, inner: MemoryCommandService, job_store: Any) -> None:
+        self._inner = inner
+        self._job_store = job_store
+
+    async def submit_ingest_session(
+        self,
+        actor: ActorContext,
+        *,
+        user_id: str,
+        session_id: str,
+        request: IngestSessionRequest,
+        idempotency_key: str,
+    ) -> IngestSessionResponse:
+        response = await self._inner.submit_ingest_session(
+            actor,
+            user_id=user_id,
+            session_id=session_id,
+            request=request,
+            idempotency_key=idempotency_key,
+        )
+        envelope = build_write_job_envelope(
+            actor,
+            user_id=user_id,
+            session_id=session_id,
+            job_type="ingest_session",
+            idempotency_key=idempotency_key,
+            payload=request.model_dump(mode="json"),
+        )
+        recorded = await self._job_store.create_accepted_job(envelope)
+        return IngestSessionResponse(
+            job_id=recorded.job_id,
+            status=recorded.status,
+            tenant_id=recorded.tenant_id,
+            user_id=recorded.user_id,
+            session_id=session_id,
+        )
+
+    async def submit_delete_session(
+        self,
+        actor: ActorContext,
+        *,
+        user_id: str,
+        session_id: str,
+        idempotency_key: str,
+    ) -> DeleteSessionResponse:
+        response = await self._inner.submit_delete_session(
+            actor,
+            user_id=user_id,
+            session_id=session_id,
+            idempotency_key=idempotency_key,
+        )
+        envelope = build_write_job_envelope(
+            actor,
+            user_id=user_id,
+            session_id=session_id,
+            job_type="delete_session",
+            idempotency_key=idempotency_key,
+            payload={},
+        )
+        recorded = await self._job_store.create_accepted_job(envelope)
+        return DeleteSessionResponse(
+            job_id=recorded.job_id,
+            status=recorded.status,
+            tenant_id=recorded.tenant_id,
+            user_id=recorded.user_id,
+            session_id=session_id,
+        )
+
+    async def close(self) -> None:
+        close = getattr(self._inner, "close", None)
+        if close is not None:
+            await close()

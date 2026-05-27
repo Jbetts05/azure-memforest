@@ -1,0 +1,155 @@
+"""Cosmos-backed job status store for write orchestration."""
+
+from __future__ import annotations
+
+import hashlib
+import time
+from dataclasses import dataclass
+from typing import Any
+
+from src.cloud.schema import SCHEMA_VERSION, partition_key
+from src.service.auth import ActorContext
+from src.service.jobs import WriteJobEnvelope
+from src.service.ports import JobStatusService
+from src.service.schemas import JobStatusResponse
+
+
+class JobNotFound(Exception):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class CosmosJobStore:
+    """Job status store.
+
+    The API creates accepted records after publishing messages. Workers own
+    running/terminal state transitions and should use ETags when updating.
+    """
+
+    container: Any
+
+    async def create_accepted_job(self, envelope: WriteJobEnvelope) -> JobStatusResponse:
+        document = _job_document(envelope)
+        try:
+            await _maybe_await(
+                self.container.create_item(
+                    document,
+                    partition_key=envelope.tenant_id,
+                )
+            )
+        except Exception as exc:
+            if _is_cosmos_conflict(exc):
+                return await self.get_job_by_ids(
+                    tenant_id=envelope.tenant_id,
+                    user_id=envelope.user_id,
+                    job_id=envelope.job_id,
+                )
+            raise
+        return _response_from_document(document)
+
+    async def get_job_by_ids(self, *, tenant_id: str, user_id: str, job_id: str) -> JobStatusResponse:
+        try:
+            item = await _maybe_await(
+                self.container.read_item(
+                    item=job_id,
+                    partition_key=tenant_id,
+                )
+            )
+        except Exception as exc:
+            if _is_cosmos_not_found(exc):
+                raise JobNotFound() from exc
+            raise
+        if str(item.get("tenant_id", "")) != tenant_id or str(item.get("user_id", "")) != user_id:
+            raise JobNotFound()
+        return _response_from_document(item)
+
+
+class CosmosJobStatusService(JobStatusService):
+    def __init__(self, job_store: CosmosJobStore) -> None:
+        self._job_store = job_store
+
+    async def get_job(
+        self,
+        actor: ActorContext,
+        *,
+        user_id: str,
+        job_id: str,
+    ) -> JobStatusResponse:
+        return await self._job_store.get_job_by_ids(
+            tenant_id=actor.tenant.tenant_id,
+            user_id=user_id,
+            job_id=job_id,
+        )
+
+
+def job_store_from_database(database_client: Any) -> CosmosJobStore:
+    return CosmosJobStore(container=database_client.get_container_client("jobs"))
+
+
+def job_store_from_env(environ: dict[str, str]) -> CosmosJobStore | None:
+    endpoint = str(environ.get("AZURE_COSMOS_ENDPOINT", "")).strip()
+    database_name = str(environ.get("AZURE_COSMOS_DATABASE_NAME", "")).strip()
+    client_id = str(environ.get("AZURE_CLIENT_ID", "")).strip()
+    if not (endpoint and database_name and client_id):
+        return None
+    from azure.cosmos.aio import CosmosClient
+    from azure.identity.aio import ManagedIdentityCredential
+
+    credential = ManagedIdentityCredential(client_id=client_id)
+    client = CosmosClient(endpoint, credential=credential)
+    return job_store_from_database(client.get_database_client(database_name))
+
+
+def _job_document(envelope: WriteJobEnvelope) -> dict[str, Any]:
+    now = time.time()
+    payload_json = envelope.to_json()
+    return {
+        "id": envelope.job_id,
+        "schema_version": SCHEMA_VERSION,
+        "tenant_id": envelope.tenant_id,
+        "user_id": envelope.user_id,
+        "tenant_user_key": partition_key(tenant_id=envelope.tenant_id, user_id=envelope.user_id),
+        "job_id": envelope.job_id,
+        "job_type": envelope.job_type,
+        "session_id": envelope.session_id,
+        "status": "accepted",
+        "idempotency_key_hash": _idempotency_hash(envelope.tenant_id, envelope.idempotency_key),
+        "payload_digest": hashlib.sha256(payload_json.encode("utf-8")).hexdigest(),
+        "payload_size_bytes": len(payload_json.encode("utf-8")),
+        "submitted_at": envelope.submitted_at_unix,
+        "updated_at": now,
+    }
+
+
+def _response_from_document(document: dict[str, Any]) -> JobStatusResponse:
+    return JobStatusResponse(
+        job_id=str(document["job_id"]),
+        status=document["status"],
+        tenant_id=str(document["tenant_id"]),
+        user_id=str(document["user_id"]),
+        submitted_at=document.get("submitted_at"),
+        completed_at=document.get("completed_at"),
+        error=document.get("error"),
+    )
+
+
+def _idempotency_hash(tenant_id: str, idempotency_key: str) -> str:
+    return hashlib.sha256(f"{tenant_id}:{idempotency_key}".encode("utf-8")).hexdigest()
+
+
+async def _maybe_await(value):
+    if hasattr(value, "__await__"):
+        return await value
+    return value
+
+
+def _is_cosmos_conflict(exc: Exception) -> bool:
+    if exc.__class__.__name__ == "CosmosResourceExistsError":
+        return True
+    return getattr(exc, "status_code", None) == 409
+
+
+def _is_cosmos_not_found(exc: Exception) -> bool:
+    if exc.__class__.__name__ == "CosmosResourceNotFoundError":
+        return True
+    return getattr(exc, "status_code", None) == 404
