@@ -3,6 +3,9 @@ targetScope = 'resourceGroup'
 @description('Azure region for all resources.')
 param location string = resourceGroup().location
 
+@description('Azure region for Azure AI Search. May differ from location when the primary region lacks Search capacity.')
+param searchLocation string = location
+
 @description('Short environment name such as dev, test, or prod.')
 param environmentName string
 
@@ -143,7 +146,7 @@ resource cosmosDataContributorAssignment 'Microsoft.DocumentDB/databaseAccounts/
 
 resource searchService 'Microsoft.Search/searchServices@2024-06-01-preview' = {
   name: searchName
-  location: location
+  location: searchLocation
   tags: tags
   sku: {
     name: 'basic'

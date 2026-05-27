@@ -33,6 +33,7 @@ The initial dev hosting foundation has been deployed to:
 | --- | --- |
 | Resource group | `azure-memforest` |
 | Region | `eastus2` |
+| Azure AI Search region | `eastus` |
 | Container App | `memforest-example-api` |
 | FQDN | `memforest-api.example.invalid` |
 | ACR | `memforestexampleacr.azurecr.io` |
@@ -41,6 +42,8 @@ The initial dev hosting foundation has been deployed to:
 | Cosmos DB database | `memforest` |
 | Azure AI Search | `memforestexamplesearch` |
 | Recall index name | `memforest-recall` |
+
+Azure AI Search is deployed in `eastus` for the current dev environment because `eastus2` returned `InsufficientResourcesAvailable` for new Search services on 2026-05-27. Revisit this topology before production.
 
 Verification:
 
