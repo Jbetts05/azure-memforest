@@ -106,6 +106,20 @@ async def test_cosmos_fact_store_tombstone_hides_fact_without_scrubbing_text() -
 
 
 @pytest.mark.asyncio
+async def test_cosmos_fact_store_upsert_does_not_resurrect_tombstoned_fact() -> None:
+    container = FakeContainer()
+    store = CosmosFactStore(container, tenant_id="tenant-1", user_id="user-1")
+    await store.upsert_facts([_fact()])
+    await store.tombstone_facts(["fact-1"], reason="session_deleted")
+
+    await store.upsert_facts([_fact()])
+
+    assert await store.get_fact("fact-1") is None
+    stored = next(iter(container.items.values()))
+    assert stored["tombstoned"] is True
+
+
+@pytest.mark.asyncio
 async def test_cosmos_fact_store_is_not_forest_version_scoped() -> None:
     store = CosmosFactStore(FakeContainer(), tenant_id="tenant-1", user_id="user-1")
     await store.upsert_facts([_fact()])

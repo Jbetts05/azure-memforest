@@ -59,6 +59,9 @@ class CosmosFactStore:
 
     async def upsert_facts(self, facts: list[ManagedFact]) -> None:
         for fact in facts:
+            existing = await self._read_raw_fact(fact.fact_id)
+            if existing is not None and existing.get("tombstoned"):
+                continue
             doc = _fact_to_doc(fact, self.tenant_id, self.user_id, self.tenant_user_key)
             if len(json.dumps(doc, ensure_ascii=False).encode("utf-8")) > MAX_FACT_DOCUMENT_BYTES:
                 raise ValueError("fact document exceeds Cosmos size budget.")
@@ -78,6 +81,17 @@ class CosmosFactStore:
             item["tombstone_reason"] = reason
             item["tombstoned_at_unix"] = time.time()
             await _maybe_await(self.container.upsert_item(item))
+
+    async def _read_raw_fact(self, fact_id: str) -> dict[str, Any] | None:
+        try:
+            item = await _maybe_await(self.container.read_item(item=_fact_doc_id(fact_id), partition_key=self.tenant_user_key))
+        except Exception as exc:
+            if _is_not_found(exc):
+                return None
+            raise
+        if item.get("tenant_id") != self.tenant_id or item.get("user_id") != self.user_id:
+            return None
+        return item
 
 
 def _fact_to_doc(fact: ManagedFact, tenant_id: str, user_id: str, tenant_user_key: str) -> dict[str, Any]:
