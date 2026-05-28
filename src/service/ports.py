@@ -12,6 +12,7 @@ from src.service.schemas import (
     JobStatusResponse,
     QueryRequest,
     QueryResponse,
+    QueryTraceResponse,
 )
 
 
@@ -69,4 +70,15 @@ class JobStatusService(Protocol):
         user_id: str,
         job_id: str,
     ) -> JobStatusResponse:
+        ...
+
+
+class QueryTraceService(Protocol):
+    async def get_trace(
+        self,
+        actor: ActorContext,
+        *,
+        user_id: str,
+        query_id: str,
+    ) -> QueryTraceResponse:
         ...

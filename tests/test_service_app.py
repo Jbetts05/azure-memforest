@@ -565,11 +565,23 @@ def test_memory_routes_call_injected_services_with_actor_context() -> None:
                 "user_id": user_id,
             }
 
+    class FakeTraceService:
+        async def get_trace(self, actor, *, user_id, query_id):
+            return {
+                "query_id": query_id,
+                "tenant_id": actor.tenant.tenant_id,
+                "user_id": user_id,
+                "forest_version": "v1",
+                "event_count": 1,
+                "events": [{"event_type": "query_completed"}],
+            }
+
     command_service = FakeCommandService()
     app = create_app(auth_provider=DevHeaderAuthProvider(environment="test"))
     app.state.memory_command_service = command_service
     app.state.memory_query_service = FakeQueryService()
     app.state.job_status_service = FakeJobService()
+    app.state.query_trace_service = FakeTraceService()
     client = TestClient(app)
     headers = {
         TENANT_ID_HEADER: "tenant-1",
@@ -592,6 +604,10 @@ def test_memory_routes_call_injected_services_with_actor_context() -> None:
         "/v1/users/other-user/jobs/job-1",
         headers=headers,
     )
+    trace_response = client.get(
+        "/v1/users/other-user/queries/query-1/trace",
+        headers=headers,
+    )
 
     assert ingest_response.status_code == 202
     assert ingest_response.json()["tenant_id"] == "tenant-1"
@@ -601,6 +617,8 @@ def test_memory_routes_call_injected_services_with_actor_context() -> None:
     assert query_response.json()["facts"][0]["fact_id"] == "fact-1"
     assert job_response.status_code == 200
     assert job_response.json()["job_id"] == "job-1"
+    assert trace_response.status_code == 200
+    assert trace_response.json()["query_id"] == "query-1"
 
 
 def test_ingest_route_preserves_session_id_from_recording_service() -> None:

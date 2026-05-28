@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 
 from src.service.auth import ActorContext, Forbidden, get_actor_context
 from src.cloud.cosmos_jobs import JobNotFound
+from src.cloud.cosmos_traces import TraceNotFound
 from src.cloud.query_prerequisites import CloudQueryNotReady
 from src.service.middleware import REQUEST_ID_HEADER
 from src.service.schemas import (
@@ -18,6 +19,7 @@ from src.service.schemas import (
     JobStatusResponse,
     QueryRequest,
     QueryResponse,
+    QueryTraceResponse,
 )
 
 IDEMPOTENCY_HEADER = "Idempotency-Key"
@@ -109,6 +111,25 @@ async def get_job_status(
             request,
             status_code=status.HTTP_404_NOT_FOUND,
             error="job_not_found",
+        )
+
+
+@router.get("/users/{user_id}/queries/{query_id}/trace", response_model=QueryTraceResponse)
+async def get_query_trace(
+    user_id: str,
+    query_id: str,
+    request: Request,
+    actor: ActorContext = Depends(get_actor_context),
+):
+    _enforce_user_access(actor, user_id)
+    service = _required_service(request, "query_trace_service")
+    try:
+        return await service.get_trace(actor, user_id=user_id, query_id=query_id)
+    except TraceNotFound:
+        return _error_response(
+            request,
+            status_code=status.HTTP_404_NOT_FOUND,
+            error="query_trace_not_found",
         )
 
 

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from src.cloud.cosmos_traces import BufferingTraceSink, CosmosTraceRecorder, TraceNotFound
+from src.cloud.cosmos_traces import BufferingTraceSink, CosmosQueryTraceService, CosmosTraceRecorder, TraceNotFound
+from src.service.auth import ActorContext, TenantContext
 from src.observability.tracing import TraceEvent, TraceEventType
 
 
@@ -188,3 +189,27 @@ async def test_trace_recorder_drops_forbidden_attribute_names() -> None:
     attrs = document["events"][0]["attributes"]
     assert attrs == {"safe_count": 2}
     assert document["dropped_attribute_count"] == 4
+
+
+@pytest.mark.asyncio
+async def test_cosmos_query_trace_service_returns_scoped_trace_response() -> None:
+    recorder = CosmosTraceRecorder(container=FakeTraceContainer())
+    await recorder.record_events(
+        tenant_id="tenant-1",
+        user_id="user-1",
+        query_id="query-1",
+        forest_version="v1",
+        events=[_event()],
+    )
+    service = CosmosQueryTraceService(recorder)
+
+    response = await service.get_trace(
+        ActorContext(actor_id="user-1", tenant=TenantContext("tenant-1")),
+        user_id="user-1",
+        query_id="query-1",
+    )
+
+    assert response.query_id == "query-1"
+    assert response.tenant_id == "tenant-1"
+    assert response.forest_version == "v1"
+    assert response.event_count == 1

@@ -12,6 +12,8 @@ from typing import Any
 
 from src.cloud.schema import SCHEMA_VERSION
 from src.observability.tracing import TraceEvent, TraceSink
+from src.service.auth import ActorContext
+from src.service.schemas import QueryTraceResponse
 
 MAX_ATTRIBUTE_STRING_LENGTH = 256
 MAX_EVENT_BYTES = 4096
@@ -178,6 +180,28 @@ class CosmosTraceRecorder:
 
 def trace_recorder_from_database(database_client: Any) -> CosmosTraceRecorder:
     return CosmosTraceRecorder(container=database_client.get_container_client("query_traces"))
+
+
+class CosmosQueryTraceService:
+    def __init__(self, recorder: CosmosTraceRecorder) -> None:
+        self._recorder = recorder
+
+    async def get_trace(self, actor: ActorContext, *, user_id: str, query_id: str) -> QueryTraceResponse:
+        item = await self._recorder.get_trace(
+            tenant_id=actor.tenant.tenant_id,
+            user_id=user_id,
+            query_id=query_id,
+        )
+        return QueryTraceResponse(
+            query_id=item["query_id"],
+            tenant_id=item["tenant_id"],
+            user_id=item["user_id"],
+            forest_version=item["forest_version"],
+            event_count=int(item.get("event_count", 0)),
+            trace_truncated=bool(item.get("trace_truncated", False)),
+            dropped_attribute_count=int(item.get("dropped_attribute_count", 0)),
+            events=list(item.get("events", [])),
+        )
 
 
 def _trace_document(

@@ -73,6 +73,17 @@ class JobStatusResponse(BaseModel):
     error: str | None = None
 
 
+class QueryTraceResponse(BaseModel):
+    query_id: str
+    tenant_id: str
+    user_id: str
+    forest_version: str
+    event_count: int
+    trace_truncated: bool = False
+    dropped_attribute_count: int = 0
+    events: list[dict[str, Any]] = Field(default_factory=list)
+
+
 class ErrorResponse(BaseModel):
     status: Literal["error"] = "error"
     error: str

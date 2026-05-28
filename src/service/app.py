@@ -14,6 +14,7 @@ from src.service.auth import AuthError, AuthProvider
 from src.service.auth import DevHeaderAuthProvider
 from src.service.azure_readiness import build_azure_readiness_checks
 from src.cloud.cosmos_jobs import CosmosJobStatusService, job_store_from_env
+from src.cloud.cosmos_traces import CosmosQueryTraceService, trace_recorder_from_database
 from src.service.entra_auth import entra_auth_provider_from_env
 from src.service.jobs import JobRecordingCommandService
 from src.service.jobs import service_bus_command_service_from_env
@@ -62,6 +63,8 @@ def create_app(
     )
     app.state.job_status_service = CosmosJobStatusService(job_store) if job_store is not None else None
     app.state.memory_query_service = _cloud_query_service_from_env(os.environ)
+    trace_recorder = _trace_recorder_from_env(os.environ)
+    app.state.query_trace_service = CosmosQueryTraceService(trace_recorder) if trace_recorder is not None else None
     app.include_router(memory_router)
     app.add_exception_handler(_RouteError, route_error_handler)
 
@@ -134,6 +137,20 @@ def _cloud_query_service_from_env(environ):
     from src.cloud.query_service import cloud_query_service_from_env
 
     return cloud_query_service_from_env(environ)
+
+
+def _trace_recorder_from_env(environ):
+    endpoint = str(environ.get("AZURE_COSMOS_ENDPOINT", "")).strip()
+    database_name = str(environ.get("AZURE_COSMOS_DATABASE_NAME", "")).strip()
+    client_id = str(environ.get("AZURE_CLIENT_ID", "")).strip()
+    if not (endpoint and database_name and client_id):
+        return None
+    from azure.cosmos.aio import CosmosClient
+    from azure.identity.aio import ManagedIdentityCredential
+
+    credential = ManagedIdentityCredential(client_id=client_id)
+    client = CosmosClient(endpoint, credential=credential)
+    return trace_recorder_from_database(client.get_database_client(database_name))
 
 
 def _dev_auth_provider_from_env(environ):
