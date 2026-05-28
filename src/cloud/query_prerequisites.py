@@ -16,9 +16,14 @@ class CloudQueryPrerequisiteStatus:
 
 
 class CloudQueryNotReady(RuntimeError):
-    def __init__(self, missing: tuple[str, ...]) -> None:
-        self.missing = missing
-        super().__init__("Cloud query prerequisites are not ready: " + ", ".join(missing))
+    def __init__(self, missing: tuple[str, ...] | str) -> None:
+        if isinstance(missing, str):
+            self.missing = (missing,)
+            self.reason = missing
+        else:
+            self.missing = missing
+            self.reason = ",".join(missing)
+        super().__init__("Cloud query prerequisites are not ready: " + ", ".join(self.missing))
 
 
 def verify_cloud_query_prerequisites(

@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 
 from src.service.auth import ActorContext, Forbidden, get_actor_context
 from src.cloud.cosmos_jobs import JobNotFound
+from src.cloud.query_prerequisites import CloudQueryNotReady
 from src.service.middleware import REQUEST_ID_HEADER
 from src.service.schemas import (
     DeleteSessionResponse,
@@ -59,7 +60,14 @@ async def query_memory(
 ):
     _enforce_user_access(actor, user_id)
     service = _required_service(request, "memory_query_service")
-    return await service.query(actor, user_id=user_id, request=payload)
+    try:
+        return await service.query(actor, user_id=user_id, request=payload)
+    except CloudQueryNotReady as exc:
+        return _error_response(
+            request,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            error=f"cloud_query_not_ready:{exc.reason}",
+        )
 
 
 @router.post(

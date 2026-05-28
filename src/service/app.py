@@ -60,6 +60,7 @@ def create_app(
         else command_service
     )
     app.state.job_status_service = CosmosJobStatusService(job_store) if job_store is not None else None
+    app.state.memory_query_service = _cloud_query_service_from_env(os.environ)
     app.include_router(memory_router)
     app.add_exception_handler(_RouteError, route_error_handler)
 
@@ -126,3 +127,9 @@ def create_app(
 def _default_readiness_checks() -> list[ReadinessCheck]:
     checks = build_azure_readiness_checks()
     return checks if checks else default_not_configured_checks()
+
+
+def _cloud_query_service_from_env(environ):
+    from src.cloud.query_service import cloud_query_service_from_env
+
+    return cloud_query_service_from_env(environ)
