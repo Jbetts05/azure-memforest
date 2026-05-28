@@ -84,6 +84,17 @@ Cloud parity replay is gated on:
 
 Do not upload or share new benchmark answers, cloud traces, or replay artifacts outside the repository workspace and the approved Azure tenant. The checked-in paper CSVs are already part of this repository; the additional restriction applies to newly generated cloud-tenant outputs and traces.
 
+## Judge variance study
+
+Before approving a non-zero cloud parity tolerance, prepare judge samples and measure label variance:
+
+```powershell
+$env:PIP_REQUIRE_VIRTUALENV = "true"
+.\.venv\Scripts\python.exe -m src.evaluation.judge_variance --repo-root . --samples-json benchmark\baseline-captures\judge-samples.json
+```
+
+The command reports existing disagreement across the checked-in `judge_1..judge_8` labels and writes sampled prompts for replay through the pinned judge deployment. The existing-label result is not a substitute for the deployment replay, but it sets a lower-bound sanity check for the final approved tolerance.
+
 ## Current Phase 0 gate
 
 Phase 0 only verifies that the checked-in artifacts are present and structurally usable. Full benchmark replays require configured OpenAI-compatible model endpoints and are not run by default in CI.
