@@ -23,7 +23,7 @@ az deployment group create `
   --parameters containerImage="<acr-login-server>/azure-memforest-api:<tag>"
 ```
 
-The current template includes the hosting foundation, Cosmos DB account/database foundation, Azure AI Search recall foundation, Blob snapshot storage foundation, and Service Bus write-plane foundation. Redis and model endpoint resources should be added in the implementation slices that first use them.
+The current template includes the API hosting foundation, Cosmos DB account/database foundation, Azure AI Search recall foundation, Blob snapshot storage foundation, Service Bus write-plane foundation, and Azure OpenAI deployments. A live worker Container App is intentionally not enabled until the materialization handler and receive loop are implemented; see `docs/write-worker.md`.
 
 ## Current dev deployment
 
@@ -69,3 +69,5 @@ Expected current behavior:
 Cosmos containers are declared in Bicep. The Azure AI Search recall index `memforest-recall` is created idempotently by the Search bootstrap code because its vector dimensions are tied to the configured embedding deployment. The Blob `snapshots` container is declared in Bicep because it has no schema or partition-key coupling.
 
 The Service Bus writes queue has sessions enabled for per-tenant/user write ordering. The dev namespace uses Standard SKU; private endpoints require Premium and should be revisited before production.
+
+Worker hosting is declared as a conditional no-ingress Container App and defaults off through `deployWorker=false`. The worker entrypoint idles without connecting to Service Bus unless both `AZURE_MEMFOREST_WORKER_ENABLED=true` and `AZURE_MEMFOREST_WORKER_FACTORY_READY=true` are set, preventing accidental queue consumption before the final smoke gate. The first enabled worker deployment should use `workerMinReplicas=1`/`workerMaxReplicas=1`; scale-to-zero requires a separately validated managed-identity Service Bus scaler for the session-enabled queue.

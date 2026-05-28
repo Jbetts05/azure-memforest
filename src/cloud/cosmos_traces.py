@@ -16,6 +16,28 @@ from src.observability.tracing import TraceEvent, TraceSink
 MAX_ATTRIBUTE_STRING_LENGTH = 256
 MAX_EVENT_BYTES = 4096
 MAX_TRACE_BYTES = 1024 * 1024
+FORBIDDEN_ATTRIBUTE_KEYS = frozenset(
+    {
+        "access_token",
+        "api_key",
+        "authorization",
+        "embedding",
+        "embedding_vector",
+        "exception_args",
+        "exception_message",
+        "fact_text",
+        "password",
+        "prompt",
+        "raw_prompt",
+        "raw_query",
+        "raw_request",
+        "raw_response",
+        "response",
+        "stack_trace",
+        "token",
+        "turn_content",
+    }
+)
 log = logging.getLogger(__name__)
 
 
@@ -211,6 +233,9 @@ def _safe_attributes(attributes: Any) -> tuple[dict[str, Any], int]:
         return safe, 1
     for key, value in attributes.items():
         if not isinstance(key, str):
+            dropped += 1
+            continue
+        if key.strip().lower() in FORBIDDEN_ATTRIBUTE_KEYS:
             dropped += 1
             continue
         clean = _safe_scalar(value)

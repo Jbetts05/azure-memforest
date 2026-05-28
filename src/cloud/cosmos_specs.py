@@ -18,6 +18,8 @@ DEFAULT_COSMOS_CONTAINERS: tuple[CosmosContainerSpec, ...] = (
     CosmosContainerSpec(name="facts", partition_key_path="/tenant_user_key"),
     CosmosContainerSpec(name="tree_nodes", partition_key_path="/tenant_user_key"),
     CosmosContainerSpec(name="fact_locations", partition_key_path="/tenant_user_key"),
+    CosmosContainerSpec(name="browse_embeddings", partition_key_path="/tenant_user_key"),
+    CosmosContainerSpec(name="leases", partition_key_path="/tenant_user_key"),
     CosmosContainerSpec(name="manifests", partition_key_path="/tenant_id"),
     CosmosContainerSpec(name="jobs", partition_key_path="/tenant_id", default_ttl=60 * 60 * 24 * 30),
     CosmosContainerSpec(name="deletions", partition_key_path="/tenant_id"),

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -43,10 +44,19 @@ class BenchmarkDiffResult:
     missing_baseline_keys: list[str] = field(default_factory=list)
     missing_candidate_keys: list[str] = field(default_factory=list)
     missing_candidate_files: list[str] = field(default_factory=list)
+    checksum_failures: list[str] = field(default_factory=list)
+    candidate_only_keys_fail: bool = False
 
     @property
     def failed_count(self) -> int:
-        return sum(1 for delta in self.deltas if delta.status == "fail") + len(self.missing_candidate_keys) + len(self.missing_candidate_files)
+        candidate_only_failures = len(self.missing_baseline_keys) if self.candidate_only_keys_fail else 0
+        return (
+            sum(1 for delta in self.deltas if delta.status == "fail")
+            + len(self.missing_candidate_keys)
+            + len(self.missing_candidate_files)
+            + len(self.checksum_failures)
+            + candidate_only_failures
+        )
 
     @property
     def passed_count(self) -> int:
@@ -65,6 +75,7 @@ def diff_benchmark_summaries(
     k_values: Iterable[int] = DEFAULT_K_VALUES,
     tolerance: float = DEFAULT_TOLERANCE,
     include_question_types: bool = True,
+    fail_on_candidate_only: bool = False,
 ) -> BenchmarkDiffResult:
     """Compare candidate metrics against a frozen baseline summary.
 
@@ -123,6 +134,7 @@ def diff_benchmark_summaries(
         deltas=deltas,
         missing_baseline_keys=missing_baseline_keys,
         missing_candidate_keys=missing_candidate_keys,
+        candidate_only_keys_fail=fail_on_candidate_only,
     )
 
 
@@ -134,6 +146,8 @@ def result_to_dict(result: BenchmarkDiffResult) -> dict[str, Any]:
         "missing_baseline_keys": result.missing_baseline_keys,
         "missing_candidate_keys": result.missing_candidate_keys,
         "missing_candidate_files": result.missing_candidate_files,
+        "checksum_failures": result.checksum_failures,
+        "candidate_only_keys_fail": result.candidate_only_keys_fail,
         "deltas": [
             {
                 "benchmark": delta.benchmark,
@@ -162,10 +176,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--k", type=int, action="append", dest="k_values", help="pass@k value to compare. Repeatable. Defaults to 1 and 8.")
     parser.add_argument("--tolerance", type=float, default=DEFAULT_TOLERANCE, help="Allowed absolute regression on rate metrics.")
     parser.add_argument("--rollups-only", action="store_true", help="Compare method/model rollups only, not per-question-type groups.")
+    parser.add_argument("--fail-on-candidate-only", action="store_true", help="Fail if candidate emits metric keys not present in the baseline.")
+    parser.add_argument("--strict-cloud-parity", action="store_true", help="Enable strict cloud parity gates such as candidate-only key failure.")
     parser.add_argument("--json", action="store_true", help="Emit JSON.")
     args = parser.parse_args(argv)
 
     baseline = _load_baseline(args)
+    if isinstance(baseline, dict):
+        checksum_failures = _baseline_checksum_failures(baseline, repo_root=args.repo_root)
+        if checksum_failures:
+            result = BenchmarkDiffResult(checksum_failures=checksum_failures)
+            _print_result(result, emit_json=args.json)
+            return 1
     candidate_paths = _paths_from_dir(args.candidate_dir)
     missing_files = [str(path) for path in candidate_paths if not path.exists()]
     if missing_files:
@@ -180,6 +202,7 @@ def main(argv: list[str] | None = None) -> int:
         k_values=args.k_values or list(DEFAULT_K_VALUES),
         tolerance=args.tolerance,
         include_question_types=not args.rollups_only,
+        fail_on_candidate_only=args.fail_on_candidate_only or args.strict_cloud_parity,
     )
     _print_result(result, emit_json=args.json)
     return 0 if result.ok else 1
@@ -206,6 +229,28 @@ def _summary_to_dict(summary: BenchmarkSuiteSummary | BenchmarkFileSummary | dic
     if isinstance(summary, BenchmarkFileSummary):
         return {"total_rows": summary.total_rows, "files": [file_to_dict(summary)]}
     return summary
+
+
+def _baseline_checksum_failures(summary: dict[str, Any], *, repo_root: Path) -> list[str]:
+    failures: list[str] = []
+    for file_summary in summary.get("files", []):
+        expected = str(file_summary.get("sha256", "")).strip()
+        if not expected:
+            continue
+        raw_path = str(file_summary.get("path", "")).strip()
+        if not raw_path:
+            failures.append("missing_path_for_sha256")
+            continue
+        path = Path(raw_path)
+        if not path.is_absolute():
+            path = repo_root / path
+        if not path.exists():
+            failures.append(f"{raw_path}:missing_file")
+            continue
+        actual = _normalized_file_sha256(path)
+        if actual != expected:
+            failures.append(f"{raw_path}:sha256_mismatch")
+    return failures
 
 
 def _metric_map(
@@ -250,6 +295,11 @@ def _key_to_string(key: tuple[str, str, str, str, str, int]) -> str:
     return f"{benchmark}/{model_size}/{method}/{question_type}/{metric}@{k}"
 
 
+def _normalized_file_sha256(path: Path) -> str:
+    content = path.read_bytes().replace(b"\r\n", b"\n")
+    return hashlib.sha256(content).hexdigest()
+
+
 def _print_result(result: BenchmarkDiffResult, *, emit_json: bool) -> None:
     if emit_json:
         print(json.dumps(result_to_dict(result), indent=2, sort_keys=True))
@@ -267,6 +317,8 @@ def _print_result(result: BenchmarkDiffResult, *, emit_json: bool) -> None:
         print(f"missing_baseline_key,{key}")
     for path in result.missing_candidate_files:
         print(f"missing_candidate_file,{path}")
+    for failure in result.checksum_failures:
+        print(f"checksum_failure,{failure}")
 
 
 if __name__ == "__main__":

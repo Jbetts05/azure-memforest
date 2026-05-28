@@ -11,6 +11,7 @@ from src.worker.consumer import (
     TransientHandlerError,
     parse_write_job_envelope,
 )
+from src.worker.receiver import ServiceBusSessionReceiverLoop, WorkerReceiverConfig
 from tests.test_cosmos_jobs import FakeJobsContainer
 
 
@@ -31,6 +32,90 @@ class FakeMessage:
     async def dead_letter(self, *, reason, error_description):
         self.dead_lettered = True
         self.dead_letter_reason = reason
+
+
+class FakeAzureMessage:
+    def __init__(self, body: bytes, *, message_id: str = "message-1", delivery_count: int = 1):
+        self.body = body
+        self.message_id = message_id
+        self.delivery_count = delivery_count
+        self.completed = False
+        self.abandoned = False
+        self.dead_lettered = False
+
+
+class FakeSession:
+    def __init__(self, session_id="tenant-1:user-1"):
+        self.session_id = session_id
+
+
+class FakeSessionReceiver:
+    def __init__(self, messages):
+        self.messages = list(messages)
+        self.session = FakeSession()
+        self.completed = []
+        self.abandoned = []
+        self.dead_lettered = []
+        self.entered = False
+        self.exited = False
+
+    async def __aenter__(self):
+        self.entered = True
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        self.exited = True
+
+    async def receive_messages(self, *, max_message_count, max_wait_time):
+        if not self.messages:
+            return []
+        return [self.messages.pop(0)]
+
+    async def complete_message(self, message):
+        message.completed = True
+        self.completed.append(message.message_id)
+
+    async def abandon_message(self, message):
+        message.abandoned = True
+        self.abandoned.append(message.message_id)
+
+    async def dead_letter_message(self, message, *, reason, error_description):
+        message.dead_lettered = True
+        self.dead_lettered.append((message.message_id, reason))
+
+
+class FakeServiceBusClient:
+    def __init__(self, receiver=None, error=None):
+        self.receiver = receiver
+        self.error = error
+        self.closed = False
+
+    async def accept_next_session(self, *, queue_name, max_wait_time):
+        if self.error is not None:
+            raise self.error
+        return self.receiver
+
+    async def close(self):
+        self.closed = True
+
+
+class FakeOperationTimeoutError(Exception):
+    pass
+
+
+FakeOperationTimeoutError.__name__ = "OperationTimeoutError"
+
+
+class FakeLockRenewer:
+    def __init__(self):
+        self.registered = []
+        self.closed = False
+
+    async def register(self, receiver, session, *, max_lock_renewal_duration):
+        self.registered.append((receiver, session, max_lock_renewal_duration))
+
+    async def close(self):
+        self.closed = True
 
 
 class RecordingHandler:
@@ -243,3 +328,86 @@ async def test_worker_abandons_when_failed_transition_fails() -> None:
     assert outcome.action == "abandon"
     assert outcome.reason == "fail_job_failed"
     assert message.abandoned is True
+
+
+@pytest.mark.asyncio
+async def test_receiver_loop_processes_session_messages_in_order() -> None:
+    first = _envelope()
+    second = build_write_job_envelope(
+        ActorContext(actor_id="user-1", tenant=TenantContext("tenant-1")),
+        user_id="user-1",
+        session_id="session-2",
+        job_type="ingest_session",
+        idempotency_key="idem-2",
+        payload={"turns": []},
+    )
+    store = CosmosJobStore(FakeJobsContainer())
+    await store.create_accepted_job(first)
+    await store.create_accepted_job(second)
+    handler = RecordingHandler()
+    worker = ServiceBusWriteWorker(job_store=store, handler=handler, owner_id="worker-1")
+    receiver = FakeSessionReceiver(
+        [
+            FakeAzureMessage(first.to_json().encode("utf-8"), message_id=first.job_id),
+            FakeAzureMessage(second.to_json().encode("utf-8"), message_id=second.job_id),
+        ]
+    )
+    renewer = FakeLockRenewer()
+    loop = ServiceBusSessionReceiverLoop(
+        servicebus_client=FakeServiceBusClient(receiver),
+        worker=worker,
+        config=WorkerReceiverConfig(queue_name="writes", message_wait_seconds=0.1),
+        lock_renewer=renewer,
+    )
+
+    outcome = await loop.process_next_session()
+
+    assert outcome.action == "processed"
+    assert outcome.processed_count == 2
+    assert receiver.completed == [first.job_id, second.job_id]
+    assert receiver.entered is True
+    assert receiver.exited is True
+    assert renewer.registered[0][1] is receiver.session
+
+
+@pytest.mark.asyncio
+async def test_receiver_loop_treats_accept_timeout_as_idle() -> None:
+    worker = ServiceBusWriteWorker(
+        job_store=CosmosJobStore(FakeJobsContainer()),
+        handler=RecordingHandler(),
+        owner_id="worker-1",
+    )
+    loop = ServiceBusSessionReceiverLoop(
+        servicebus_client=FakeServiceBusClient(error=FakeOperationTimeoutError()),
+        worker=worker,
+        config=WorkerReceiverConfig(queue_name="writes", message_wait_seconds=0.1),
+    )
+
+    outcome = await loop.process_next_session()
+
+    assert outcome.action == "idle"
+    assert outcome.reason == "no_session_available"
+
+
+@pytest.mark.asyncio
+async def test_receiver_loop_releases_session_after_abandon() -> None:
+    envelope = _envelope()
+    store = await _store_with_job(envelope)
+    worker = ServiceBusWriteWorker(
+        job_store=store,
+        handler=RecordingHandler(TransientHandlerError("try again")),
+        owner_id="worker-1",
+    )
+    message = FakeAzureMessage(envelope.to_json().encode("utf-8"), message_id=envelope.job_id)
+    receiver = FakeSessionReceiver([message])
+    loop = ServiceBusSessionReceiverLoop(
+        servicebus_client=FakeServiceBusClient(receiver),
+        worker=worker,
+        config=WorkerReceiverConfig(queue_name="writes", message_wait_seconds=0.1),
+    )
+
+    outcome = await loop.process_next_session()
+
+    assert outcome.processed_count == 1
+    assert message.abandoned is True
+    assert receiver.exited is True

@@ -1,0 +1,102 @@
+from __future__ import annotations
+
+import pytest
+
+from src.cloud.cosmos_browse_embeddings import BrowseEmbeddingRecord, CosmosBrowseEmbeddingStore
+
+
+class NotFoundError(Exception):
+    status_code = 404
+
+
+class FakeContainer:
+    def __init__(self):
+        self.items = {}
+
+    def upsert_item(self, item):
+        self.items[(item["tenant_user_key"], item["id"])] = dict(item)
+        return item
+
+    def read_item(self, *, item, partition_key):
+        key = (partition_key, item)
+        if key not in self.items:
+            raise NotFoundError()
+        return dict(self.items[key])
+
+    def query_items(self, *, query, parameters, partition_key):
+        params = {param["name"]: param["value"] for param in parameters}
+        return [
+            dict(item)
+            for (pk, _), item in self.items.items()
+            if pk == partition_key
+            and item.get("tree_id") == params.get("@tree_id")
+            and item.get("embedding_model_version") == params.get("@embedding_model_version")
+        ]
+
+
+def _store(container=None, *, forest_version="v1", model_version="embed-v1"):
+    return CosmosBrowseEmbeddingStore(
+        container or FakeContainer(),
+        tenant_id="tenant-1",
+        user_id="user-1",
+        forest_version=forest_version,
+        embedding_model_version=model_version,
+    )
+
+
+@pytest.mark.asyncio
+async def test_browse_embedding_store_round_trips_scoped_embeddings() -> None:
+    store = _store()
+
+    await store.upsert_records(
+        [BrowseEmbeddingRecord(node_id="node-1", tree_id="tree-1", tree_type="entity", embedding=(0.1, 0.2))],
+        model_version="embed-v1",
+    )
+
+    assert await store.get_embedding("node-1") == [0.1, 0.2]
+    assert await store.get_embeddings(["node-1", "missing"]) == {"node-1": [0.1, 0.2]}
+
+
+@pytest.mark.asyncio
+async def test_browse_embedding_store_hides_other_forest_versions() -> None:
+    container = FakeContainer()
+    writer = _store(container, forest_version="v1")
+    reader = _store(container, forest_version="v2")
+    await writer.upsert_records(
+        [BrowseEmbeddingRecord(node_id="node-1", tree_id="tree-1", tree_type="entity", embedding=(0.1,))],
+        model_version="embed-v1",
+    )
+
+    assert await reader.get_embedding("node-1") is None
+
+
+@pytest.mark.asyncio
+async def test_browse_embedding_store_overwrites_logical_row_for_new_version() -> None:
+    container = FakeContainer()
+    first = _store(container, forest_version="v1")
+    second = _store(container, forest_version="v2")
+    await first.upsert_records(
+        [BrowseEmbeddingRecord(node_id="node-1", tree_id="tree-1", tree_type="entity", embedding=(0.1,))],
+        model_version="embed-v1",
+    )
+    await second.upsert_records(
+        [BrowseEmbeddingRecord(node_id="node-1", tree_id="tree-1", tree_type="entity", embedding=(0.2,))],
+        model_version="embed-v1",
+    )
+
+    assert len(container.items) == 1
+    assert await first.get_embedding("node-1") is None
+    assert await second.get_embedding("node-1") == [0.2]
+
+
+@pytest.mark.asyncio
+async def test_browse_embedding_store_tombstones_tree() -> None:
+    store = _store()
+    await store.upsert_records(
+        [BrowseEmbeddingRecord(node_id="node-1", tree_id="tree-1", tree_type="entity", embedding=(0.1,))],
+        model_version="embed-v1",
+    )
+
+    await store.tombstone_tree("tree-1", reason="delete")
+
+    assert await store.get_embedding("node-1") is None

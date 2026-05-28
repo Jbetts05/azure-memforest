@@ -87,11 +87,15 @@ class CosmosManifestStore:
             raise ManifestNotFound()
         return _manifest_from_doc(item)
 
-    async def commit_manifest(self, manifest_id: str) -> ForestManifest:
+    async def commit_manifest(self, manifest_id: str, *, metadata_updates: dict[str, Any] | None = None) -> ForestManifest:
         item = await self._read_manifest_item(manifest_id)
         if item["status"] != "pending":
             raise ManifestStateError(f"Cannot commit manifest in state {item['status']!r}.")
+        if await self._committed_generation_exists(generation=int(item["generation"]), exclude_manifest_id=manifest_id):
+            raise ManifestStateError(f"Committed manifest already exists for generation {item['generation']!r}.")
         etag = item.get("_etag")
+        if metadata_updates:
+            item["metadata"] = {**dict(item.get("metadata") or {}), **dict(metadata_updates)}
         item["status"] = "committed"
         item["committed_at_unix"] = time.time()
         try:
@@ -127,6 +131,22 @@ class CosmosManifestStore:
         if item.get("tenant_id") != self.tenant_id or item.get("user_id") != self.user_id:
             raise ManifestNotFound()
         return item
+
+    async def _committed_generation_exists(self, *, generation: int, exclude_manifest_id: str) -> bool:
+        query = (
+            "SELECT * FROM c WHERE c.tenant_id=@tenant_id AND c.user_id=@user_id "
+            "AND c.status='committed' AND c.generation=@generation"
+        )
+        params = [
+            {"name": "@tenant_id", "value": self.tenant_id},
+            {"name": "@user_id", "value": self.user_id},
+            {"name": "@generation", "value": generation},
+        ]
+        found = False
+        async for item in _aiter(self.container.query_items(query=query, parameters=params, partition_key=self.tenant_id)):
+            if item.get("id") != exclude_manifest_id and item.get("tenant_id") == self.tenant_id and item.get("user_id") == self.user_id:
+                found = True
+        return found
 
 
 class CosmosDeletionLog:

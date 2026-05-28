@@ -161,3 +161,30 @@ async def test_trace_recorder_sanitizes_attributes() -> None:
     assert len(attrs["long"]) == 256
     assert "bad" not in attrs
     assert document["dropped_attribute_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_trace_recorder_drops_forbidden_attribute_names() -> None:
+    recorder = CosmosTraceRecorder(container=FakeTraceContainer())
+
+    document = await recorder.record_events(
+        tenant_id="tenant-1",
+        user_id="user-1",
+        query_id="query-1",
+        forest_version="v1",
+        events=[
+            _event(
+                attributes={
+                    "safe_count": 2,
+                    "raw_query": "short but sensitive",
+                    "fact_text": "short fact content",
+                    "exception_message": "may contain payloads",
+                    "embedding_vector": [0.1, 0.2],
+                }
+            ),
+        ],
+    )
+
+    attrs = document["events"][0]["attributes"]
+    assert attrs == {"safe_count": 2}
+    assert document["dropped_attribute_count"] == 4

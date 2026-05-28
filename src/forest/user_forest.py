@@ -56,6 +56,16 @@ class IngestResult:
     trees_updated: list[str]
 
 
+@dataclass(frozen=True)
+class ForestMaterializationSnapshot:
+    """Point-in-time forest view used by cloud worker projection."""
+
+    facts: list["ManagedFact"]
+    trees: list["MemTree"]
+    node_embeddings: dict[str, list[float]]
+    summary_cache: dict[str, str]
+
+
 # ── serialization helpers ─────────────────────────────────────────────────────
 
 def _memcell_to_dict(cell: MemCell) -> dict:
@@ -293,6 +303,44 @@ class UserForest:
     def build_context(self, result: "QueryResult") -> str:
         """Render a QueryResult into a text context string for LLM answering."""
         return self._query_pipeline.build_context(result)
+
+    def snapshot_for_materialization(self) -> ForestMaterializationSnapshot:
+        """Return a locked, cloud-projection-safe view of current forest state."""
+        with self._lock:
+            trees = list(self._tree_builder.trees.values())
+            node_embeddings: dict[str, list[float]] = {}
+            for tree in trees:
+                for node_id in tree.nodes:
+                    embedding = self._node_index.get_embedding(node_id)
+                    if embedding is not None:
+                        node_embeddings[node_id] = list(embedding)
+            return ForestMaterializationSnapshot(
+                facts=list(self._fact_manager.iter_facts()),
+                trees=trees,
+                node_embeddings=node_embeddings,
+                summary_cache=dict(self._summary_cache),
+            )
+
+    @property
+    def snapshot_dir(self) -> Path:
+        """Directory containing this user's persisted runtime snapshot."""
+        return self._dir
+
+    def reset_and_load(self) -> None:
+        """Reset in-memory state and load from ``snapshot_dir``."""
+        user_id = self.user_id
+        user_dir = self._dir
+        config = self._config
+        chat_client = self._chat_client
+        embedding_client = self._embedding_client
+        self.__init__(
+            user_id=user_id,
+            user_dir=user_dir,
+            config=config,
+            chat_client=chat_client,
+            embedding_client=embedding_client,
+        )
+        self.load()
 
     # ── persistence ───────────────────────────────────────────────────────────
 

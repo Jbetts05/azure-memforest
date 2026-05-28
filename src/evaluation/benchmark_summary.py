@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import json
 import math
 from collections import defaultdict
@@ -49,6 +50,7 @@ class BenchmarkFileSummary:
     total_rows: int
     judge_values: list[str]
     missing_or_invalid_judges: int
+    sha256: str
     method_rollups: list[BenchmarkGroupSummary] = field(default_factory=list)
     groups: list[BenchmarkGroupSummary] = field(default_factory=list)
 
@@ -141,7 +143,7 @@ def summarize_benchmark_file(path: Path) -> BenchmarkFileSummary:
     ]
     method_rollups = _rollup_by_method(groups)
     return BenchmarkFileSummary(
-        path=str(path),
+        path=path.as_posix(),
         benchmark=benchmark,
         model_sizes=sorted(model_sizes),
         methods=sorted(methods),
@@ -150,6 +152,7 @@ def summarize_benchmark_file(path: Path) -> BenchmarkFileSummary:
         total_rows=total_rows,
         judge_values=sorted(judge_values),
         missing_or_invalid_judges=missing_or_invalid_judges,
+        sha256=_normalized_file_sha256(path),
         method_rollups=method_rollups,
         groups=groups,
     )
@@ -186,6 +189,7 @@ def file_to_dict(summary: BenchmarkFileSummary) -> dict:
         "total_rows": summary.total_rows,
         "judge_values": summary.judge_values,
         "missing_or_invalid_judges": summary.missing_or_invalid_judges,
+        "sha256": summary.sha256,
         "method_rollups": [group_to_dict(group) for group in summary.method_rollups],
         "groups": [group_to_dict(group) for group in summary.groups],
     }
@@ -309,6 +313,11 @@ def _benchmark_name_from_path(path: Path) -> str:
     if name.startswith("locomo"):
         return "locomo"
     return path.stem
+
+
+def _normalized_file_sha256(path: Path) -> str:
+    content = path.read_bytes().replace(b"\r\n", b"\n")
+    return hashlib.sha256(content).hexdigest()
 
 
 def _unbiased_pass_at(*, sample_count: int, correct_count: int, k: int) -> float:

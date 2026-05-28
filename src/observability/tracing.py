@@ -11,9 +11,29 @@ from types import MappingProxyType
 from typing import Any, Mapping, Protocol
 
 TRACE_EVENT_SCHEMA_VERSION = 1
+TRACE_EVENT_CATALOG_VERSION = 1
 
 
 class TraceEventType(StrEnum):
+    WORKER_JOB_RECEIVED = "worker_job_received"
+    WORKER_JOB_CLAIMED = "worker_job_claimed"
+    WORKER_JOB_RETRIED = "worker_job_retried"
+    WORKER_JOB_COMPLETED = "worker_job_completed"
+    WORKER_JOB_FAILED = "worker_job_failed"
+    WORKER_LEASE_ACQUIRED = "worker_lease_acquired"
+    WORKER_LEASE_RENEWED = "worker_lease_renewed"
+    WORKER_LEASE_LOST = "worker_lease_lost"
+    MATERIALIZATION_MANIFEST_PENDING = "materialization_manifest_pending"
+    MATERIALIZATION_SOURCE_WRITTEN = "materialization_source_written"
+    MATERIALIZATION_FACTS_WRITTEN = "materialization_facts_written"
+    MATERIALIZATION_TREES_WRITTEN = "materialization_trees_written"
+    MATERIALIZATION_SEARCH_PROJECTED = "materialization_search_projected"
+    MATERIALIZATION_SNAPSHOT_WRITTEN = "materialization_snapshot_written"
+    MATERIALIZATION_MANIFEST_COMMITTED = "materialization_manifest_committed"
+    MATERIALIZATION_STEP_FAILED = "materialization_step_failed"
+    MATERIALIZATION_ABORTED = "materialization_aborted"
+    SUMMARY_CACHE_CHECKED = "summary_cache_checked"
+    SUMMARY_CACHE_WRITTEN = "summary_cache_written"
     QUERY_STARTED = "query_started"
     EMBEDDING_REQUESTED = "embedding_requested"
     RECALL_SEARCH_STARTED = "recall_search_started"
@@ -31,6 +51,7 @@ class TraceEventType(StrEnum):
     ANSWER_GENERATED = "answer_generated"
     QUERY_COMPLETED = "query_completed"
     SERVICE_CALL = "service_call"
+    SERVICE_CALL_FAILED = "service_call_failed"
 
 
 class TraceSink(Protocol):

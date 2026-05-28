@@ -66,6 +66,8 @@ class FakeTenantContainer:
                 continue
             if "@user_id" in params and item.get("user_id") != params["@user_id"]:
                 continue
+            if "@generation" in params and item.get("generation") != params["@generation"]:
+                continue
             if "status='committed'" in query and item.get("status") != "committed":
                 continue
             result.append(dict(item))
@@ -109,6 +111,17 @@ async def test_manifest_store_refuses_to_commit_non_pending() -> None:
 
 
 @pytest.mark.asyncio
+async def test_manifest_store_rejects_committed_generation_conflict() -> None:
+    store = CosmosManifestStore(FakeTenantContainer(), tenant_id="tenant-1", user_id="user-1")
+    first = await store.create_pending(forest_version="v1", generation=1)
+    second = await store.create_pending(forest_version="v1-retry", generation=1)
+    await store.commit_manifest(first.manifest_id)
+
+    with pytest.raises(ManifestStateError):
+        await store.commit_manifest(second.manifest_id)
+
+
+@pytest.mark.asyncio
 async def test_manifest_store_commit_uses_etag_guard() -> None:
     container = FakeTenantContainer()
     store = CosmosManifestStore(container, tenant_id="tenant-1", user_id="user-1")
@@ -117,6 +130,28 @@ async def test_manifest_store_commit_uses_etag_guard() -> None:
 
     with pytest.raises(ManifestStateError):
         await store.commit_manifest(manifest.manifest_id)
+
+
+@pytest.mark.asyncio
+async def test_manifest_store_commit_merges_snapshot_metadata() -> None:
+    store = CosmosManifestStore(FakeTenantContainer(), tenant_id="tenant-1", user_id="user-1")
+    manifest = await store.create_pending(
+        forest_version="v1",
+        generation=1,
+        metadata={"job_id": "job-1"},
+    )
+
+    committed = await store.commit_manifest(
+        manifest.manifest_id,
+        metadata_updates={
+            "snapshot_id": "tenant-1/user-1/v1.json",
+            "snapshot_content_sha256": "abc123",
+        },
+    )
+
+    assert committed.metadata["job_id"] == "job-1"
+    assert committed.metadata["snapshot_id"] == "tenant-1/user-1/v1.json"
+    assert committed.metadata["snapshot_content_sha256"] == "abc123"
 
 
 @pytest.mark.asyncio

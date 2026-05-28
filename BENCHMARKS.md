@@ -33,6 +33,57 @@ Before any cloud-backed store, index, or model path replaces local behavior, def
 - latency and cost counters for query, ingestion, summarization, and embedding;
 - accepted tolerance for behavior drift.
 
+## Baseline capture protocol
+
+The frozen paper baseline is the checked-in benchmark CSV set plus `benchmark/baseline_summary.json`. Do not regenerate `baseline_summary.json` unless intentionally updating the paper baseline and reviewing the resulting pass@k changes.
+
+For every local or cloud capture, write run artifacts under:
+
+```text
+benchmark/baseline-captures/<yyyy-mm-dd>-<git-sha>/
+```
+
+This directory is ignored by git by default. Do not commit generated capture outputs unless explicitly approved; they can be large and may contain model answers, judge outputs, or trace-derived diagnostics.
+
+Each capture must include a small manifest alongside the generated CSVs:
+
+- git SHA and container image tag or digest, when applicable;
+- input benchmark dataset source and checksums for the actual question/gold files used by the replay;
+- checked-in scoring CSV filenames and checksums when they are used as the baseline scoring artifact;
+- `baseline_summary.json` checksum;
+- config files, query configuration hash, prompt/config snapshot hash, and random seed plan;
+- system-under-test model deployments and versions;
+- separate judge model deployment and version;
+- embedding deployment, model version, dimension, batching policy, and retry policy;
+- recall/search configuration, including ANN settings, tie-break rules, and top-k values;
+- worker concurrency settings that can affect chunk/order assembly;
+- output CSV filenames, row counts, method labels, and method-to-baseline mapping;
+- summary JSON, diff command, tolerance, and pass/fail status.
+
+Candidate cloud outputs must use the same filenames and columns as the checked-in per-question CSVs:
+
+```text
+method, model_size, question_type, qid, question, gold_answer,
+answer_1, ..., answer_8,
+judge_1, ..., judge_8
+```
+
+`benchmark_diff` compares pass-rate deltas over the summarized rows; it is not a per-question equality check. The identity tolerance `0.000000001` is only for re-summarizing the same checked-in CSVs or proving scoring code did not drift. Cloud parity tolerance is blocked until a judge-variance study is recorded by replaying the frozen answers through the pinned judge deployment and setting a tolerance at or above observed judge variance.
+
+The cloud replay harness must declare which baseline methods it is attempting to cover. Candidate-only method names are not sufficient for parity claims; the capture is invalid if no declared baseline method is exercised.
+
+Partial cloud outputs must use a `.partial` suffix and must not be passed to the diff gate. A parity capture is valid only when expected row counts match the source fixture manifest.
+
+Cloud parity replay is gated on:
+
+1. materialization worker implementation;
+2. hosted worker receive loop;
+3. committed manifests for replay users;
+4. cloud query recall, browse, rerank, and compose implementation;
+5. one-session ingest smoke success with no DLQ growth.
+
+Do not upload or share new benchmark answers, cloud traces, or replay artifacts outside the repository workspace and the approved Azure tenant. The checked-in paper CSVs are already part of this repository; the additional restriction applies to newly generated cloud-tenant outputs and traces.
+
 ## Current Phase 0 gate
 
 Phase 0 only verifies that the checked-in artifacts are present and structurally usable. Full benchmark replays require configured OpenAI-compatible model endpoints and are not run by default in CI.

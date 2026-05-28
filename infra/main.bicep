@@ -26,6 +26,17 @@ param minReplicas int = 0
 @description('Maximum Container App replicas.')
 param maxReplicas int = 1
 
+@description('Deploy the no-ingress worker Container App. Keep false until the live worker factory is wired and approved.')
+param deployWorker bool = false
+
+@minValue(1)
+@description('Minimum worker replicas when deployWorker=true. Scale-to-zero requires a validated managed-identity Service Bus scaler.')
+param workerMinReplicas int = 1
+
+@minValue(1)
+@description('Maximum worker replicas when deployWorker=true. Service Bus session locks preserve per-session ordering across replicas.')
+param workerMaxReplicas int = 1
+
 @description('Tags applied to all supported resources.')
 param tags object = {}
 
@@ -191,6 +202,8 @@ var userScopedCosmosContainers = [
   'facts'
   'tree_nodes'
   'fact_locations'
+  'browse_embeddings'
+  'leases'
 ]
 
 var tenantScopedCosmosContainers = [
@@ -687,8 +700,189 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
   ]
 }
 
+resource workerContainerApp 'Microsoft.App/containerApps@2024-03-01' = if (deployWorker) {
+  name: '${normalizedName}-worker'
+  location: location
+  tags: tags
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${appIdentity.id}': {}
+    }
+  }
+  properties: {
+    managedEnvironmentId: containerAppEnvironment.id
+    configuration: {
+      activeRevisionsMode: 'Single'
+      registries: [
+        {
+          server: containerRegistry.properties.loginServer
+          identity: appIdentity.id
+        }
+      ]
+    }
+    template: {
+      containers: [
+        {
+          name: 'worker'
+          image: containerImage
+          command: [
+            'python'
+            '-m'
+            'src.worker'
+          ]
+          env: [
+            {
+              name: 'AZURE_MEMFOREST_ENV'
+              value: environmentName
+            }
+            {
+              name: 'AZURE_MEMFOREST_WORKER_ENABLED'
+              value: 'true'
+            }
+            {
+              name: 'AZURE_MEMFOREST_WORKER_FACTORY_READY'
+              value: 'false'
+            }
+            {
+              name: 'AZURE_MEMFOREST_WORKER_CONCURRENCY'
+              value: '1'
+            }
+            {
+              name: 'AZURE_MEMFOREST_WORKER_SESSION_LOCK_RENEWAL_SECONDS'
+              value: '60'
+            }
+            {
+              name: 'AZURE_MEMFOREST_WORKER_MESSAGE_WAIT_SECONDS'
+              value: '5'
+            }
+            {
+              name: 'AZURE_MEMFOREST_WORKER_SCRATCH_ROOT'
+              value: '/tmp/azure-memforest-worker'
+            }
+            {
+              name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
+              value: appInsights.properties.ConnectionString
+            }
+            {
+              name: 'AZURE_CLIENT_ID'
+              value: appIdentity.properties.clientId
+            }
+            {
+              name: 'AZURE_COSMOS_ENDPOINT'
+              value: cosmosAccount.properties.documentEndpoint
+            }
+            {
+              name: 'AZURE_COSMOS_DATABASE_NAME'
+              value: cosmosDatabase.properties.resource.id
+            }
+            {
+              name: 'AZURE_SEARCH_ENDPOINT'
+              value: 'https://${searchService.name}.search.windows.net'
+            }
+            {
+              name: 'AZURE_SEARCH_RECALL_INDEX_NAME'
+              value: searchRecallIndexName
+            }
+            {
+              name: 'AZURE_STORAGE_BLOB_ENDPOINT'
+              value: storageAccount.properties.primaryEndpoints.blob
+            }
+            {
+              name: 'AZURE_STORAGE_SNAPSHOT_CONTAINER'
+              value: snapshotsContainer.name
+            }
+            {
+              name: 'AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE'
+              value: '${serviceBusNamespace.name}.servicebus.windows.net'
+            }
+            {
+              name: 'AZURE_SERVICEBUS_WRITES_QUEUE_NAME'
+              value: writesQueue.name
+            }
+            {
+              name: 'AZURE_OPENAI_ENDPOINT'
+              value: openAiAccount.properties.endpoint
+            }
+            {
+              name: 'AZURE_OPENAI_USE_MANAGED_IDENTITY'
+              value: 'true'
+            }
+            {
+              name: 'AZURE_OPENAI_API_VERSION'
+              value: '2024-10-21'
+            }
+            {
+              name: 'AZURE_OPENAI_CHAT_DEPLOYMENT'
+              value: openAiChatDeployment.name
+            }
+            {
+              name: 'AZURE_OPENAI_EXTRACTION_DEPLOYMENT'
+              value: openAiChatDeployment.name
+            }
+            {
+              name: 'AZURE_OPENAI_DEDUPE_DEPLOYMENT'
+              value: openAiChatDeployment.name
+            }
+            {
+              name: 'AZURE_OPENAI_SUMMARIZATION_DEPLOYMENT'
+              value: openAiChatDeployment.name
+            }
+            {
+              name: 'AZURE_OPENAI_PLANNER_DEPLOYMENT'
+              value: openAiChatDeployment.name
+            }
+            {
+              name: 'AZURE_OPENAI_BROWSE_DEPLOYMENT'
+              value: openAiChatDeployment.name
+            }
+            {
+              name: 'AZURE_OPENAI_ANSWER_DEPLOYMENT'
+              value: openAiChatDeployment.name
+            }
+            {
+              name: 'AZURE_OPENAI_CHAT_MODEL_VERSION'
+              value: openAiChatModelVersion
+            }
+            {
+              name: 'AZURE_OPENAI_EMBEDDING_DEPLOYMENT'
+              value: openAiEmbeddingDeployment.name
+            }
+            {
+              name: 'AZURE_OPENAI_EMBEDDING_DIMENSION'
+              value: string(openAiEmbeddingDimension)
+            }
+            {
+              name: 'AZURE_OPENAI_EMBEDDING_MODEL_VERSION'
+              value: openAiEmbeddingModelVersion
+            }
+          ]
+          resources: {
+            cpu: json('0.5')
+            memory: '1Gi'
+          }
+        }
+      ]
+      scale: {
+        minReplicas: workerMinReplicas
+        maxReplicas: workerMaxReplicas
+      }
+    }
+  }
+  dependsOn: [
+    acrPullAssignment
+    cosmosDataContributorAssignment
+    searchServiceContributorAssignment
+    searchIndexDataContributorAssignment
+    storageBlobDataContributorAssignment
+    serviceBusReceiverAssignment
+    openAiUserAssignment
+  ]
+}
+
 output containerAppName string = containerApp.name
 output containerAppFqdn string = containerApp.properties.configuration.ingress.fqdn
+output workerContainerAppName string = deployWorker ? workerContainerApp.name : ''
 output containerRegistryLoginServer string = containerRegistry.properties.loginServer
 output managedIdentityClientId string = appIdentity.properties.clientId
 output applicationInsightsName string = appInsights.name
