@@ -64,13 +64,13 @@ param searchRecallIndexName string = 'memforest-recall'
 param serviceBusWritesQueueName string = 'memforest-writes'
 
 @description('Azure OpenAI chat model deployment name.')
-param openAiChatDeploymentName string = 'gpt-4o-mini-dev'
+param openAiChatDeploymentName string = 'gpt-4-1-mini-dev'
 
 @description('Azure OpenAI chat model name.')
-param openAiChatModelName string = 'gpt-4o-mini'
+param openAiChatModelName string = 'gpt-4.1-mini'
 
 @description('Azure OpenAI chat model version.')
-param openAiChatModelVersion string = '2024-07-18'
+param openAiChatModelVersion string = '2025-04-14'
 
 @description('Azure OpenAI chat deployment capacity in thousands of TPM.')
 param openAiChatCapacity int = 10
