@@ -296,15 +296,25 @@ async def _conditional_replace(container: Any, item: dict[str, Any], *, partitio
     if hasattr(container, "replace_item"):
         from azure.core import MatchConditions
 
-        return await _maybe_await(
-            container.replace_item(
-                item=item["id"],
-                body=item,
-                partition_key=partition_key,
-                etag=etag,
-                match_condition=MatchConditions.IfNotModified,
+        try:
+            return await _maybe_await(
+                container.replace_item(
+                    item=item["id"],
+                    body=item,
+                    etag=etag,
+                    match_condition=MatchConditions.IfNotModified,
+                )
             )
-        )
+        except TypeError:
+            return await _maybe_await(
+                container.replace_item(
+                    item=item["id"],
+                    body=item,
+                    partition_key=partition_key,
+                    etag=etag,
+                    match_condition=MatchConditions.IfNotModified,
+                )
+            )
     return await _maybe_await(container.upsert_item(item))
 
 
