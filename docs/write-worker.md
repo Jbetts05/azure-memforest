@@ -125,3 +125,36 @@ Do not implement the production worker until these are ready:
 - Blob snapshot adapter.
 - LeaseManager implementation with fencing.
 - Contract tests for all store/index adapters.
+
+## Async boundary decision
+
+The first production worker will use an async shell around the existing synchronous MemForest core.
+
+Why:
+
+- Service Bus, Cosmos, Search, and Blob SDK operations are async.
+- Existing extraction, fact management, tree build, summary, and indexing code is synchronous and represents the paper behavior we need to preserve.
+- A full async rewrite before parity measurement would add large regression risk.
+
+Worker shape:
+
+- receive Service Bus messages and manage session locks on the event loop;
+- acquire leases/fencing tokens through async cloud stores;
+- run extraction/tree-building/model-call-heavy sync core in a bounded worker thread;
+- write source records and projections through async cloud adapters;
+- commit manifest as the visibility boundary;
+- complete or abandon/dead-letter the Service Bus message.
+
+### Required safeguards
+
+- Start lock renewal before entering the sync core.
+- Bound concurrent Service Bus sessions and bound sync worker threads separately.
+- Add cancellation checkpoints between extraction, tree build, projection writes, and manifest commit.
+- Use fencing tokens or ETags on every source-of-truth mutation.
+- Treat local FAISS as transient per-job scratch only:
+  - never read FAISS files at worker startup;
+  - never share FAISS across jobs as source of truth;
+  - delete scratch working directories on success and failure;
+  - Azure AI Search and Cosmos are authoritative.
+- Construct model clients once and reuse them; do not create model clients per call.
+- Plan an async model-client follow-up after parity is achieved.
