@@ -83,6 +83,7 @@ def restore_user_forest_from_manifest(user_forest: Any, snapshot_store: Any, man
     """Restore the UserForest archive referenced by a committed manifest."""
 
     metadata = getattr(manifest, "metadata", {}) or {}
+    _validate_manifest_fingerprint_metadata(metadata)
     snapshot_id = str(metadata.get("snapshot_id", "")).strip()
     expected_hash = str(metadata.get("snapshot_content_sha256", "")).strip()
     if not snapshot_id or not expected_hash:
@@ -92,6 +93,15 @@ def restore_user_forest_from_manifest(user_forest: Any, snapshot_store: Any, man
     if actual_hash != expected_hash:
         raise ValueError("snapshot content hash does not match manifest metadata")
     restore_user_forest_archive(user_forest, payload)
+
+
+def _validate_manifest_fingerprint_metadata(metadata: dict[str, Any]) -> None:
+    embedding_model_version = str(metadata.get("embedding_model_version", "")).strip()
+    fingerprint = str(metadata.get("materialization_fingerprint", "")).strip()
+    if not embedding_model_version:
+        raise ValueError("manifest does not contain embedding_model_version metadata")
+    if not fingerprint:
+        raise ValueError("manifest does not contain materialization_fingerprint metadata")
 
 
 def _archive_dir(snapshot_dir: Path) -> bytes:

@@ -110,6 +110,8 @@ def test_restore_from_manifest_verifies_snapshot_hash(tmp_path: Path) -> None:
         {
             "snapshot_id": "tenant/user/g1.json",
             "snapshot_content_sha256": __import__("hashlib").sha256(archive).hexdigest(),
+            "embedding_model_version": "embed-v1",
+            "materialization_fingerprint": "fingerprint",
         }
     )
     target = FakeForest(tmp_path / "target")
@@ -121,7 +123,7 @@ def test_restore_from_manifest_verifies_snapshot_hash(tmp_path: Path) -> None:
 
 def test_restore_from_manifest_rejects_hash_mismatch(tmp_path: Path) -> None:
     forest = FakeForest(tmp_path / "target")
-    manifest = FakeManifest({"snapshot_id": "snap", "snapshot_content_sha256": "bad"})
+    manifest = FakeManifest({"snapshot_id": "snap", "snapshot_content_sha256": "bad", "embedding_model_version": "embed-v1", "materialization_fingerprint": "fingerprint"})
 
     with pytest.raises(ValueError, match="hash"):
         restore_user_forest_from_manifest(forest, FakeSnapshotStore({"snap": b"not matching"}), manifest)
@@ -134,6 +136,8 @@ def test_archive_hydrating_core_restores_then_applies_ingest(tmp_path: Path) -> 
         {
             "snapshot_id": "tenant/user/g1.json",
             "snapshot_content_sha256": __import__("hashlib").sha256(archive).hexdigest(),
+            "embedding_model_version": "embed-v1",
+            "materialization_fingerprint": "fingerprint",
         }
     )
     target = FakeForest(tmp_path / "target")
@@ -148,6 +152,14 @@ def test_archive_hydrating_core_restores_then_applies_ingest(tmp_path: Path) -> 
     assert snapshot["state"]["loaded"] == "saved"
     assert snapshot["ingested"][0][0] == "session-2"
     assert core.snapshot_payload()
+
+
+def test_restore_from_manifest_requires_fingerprint_metadata(tmp_path: Path) -> None:
+    forest = FakeForest(tmp_path / "target")
+    manifest = FakeManifest({"snapshot_id": "snap", "snapshot_content_sha256": "hash"})
+
+    with pytest.raises(ValueError, match="embedding_model_version"):
+        restore_user_forest_from_manifest(forest, FakeSnapshotStore({"snap": b""}), manifest)
 
 
 def _archive_with_member(name: str, payload: bytes) -> bytes:

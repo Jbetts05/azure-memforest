@@ -328,7 +328,7 @@ class MemForestMaterializationHandler:
                     )
                 )
         await _maybe_await(self._stores.recall_index.upsert_documents(projection.recall_documents))
-        metadata: dict[str, Any] = _materialization_fingerprint_metadata(
+        fingerprint_metadata, fingerprint_payload = _materialization_fingerprint_metadata(
             projection=projection,
             snapshot=snapshot,
             generation=generation,
@@ -337,6 +337,7 @@ class MemForestMaterializationHandler:
             code_version=self._config.code_version,
             prompt_config_hash=self._config.prompt_config_hash,
         )
+        metadata: dict[str, Any] = dict(fingerprint_metadata)
         if self._stores.snapshot_store is not None:
             snapshot_payload = await self._snapshot_payload(projection)
             snapshot_id = _snapshot_id(
@@ -363,7 +364,25 @@ class MemForestMaterializationHandler:
                 "snapshot_id": snapshot_id,
                 "snapshot_content_sha256": snapshot_hash,
                 "snapshot_size_bytes": len(snapshot_payload),
+                "fingerprint_inputs_id": _fingerprint_inputs_id(
+                    tenant_id=envelope.tenant_id,
+                    user_id=envelope.user_id,
+                    forest_version=forest_version,
+                ),
             }
+            await _write_snapshot_idempotent(
+                self._stores.snapshot_store,
+                snapshot_id=metadata["fingerprint_inputs_id"],
+                payload=json.dumps(fingerprint_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8"),
+                metadata={
+                    "tenant_id": envelope.tenant_id,
+                    "user_id": envelope.user_id,
+                    "forest_version": forest_version,
+                    "manifest_id": manifest_id,
+                    "sha256": metadata["materialization_fingerprint"],
+                    "artifact_kind": "fingerprint_inputs",
+                },
+            )
         return metadata
 
     async def _latest_committed_matches_job(self, envelope: WriteJobEnvelope) -> bool:
@@ -614,7 +633,7 @@ def _materialization_fingerprint_metadata(
     embedding_model_version: str,
     code_version: str,
     prompt_config_hash: str,
-) -> dict[str, Any]:
+) -> tuple[dict[str, Any], dict[str, Any]]:
     inputs = {
         "schema_version": SCHEMA_VERSION,
         "generation": generation,
@@ -695,14 +714,27 @@ def _materialization_fingerprint_metadata(
     }
     return {
         "materialization_fingerprint": _hash_json(inputs),
-        "materialization_fingerprint_inputs": inputs,
-    }
+        "materialization_schema_version": SCHEMA_VERSION,
+        "embedding_model_version": embedding_model_version,
+        "code_version": code_version,
+        "prompt_config_hash": prompt_config_hash,
+        "fact_set_hash": inputs["fact_set_hash"],
+        "tree_node_payload_hash": inputs["tree_node_payload_hash"],
+        "fact_location_hash": inputs["fact_location_hash"],
+        "recall_document_hash": inputs["recall_document_hash"],
+        "browse_embedding_hash": inputs["browse_embedding_hash"],
+        "summary_cache_hash": inputs["summary_cache_hash"],
+    }, inputs
 
 
 def _hash_json(value: Any) -> str:
     return hashlib.sha256(
         json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
+
+
+def _fingerprint_inputs_id(*, tenant_id: str, user_id: str, forest_version: str) -> str:
+    return f"{tenant_id}/{user_id}/{forest_version}.fingerprint.json"
 
 
 async def _maybe_await(value: Any) -> Any:

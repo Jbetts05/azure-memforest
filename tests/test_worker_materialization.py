@@ -404,6 +404,7 @@ async def test_materialization_handler_commits_after_projection_writes() -> None
         "summary_cache",
         "recall",
         "snapshot",
+        "snapshot",
     ]
     assert lease_store.asserted is True
     assert lease_store.released is True
@@ -447,9 +448,11 @@ async def test_materialization_handler_commits_snapshot_pointer_metadata() -> No
     assert metadata["snapshot_content_sha256"]
     assert metadata["snapshot_size_bytes"] == len(b"full-archive")
     assert metadata["materialization_fingerprint"]
-    assert metadata["materialization_fingerprint_inputs"]["embedding_model_version"] == "embed-v1"
-    assert metadata["materialization_fingerprint_inputs"]["code_version"] == "test-sha"
-    assert metadata["materialization_fingerprint_inputs"]["prompt_config_hash"] == "prompt-hash"
+    assert metadata["embedding_model_version"] == "embed-v1"
+    assert metadata["code_version"] == "test-sha"
+    assert metadata["prompt_config_hash"] == "prompt-hash"
+    assert "materialization_fingerprint_inputs" not in metadata
+    assert metadata["fingerprint_inputs_id"].endswith(f"{manifest_store.latest.forest_version}.fingerprint.json")
 
 
 @pytest.mark.asyncio
