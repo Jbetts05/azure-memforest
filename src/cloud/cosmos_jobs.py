@@ -18,6 +18,10 @@ class JobNotFound(Exception):
     pass
 
 
+class JobClaimError(Exception):
+    pass
+
+
 @dataclass(frozen=True, slots=True)
 class CosmosJobStore:
     """Job status store.
@@ -62,6 +66,64 @@ class CosmosJobStore:
         if str(item.get("tenant_id", "")) != tenant_id or str(item.get("user_id", "")) != user_id:
             raise JobNotFound()
         return _response_from_document(item)
+
+    async def claim_job(self, *, tenant_id: str, user_id: str, job_id: str, owner_id: str, ttl_seconds: int) -> dict[str, Any]:
+        item = await self._read_job_item(tenant_id=tenant_id, user_id=user_id, job_id=job_id)
+        if item["status"] not in {"accepted", "running"}:
+            raise JobClaimError(f"Cannot claim job in state {item['status']!r}.")
+        now = time.time()
+        expires_at = float(item.get("lease_expires_at_unix") or 0.0)
+        current_owner = str(item.get("lease_owner_id") or "")
+        if item["status"] == "running" and current_owner and current_owner != owner_id and expires_at > now:
+            raise JobClaimError("Job is leased by another owner.")
+        previous_token = int(item.get("fencing_token") or 0)
+        same_owner_renewal = item["status"] == "running" and current_owner == owner_id
+        item["status"] = "running"
+        item["lease_owner_id"] = owner_id
+        item["lease_expires_at_unix"] = now + ttl_seconds
+        item["fencing_token"] = previous_token if same_owner_renewal else previous_token + 1
+        item["updated_at"] = now
+        try:
+            await _conditional_replace(self.container, item, partition_key=tenant_id, etag=item.get("_etag"))
+        except Exception as exc:
+            if _is_precondition_failed(exc):
+                raise JobClaimError("Job changed before claim.") from exc
+            raise
+        return dict(item)
+
+    async def complete_job(self, *, tenant_id: str, user_id: str, job_id: str, owner_id: str, fencing_token: int) -> JobStatusResponse:
+        item = await self._read_job_item(tenant_id=tenant_id, user_id=user_id, job_id=job_id)
+        if item.get("status") != "running":
+            raise JobClaimError(f"Cannot complete job in state {item.get('status')!r}.")
+        _assert_lease(item, owner_id=owner_id, fencing_token=fencing_token)
+        item["status"] = "succeeded"
+        item["completed_at"] = time.time()
+        item["updated_at"] = item["completed_at"]
+        await _conditional_replace(self.container, item, partition_key=tenant_id, etag=item.get("_etag"))
+        return _response_from_document(item)
+
+    async def fail_job(self, *, tenant_id: str, user_id: str, job_id: str, owner_id: str, fencing_token: int, error: str) -> JobStatusResponse:
+        item = await self._read_job_item(tenant_id=tenant_id, user_id=user_id, job_id=job_id)
+        if item.get("status") != "running":
+            raise JobClaimError(f"Cannot fail job in state {item.get('status')!r}.")
+        _assert_lease(item, owner_id=owner_id, fencing_token=fencing_token)
+        item["status"] = "failed"
+        item["error"] = error
+        item["completed_at"] = time.time()
+        item["updated_at"] = item["completed_at"]
+        await _conditional_replace(self.container, item, partition_key=tenant_id, etag=item.get("_etag"))
+        return _response_from_document(item)
+
+    async def _read_job_item(self, *, tenant_id: str, user_id: str, job_id: str) -> dict[str, Any]:
+        try:
+            item = await _maybe_await(self.container.read_item(item=job_id, partition_key=tenant_id))
+        except Exception as exc:
+            if _is_cosmos_not_found(exc):
+                raise JobNotFound() from exc
+            raise
+        if str(item.get("tenant_id", "")) != tenant_id or str(item.get("user_id", "")) != user_id:
+            raise JobNotFound()
+        return item
 
 
 class CosmosJobStatusService(JobStatusService):
@@ -113,6 +175,7 @@ def _job_document(envelope: WriteJobEnvelope) -> dict[str, Any]:
         "job_type": envelope.job_type,
         "session_id": envelope.session_id,
         "status": "accepted",
+        "fencing_token": 0,
         "idempotency_key_hash": _idempotency_hash(envelope.tenant_id, envelope.idempotency_key),
         "payload_digest": hashlib.sha256(payload_json.encode("utf-8")).hexdigest(),
         "payload_size_bytes": len(payload_json.encode("utf-8")),
@@ -143,6 +206,27 @@ async def _maybe_await(value):
     return value
 
 
+async def _conditional_replace(container: Any, item: dict[str, Any], *, partition_key: str, etag: str | None):
+    if hasattr(container, "replace_item"):
+        from azure.core import MatchConditions
+
+        return await _maybe_await(
+            container.replace_item(
+                item=item["id"],
+                body=item,
+                partition_key=partition_key,
+                etag=etag,
+                match_condition=MatchConditions.IfNotModified,
+            )
+        )
+    return await _maybe_await(container.upsert_item(item))
+
+
+def _assert_lease(item: dict[str, Any], *, owner_id: str, fencing_token: int) -> None:
+    if item.get("lease_owner_id") != owner_id or int(item.get("fencing_token") or 0) != int(fencing_token):
+        raise JobClaimError("Job lease fencing token mismatch.")
+
+
 def _is_cosmos_conflict(exc: Exception) -> bool:
     if exc.__class__.__name__ == "CosmosResourceExistsError":
         return True
@@ -153,3 +237,7 @@ def _is_cosmos_not_found(exc: Exception) -> bool:
     if exc.__class__.__name__ == "CosmosResourceNotFoundError":
         return True
     return getattr(exc, "status_code", None) == 404
+
+
+def _is_precondition_failed(exc: Exception) -> bool:
+    return getattr(exc, "status_code", None) == 412 or exc.__class__.__name__ == "CosmosAccessConditionFailedError"

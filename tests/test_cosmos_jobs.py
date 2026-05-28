@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.cloud.cosmos_jobs import CosmosJobStatusService, CosmosJobStore, JobNotFound
+from src.cloud.cosmos_jobs import CosmosJobStatusService, CosmosJobStore, JobClaimError, JobNotFound
 from src.service.auth import ActorContext, TenantContext
 from src.service.jobs import JobRecordingCommandService, build_write_job_envelope
 from src.service.schemas import DeleteSessionResponse, IngestSessionRequest, TurnInput
@@ -16,15 +16,22 @@ class NotFoundError(Exception):
     status_code = 404
 
 
+class PreconditionFailed(Exception):
+    status_code = 412
+
+
 class FakeJobsContainer:
     def __init__(self) -> None:
         self.items: dict[tuple[str, str], dict] = {}
+        self.fail_next_replace = False
 
     def create_item(self, item, *, partition_key):
         key = (partition_key, item["id"])
         if key in self.items:
             raise ExistsError()
-        self.items[key] = dict(item)
+        stored = dict(item)
+        stored["_etag"] = "etag-1"
+        self.items[key] = stored
         return self.items[key]
 
     def read_item(self, *, item, partition_key):
@@ -32,6 +39,19 @@ class FakeJobsContainer:
         if key not in self.items:
             raise NotFoundError()
         return dict(self.items[key])
+
+    def replace_item(self, *, item, body, partition_key, etag=None, match_condition=None):
+        key = (partition_key, item)
+        if key not in self.items:
+            raise NotFoundError()
+        if self.fail_next_replace:
+            self.fail_next_replace = False
+            raise PreconditionFailed()
+        if etag != self.items[key].get("_etag"):
+            raise PreconditionFailed()
+        stored = dict(body)
+        stored["_etag"] = "etag-2"
+        self.items[key] = stored
 
 
 def _actor() -> ActorContext:
@@ -147,3 +167,110 @@ async def test_cosmos_job_status_service_returns_not_found_for_missing_job() -> 
 
     with pytest.raises(JobNotFound):
         await service.get_job(_actor(), user_id="user-1", job_id="missing")
+
+
+@pytest.mark.asyncio
+async def test_cosmos_job_store_claim_complete_and_fail_are_fenced() -> None:
+    store = CosmosJobStore(container=FakeJobsContainer())
+    envelope = _envelope()
+    await store.create_accepted_job(envelope)
+
+    claimed = await store.claim_job(
+        tenant_id="tenant-1",
+        user_id="user-1",
+        job_id=envelope.job_id,
+        owner_id="worker-1",
+        ttl_seconds=60,
+    )
+    completed = await store.complete_job(
+        tenant_id="tenant-1",
+        user_id="user-1",
+        job_id=envelope.job_id,
+        owner_id="worker-1",
+        fencing_token=claimed["fencing_token"],
+    )
+
+    assert claimed["status"] == "running"
+    assert claimed["fencing_token"] == 1
+    assert completed.status == "succeeded"
+    with pytest.raises(JobClaimError):
+        await store.claim_job(
+            tenant_id="tenant-1",
+            user_id="user-1",
+            job_id=envelope.job_id,
+            owner_id="worker-2",
+            ttl_seconds=60,
+        )
+
+
+@pytest.mark.asyncio
+async def test_cosmos_job_store_claim_uses_etag_guard() -> None:
+    container = FakeJobsContainer()
+    store = CosmosJobStore(container=container)
+    envelope = _envelope()
+    await store.create_accepted_job(envelope)
+    container.fail_next_replace = True
+
+    with pytest.raises(JobClaimError):
+        await store.claim_job(
+            tenant_id="tenant-1",
+            user_id="user-1",
+            job_id=envelope.job_id,
+            owner_id="worker-1",
+            ttl_seconds=60,
+        )
+
+
+@pytest.mark.asyncio
+async def test_cosmos_job_store_terminal_state_not_overwritten() -> None:
+    store = CosmosJobStore(container=FakeJobsContainer())
+    envelope = _envelope()
+    await store.create_accepted_job(envelope)
+    claimed = await store.claim_job(
+        tenant_id="tenant-1",
+        user_id="user-1",
+        job_id=envelope.job_id,
+        owner_id="worker-1",
+        ttl_seconds=60,
+    )
+    await store.complete_job(
+        tenant_id="tenant-1",
+        user_id="user-1",
+        job_id=envelope.job_id,
+        owner_id="worker-1",
+        fencing_token=claimed["fencing_token"],
+    )
+
+    with pytest.raises(JobClaimError):
+        await store.fail_job(
+            tenant_id="tenant-1",
+            user_id="user-1",
+            job_id=envelope.job_id,
+            owner_id="worker-1",
+            fencing_token=claimed["fencing_token"],
+            error="late",
+        )
+
+
+@pytest.mark.asyncio
+async def test_cosmos_job_store_rejects_wrong_fencing_token() -> None:
+    store = CosmosJobStore(container=FakeJobsContainer())
+    envelope = _envelope()
+    await store.create_accepted_job(envelope)
+    await store.claim_job(
+        tenant_id="tenant-1",
+        user_id="user-1",
+        job_id=envelope.job_id,
+        owner_id="worker-1",
+        ttl_seconds=60,
+    )
+
+    with pytest.raises(JobClaimError):
+        await store.fail_job(
+            tenant_id="tenant-1",
+            user_id="user-1",
+            job_id=envelope.job_id,
+            owner_id="worker-1",
+            fencing_token=999,
+            error="boom",
+        )
