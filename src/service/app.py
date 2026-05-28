@@ -13,6 +13,7 @@ from src import __version__
 from src.service.auth import AuthError, AuthProvider
 from src.service.azure_readiness import build_azure_readiness_checks
 from src.cloud.cosmos_jobs import CosmosJobStatusService, job_store_from_env
+from src.service.entra_auth import entra_auth_provider_from_env
 from src.service.jobs import JobRecordingCommandService
 from src.service.jobs import service_bus_command_service_from_env
 from src.service.middleware import REQUEST_ID_HEADER, RequestIdMiddleware
@@ -50,7 +51,7 @@ def create_app(
         lifespan=lifespan,
     )
     app.add_middleware(RequestIdMiddleware)
-    app.state.auth_provider = auth_provider
+    app.state.auth_provider = auth_provider or entra_auth_provider_from_env(os.environ)
     job_store = job_store_from_env(os.environ)
     command_service = service_bus_command_service_from_env(os.environ)
     app.state.memory_command_service = (
