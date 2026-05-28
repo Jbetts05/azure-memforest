@@ -29,6 +29,9 @@ param maxReplicas int = 1
 @description('Deploy the no-ingress worker Container App. Keep false until the live worker factory is wired and approved.')
 param deployWorker bool = false
 
+@description('Allow the worker entrypoint to connect to Service Bus. Keep false until smoke testing is approved.')
+param workerFactoryReady bool = false
+
 @minValue(1)
 @description('Minimum worker replicas when deployWorker=true. Scale-to-zero requires a validated managed-identity Service Bus scaler.')
 param workerMinReplicas int = 1
@@ -742,7 +745,7 @@ resource workerContainerApp 'Microsoft.App/containerApps@2024-03-01' = if (deplo
             }
             {
               name: 'AZURE_MEMFOREST_WORKER_FACTORY_READY'
-              value: 'false'
+              value: string(workerFactoryReady)
             }
             {
               name: 'AZURE_MEMFOREST_WORKER_CONCURRENCY'
