@@ -81,6 +81,8 @@ class SyncIngestCore(Protocol):
 class MaterializationHandlerConfig:
     owner_id: str
     embedding_model_version: str
+    code_version: str = "unknown"
+    prompt_config_hash: str = "unknown"
     lease_ttl_seconds: int = 300
     lease_renewal_seconds: float = 60.0
 
@@ -139,6 +141,8 @@ class MemForestMaterializationHandler:
                         "session_id": envelope.session_id,
                         "idempotency_key": envelope.idempotency_key,
                         "embedding_model_version": self._config.embedding_model_version,
+                        "code_version": self._config.code_version,
+                        "prompt_config_hash": self._config.prompt_config_hash,
                         "fencing_token": lease.fencing_token,
                     },
                 )
@@ -236,6 +240,8 @@ class MemForestMaterializationHandler:
                         "deleted_session_id": envelope.session_id,
                         "idempotency_key": envelope.idempotency_key,
                         "embedding_model_version": self._config.embedding_model_version,
+                        "code_version": self._config.code_version,
+                        "prompt_config_hash": self._config.prompt_config_hash,
                         "fencing_token": lease.fencing_token,
                     },
                 )
@@ -322,7 +328,15 @@ class MemForestMaterializationHandler:
                     )
                 )
         await _maybe_await(self._stores.recall_index.upsert_documents(projection.recall_documents))
-        metadata: dict[str, Any] = {}
+        metadata: dict[str, Any] = _materialization_fingerprint_metadata(
+            projection=projection,
+            snapshot=snapshot,
+            generation=generation,
+            forest_version=forest_version,
+            embedding_model_version=self._config.embedding_model_version,
+            code_version=self._config.code_version,
+            prompt_config_hash=self._config.prompt_config_hash,
+        )
         if self._stores.snapshot_store is not None:
             snapshot_payload = await self._snapshot_payload(projection)
             snapshot_id = _snapshot_id(
@@ -345,6 +359,7 @@ class MemForestMaterializationHandler:
                 },
             )
             metadata = {
+                **metadata,
                 "snapshot_id": snapshot_id,
                 "snapshot_content_sha256": snapshot_hash,
                 "snapshot_size_bytes": len(snapshot_payload),
@@ -363,6 +378,9 @@ class MemForestMaterializationHandler:
     async def _hydrate_core_from_manifest(self, manifest: Any | None) -> None:
         if manifest is None:
             return
+        manifest_embedding_version = str((getattr(manifest, "metadata", {}) or {}).get("embedding_model_version") or "")
+        if manifest_embedding_version and manifest_embedding_version != self._config.embedding_model_version:
+            raise PermanentHandlerError("latest committed manifest embedding_model_version does not match worker configuration")
         hydrate = getattr(self._ingest_core, "hydrate_from_manifest", None)
         if hydrate is not None:
             await asyncio.to_thread(hydrate, manifest)
@@ -585,6 +603,106 @@ def _snapshot_id(*, tenant_id: str, user_id: str, forest_version: str) -> str:
 
 def _sha256(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
+
+
+def _materialization_fingerprint_metadata(
+    *,
+    projection: MaterializationProjection,
+    snapshot: ForestMaterializationSnapshot,
+    generation: int,
+    forest_version: str,
+    embedding_model_version: str,
+    code_version: str,
+    prompt_config_hash: str,
+) -> dict[str, Any]:
+    inputs = {
+        "schema_version": SCHEMA_VERSION,
+        "generation": generation,
+        "forest_version": forest_version,
+        "embedding_model_version": embedding_model_version,
+        "code_version": code_version,
+        "prompt_config_hash": prompt_config_hash,
+        "fact_set_hash": _hash_json(
+            [
+                {
+                    "fact_id": fact.fact_id,
+                    "fact_text": fact.fact_text,
+                    "time_start": fact.time_start,
+                    "time_end": fact.time_end,
+                    "occurrence_count": len(fact.occurrences),
+                }
+                for fact in sorted(snapshot.facts, key=lambda item: item.fact_id)
+            ]
+        ),
+        "tree_node_payload_hash": _hash_json(
+            [
+                {
+                    "tree_id": node.tree_id,
+                    "node_id": node.node_id,
+                    "level": node.level,
+                    "summary": node.summary,
+                    "child_ids": list(node.child_ids),
+                    "fact_ids": list(node.fact_ids),
+                    "metadata": dict(node.metadata),
+                }
+                for node in sorted(projection.stored_nodes, key=lambda item: (item.tree_id, item.node_id))
+            ]
+        ),
+        "fact_location_hash": _hash_json(
+            [
+                {
+                    "fact_id": location.fact_id,
+                    "tree_id": location.tree_id,
+                    "node_id": location.node_id,
+                    "tree_type": location.tree_type,
+                    "level": location.level,
+                }
+                for location in sorted(projection.fact_locations, key=lambda item: (item.fact_id, item.tree_id, item.node_id))
+            ]
+        ),
+        "recall_document_hash": _hash_json(
+            [
+                {
+                    "tree_id": doc.tree_id,
+                    "node_id": doc.node_id,
+                    "tree_type": doc.tree_type,
+                    "summary": doc.summary,
+                    "embedding_hash": _hash_json(list(doc.embedding)),
+                }
+                for doc in sorted(projection.recall_documents, key=lambda item: (item.tree_id, item.node_id))
+            ]
+        ),
+        "browse_embedding_hash": _hash_json(
+            [
+                {
+                    "node_id": record.node_id,
+                    "tree_id": record.tree_id,
+                    "tree_type": record.tree_type,
+                    "embedding_hash": _hash_json(list(record.embedding)),
+                }
+                for record in sorted(projection.browse_embedding_records, key=lambda item: (item.tree_id, item.node_id))
+            ]
+        ),
+        "summary_cache_hash": _hash_json(
+            [
+                {
+                    "content_hash": entry.content_hash,
+                    "summary_hash": _sha256(entry.summary.encode("utf-8")),
+                }
+                for entry in sorted(projection.summary_cache_entries, key=lambda item: item.content_hash)
+            ]
+        ),
+    }
+    return {
+        "materialization_fingerprint": _hash_json(inputs),
+        "materialization_fingerprint_inputs": inputs,
+    }
+
+
+def _hash_json(value: Any) -> str:
+    return hashlib.sha256(
+        json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
 
 
 async def _maybe_await(value: Any) -> Any:

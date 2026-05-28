@@ -46,6 +46,15 @@ class ExistingLabelVariance:
     recommended_min_tolerance: float
 
 
+@dataclass(frozen=True)
+class JudgeReplayResult:
+    sample_count: int
+    valid_count: int
+    disagreement_count: int
+    disagreement_rate: float
+    invalid_count: int
+
+
 def sample_judged_answers(
     paths: Iterable[Path],
     *,
@@ -175,14 +184,106 @@ def sample_to_dict(sample: JudgeSample) -> dict[str, Any]:
     }
 
 
+def replay_samples_with_client(samples: list[dict[str, Any]], client: Any, *, deployment: str) -> tuple[JudgeReplayResult, list[dict[str, Any]]]:
+    rows: list[dict[str, Any]] = []
+    disagreement_count = 0
+    valid_count = 0
+    invalid_count = 0
+    for sample in samples:
+        prompt = sample["judge_prompt"]
+        response = client.chat.completions.create(
+            model=deployment,
+            messages=[
+                {"role": "system", "content": prompt["system"]},
+                {"role": "user", "content": prompt["user"]},
+            ],
+            temperature=0.0,
+            response_format={"type": "json_object"},
+        )
+        raw = response.choices[0].message.content or "{}"
+        try:
+            payload = json.loads(raw)
+            judged = bool(payload["correct"])
+            valid_count += 1
+        except Exception:
+            judged = None
+            invalid_count += 1
+        original = sample.get("original_judge")
+        disagreed = judged is not None and original is not None and bool(original) != judged
+        if disagreed:
+            disagreement_count += 1
+        rows.append(
+            {
+                "source_file": sample.get("source_file"),
+                "row_index": sample.get("row_index"),
+                "method": sample.get("method"),
+                "model_size": sample.get("model_size"),
+                "question_type": sample.get("question_type"),
+                "qid": sample.get("qid"),
+                "answer_column": sample.get("answer_column"),
+                "judge_column": sample.get("judge_column"),
+                "original_judge": original,
+                "deployed_judge": judged,
+                "disagreed": disagreed,
+                "raw_response": raw,
+            }
+        )
+    result = JudgeReplayResult(
+        sample_count=len(samples),
+        valid_count=valid_count,
+        disagreement_count=disagreement_count,
+        disagreement_rate=disagreement_count / valid_count if valid_count else 0.0,
+        invalid_count=invalid_count,
+    )
+    return result, rows
+
+
+def replay_result_to_dict(result: JudgeReplayResult) -> dict[str, Any]:
+    return {
+        "sample_count": result.sample_count,
+        "valid_count": result.valid_count,
+        "disagreement_count": result.disagreement_count,
+        "disagreement_rate": result.disagreement_rate,
+        "invalid_count": result.invalid_count,
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Measure or prepare MemForest judge variance studies.")
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
     parser.add_argument("--max-samples", type=int, default=200)
     parser.add_argument("--seed", type=int, default=13)
     parser.add_argument("--samples-json", type=Path, default=None, help="Optional path to write sampled judge prompts.")
+    parser.add_argument("--replay-samples-json", type=Path, default=None, help="Replay prompts from a sample JSON file through Azure OpenAI.")
+    parser.add_argument("--replay-output-json", type=Path, default=None, help="Write per-sample judge replay outputs.")
+    parser.add_argument("--replay-limit", type=int, default=0, help="Limit replay sample count for smoke/partial studies.")
+    parser.add_argument("--azure-openai-endpoint", default="")
+    parser.add_argument("--azure-openai-api-version", default="2024-10-21")
+    parser.add_argument("--azure-openai-deployment", default="")
     parser.add_argument("paths", nargs="*", type=Path)
     args = parser.parse_args(argv)
+
+    if args.replay_samples_json is not None:
+        if not args.azure_openai_endpoint or not args.azure_openai_deployment:
+            raise SystemExit("--azure-openai-endpoint and --azure-openai-deployment are required for replay.")
+        from azure.identity import AzureCliCredential, get_bearer_token_provider
+        from openai import AzureOpenAI
+
+        credential = AzureCliCredential(process_timeout=60)
+        client = AzureOpenAI(
+            azure_endpoint=args.azure_openai_endpoint,
+            api_version=args.azure_openai_api_version,
+            azure_ad_token_provider=get_bearer_token_provider(credential, "https://cognitiveservices.azure.com/.default"),
+        )
+        samples = json.loads(args.replay_samples_json.read_text(encoding="utf-8"))
+        if args.replay_limit and args.replay_limit > 0:
+            samples = samples[: args.replay_limit]
+        replay, rows = replay_samples_with_client(samples, client, deployment=args.azure_openai_deployment)
+        if args.replay_output_json is not None:
+            args.replay_output_json.parent.mkdir(parents=True, exist_ok=True)
+            args.replay_output_json.write_text(json.dumps(rows, indent=2, sort_keys=True), encoding="utf-8")
+        print(json.dumps({"mode": "deployment_replay", "replay": replay_result_to_dict(replay)}, indent=2, sort_keys=True))
+        return 0
 
     paths = args.paths or default_benchmark_paths(args.repo_root)
     variance = compute_existing_label_variance(paths)

@@ -16,6 +16,7 @@ from src.worker.materialization import (
     MemForestMaterializationHandler,
     project_forest_snapshot,
 )
+from src.worker.consumer import PermanentHandlerError
 
 
 def test_project_forest_snapshot_tags_cloud_artifacts() -> None:
@@ -148,8 +149,9 @@ def test_project_forest_snapshot_tags_cloud_artifacts() -> None:
 
 
 class FakeLeaseStore:
-    def __init__(self, *, conflict=False):
+    def __init__(self, *, conflict=False, fail_assert=False):
         self.conflict = conflict
+        self.fail_assert = fail_assert
         self.released = False
         self.asserted = False
 
@@ -162,6 +164,8 @@ class FakeLeaseStore:
         return lease
 
     async def assert_current(self, lease):
+        if self.fail_assert:
+            raise LeaseConflict("expired")
         self.asserted = True
 
     async def release(self, lease):
@@ -376,7 +380,7 @@ def _handler(*, manifest_store=None, lease_store=None, node_store=None, calls=No
             deletion_log=deletion_log,
         ),
         ingest_core=core or FakeIngestCore(_snapshot()),
-        config=MaterializationHandlerConfig(owner_id="worker-1", embedding_model_version="embed-v1", lease_renewal_seconds=9999),
+        config=MaterializationHandlerConfig(owner_id="worker-1", embedding_model_version="embed-v1", code_version="test-sha", prompt_config_hash="prompt-hash", lease_renewal_seconds=9999),
     )
 
 
@@ -422,7 +426,7 @@ async def test_materialization_handler_writes_core_snapshot_payload() -> None:
             snapshot_store=snapshot_store,
         ),
         ingest_core=FakeIngestCore(_snapshot()),
-        config=MaterializationHandlerConfig(owner_id="worker-1", embedding_model_version="embed-v1", lease_renewal_seconds=9999),
+        config=MaterializationHandlerConfig(owner_id="worker-1", embedding_model_version="embed-v1", code_version="test-sha", prompt_config_hash="prompt-hash", lease_renewal_seconds=9999),
     )
 
     await handler.handle(_envelope(), {"fencing_token": 1})
@@ -442,6 +446,10 @@ async def test_materialization_handler_commits_snapshot_pointer_metadata() -> No
     assert metadata["snapshot_id"].endswith(f"{manifest_store.latest.forest_version}.json")
     assert metadata["snapshot_content_sha256"]
     assert metadata["snapshot_size_bytes"] == len(b"full-archive")
+    assert metadata["materialization_fingerprint"]
+    assert metadata["materialization_fingerprint_inputs"]["embedding_model_version"] == "embed-v1"
+    assert metadata["materialization_fingerprint_inputs"]["code_version"] == "test-sha"
+    assert metadata["materialization_fingerprint_inputs"]["prompt_config_hash"] == "prompt-hash"
 
 
 @pytest.mark.asyncio
@@ -464,6 +472,26 @@ async def test_materialization_handler_hydrates_from_latest_manifest_before_inge
     await handler.handle(envelope, {"fencing_token": 1})
 
     assert core.hydrated_from.manifest_id == "manifest-v1"
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_rejects_hydration_embedding_model_mismatch() -> None:
+    envelope = _envelope()
+    manifest_store = FakeManifestStore()
+    manifest_store.latest = ForestManifest(
+        manifest_id="manifest-v1",
+        tenant_id="tenant-1",
+        user_id="user-1",
+        forest_version="v1",
+        generation=1,
+        status="committed",
+        created_at_unix=1.0,
+        metadata={"job_id": "previous", "job_type": "ingest_session", "embedding_model_version": "other-embed"},
+    )
+    handler = _handler(manifest_store=manifest_store, core=FakeIngestCore(_snapshot()))
+
+    with pytest.raises(PermanentHandlerError):
+        await handler.handle(envelope, {"fencing_token": 1})
 
 
 @pytest.mark.asyncio
@@ -500,6 +528,20 @@ async def test_materialization_handler_leaves_manifest_pending_on_projection_fai
 
     assert manifest_store.pending is not None
     assert manifest_store.committed == []
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_aborts_commit_when_lease_lost_before_commit() -> None:
+    manifest_store = FakeManifestStore()
+    lease_store = FakeLeaseStore(fail_assert=True)
+    handler = _handler(manifest_store=manifest_store, lease_store=lease_store)
+
+    with pytest.raises(TransientHandlerError):
+        await handler.handle(_envelope(), {"fencing_token": 1})
+
+    assert manifest_store.pending is not None
+    assert manifest_store.committed == []
+    assert lease_store.released is True
 
 
 @pytest.mark.asyncio

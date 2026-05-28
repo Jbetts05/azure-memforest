@@ -95,6 +95,38 @@ $env:PIP_REQUIRE_VIRTUALENV = "true"
 
 The command reports existing disagreement across the checked-in `judge_1..judge_8` labels and writes sampled prompts for replay through the pinned judge deployment. The existing-label result is not a substitute for the deployment replay, but it sets a lower-bound sanity check for the final approved tolerance.
 
+## Cloud parity policy
+
+Cloud parity claims must be made against a predeclared policy, not after seeing replay results.
+
+Current frozen-label variance baseline:
+
+- `answer_label_count`: `238328`
+- `row_count`: `29791`
+- `answer_label_disagreement_rate`: `0.041719814709140345`
+- `rows_with_disagreement`: `4871`
+
+Policy for the first cloud replay:
+
+- **Judge deployment replay gate:** replay the sampled judge prompts through the pinned judge deployment before cloud benchmark replay. The deployment replay disagreement rate against frozen labels must be no more than `0.05`. This is the current frozen-label noise floor rounded up with a small operational margin.
+- **Benchmark pass-rate gate:** cloud candidate `cumulative_pass_at@1` and `cumulative_pass_at@8` must not regress by more than `0.05` absolute for method/model rollups or per-question-type groups.
+- **Candidate-shape gate:** candidate CSVs must use the checked-in benchmark filenames and columns; candidate-only methods fail under `--strict-cloud-parity`.
+- **Rebaseline triggers:** any change to embedding deployment/model/version/dimension, chat/judge deployment/model/version, prompt templates, tree build configuration, extraction configuration, or materialization fingerprint format requires a new baseline capture and policy review before parity claims.
+- **Failure action:** any failed gate blocks production-readiness claims. It does not block development deployments marked as non-production smoke environments.
+
+The policy should be tightened after deterministic judge behavior is available or after a larger judge replay establishes a narrower confidence interval.
+
+### Current judge replay status
+
+An initial 20-sample replay through `gpt-4-1-mini-dev` produced:
+
+- `valid_count`: `20`
+- `disagreement_count`: `7`
+- `disagreement_rate`: `0.35`
+- `invalid_count`: `0`
+
+This exceeds the provisional `0.05` judge deployment replay gate, so cloud parity claims remain blocked until the judge prompt/deployment is calibrated or the parity policy is revised before a full replay.
+
 ## Current Phase 0 gate
 
 Phase 0 only verifies that the checked-in artifacts are present and structurally usable. Full benchmark replays require configured OpenAI-compatible model endpoints and are not run by default in CI.

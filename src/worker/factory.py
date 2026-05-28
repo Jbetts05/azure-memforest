@@ -164,6 +164,8 @@ def fixed_materialization_config_factory(
     *,
     owner_id: str,
     embedding_model_version: str,
+    code_version: str = "unknown",
+    prompt_config_hash: str = "unknown",
     lease_ttl_seconds: int = 300,
     lease_renewal_seconds: float = 60.0,
 ) -> Callable[[WriteJobEnvelope], MaterializationHandlerConfig]:
@@ -171,6 +173,8 @@ def fixed_materialization_config_factory(
         return MaterializationHandlerConfig(
             owner_id=owner_id,
             embedding_model_version=embedding_model_version,
+            code_version=code_version,
+            prompt_config_hash=prompt_config_hash,
             lease_ttl_seconds=lease_ttl_seconds,
             lease_renewal_seconds=lease_renewal_seconds,
         )
@@ -231,6 +235,8 @@ def build_worker_runtime_from_env(environ: dict[str, str] | None = None) -> Work
         config_factory=fixed_materialization_config_factory(
             owner_id=owner_id,
             embedding_model_version=values["AZURE_OPENAI_EMBEDDING_MODEL_VERSION"],
+            code_version=values.get("AZURE_MEMFOREST_GIT_SHA", "unknown"),
+            prompt_config_hash=_prompt_config_hash(values),
         ),
     )
     worker = ServiceBusWriteWorker(
@@ -310,3 +316,24 @@ def _worker_memforest_config(environ: dict[str, str]):
 def _safe_scope_dir(tenant_id: str, user_id: str) -> str:
     digest = hashlib.sha256(f"{tenant_id}\x1f{user_id}".encode("utf-8")).hexdigest()
     return f"user-{digest}"
+
+
+def _prompt_config_hash(environ: dict[str, str]) -> str:
+    keys = [
+        "AZURE_OPENAI_CHAT_DEPLOYMENT",
+        "AZURE_OPENAI_EXTRACTION_DEPLOYMENT",
+        "AZURE_OPENAI_DEDUPE_DEPLOYMENT",
+        "AZURE_OPENAI_SUMMARIZATION_DEPLOYMENT",
+        "AZURE_OPENAI_PLANNER_DEPLOYMENT",
+        "AZURE_OPENAI_BROWSE_DEPLOYMENT",
+        "AZURE_OPENAI_ANSWER_DEPLOYMENT",
+        "AZURE_OPENAI_CHAT_MODEL_VERSION",
+        "AZURE_OPENAI_EMBEDDING_DEPLOYMENT",
+        "AZURE_OPENAI_EMBEDDING_MODEL_VERSION",
+        "AZURE_OPENAI_EMBEDDING_DIMENSION",
+        "AZURE_MEMFOREST_CONFIG_PATH",
+    ]
+    payload = {key: str(environ.get(key, "")) for key in keys}
+    return hashlib.sha256(
+        __import__("json").dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()

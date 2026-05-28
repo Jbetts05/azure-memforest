@@ -5,6 +5,7 @@ from pathlib import Path
 from src.evaluation.judge_variance import (
     build_judge_user_prompt,
     compute_existing_label_variance,
+    replay_samples_with_client,
     sample_judged_answers,
 )
 
@@ -42,3 +43,38 @@ def test_sample_judged_answers_builds_prompts_without_random_shape(tmp_path: Pat
     assert "Question: Where?" in prompt
     assert "Gold answer: Gold" in prompt
     assert "Candidate answer: Answer" in prompt
+
+
+def test_replay_samples_with_client_counts_disagreement() -> None:
+    class FakeChoices:
+        def __init__(self):
+            self.choices = [type("Choice", (), {"message": type("Message", (), {"content": '{"correct": false}'})()})]
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            return FakeChoices()
+
+    class FakeClient:
+        chat = type("Chat", (), {"completions": FakeCompletions()})()
+
+    samples = [
+        {
+            "source_file": "bench.csv",
+            "row_index": 0,
+            "method": "m",
+            "model_size": "4b",
+            "question_type": "type",
+            "qid": "q1",
+            "answer_column": "answer_1",
+            "judge_column": "judge_1",
+            "original_judge": True,
+            "judge_prompt": {"system": "s", "user": "u"},
+        }
+    ]
+
+    result, rows = replay_samples_with_client(samples, FakeClient(), deployment="judge")
+
+    assert result.valid_count == 1
+    assert result.disagreement_count == 1
+    assert result.disagreement_rate == 1.0
+    assert rows[0]["deployed_judge"] is False
