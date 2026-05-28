@@ -108,8 +108,8 @@ Current frozen-label variance baseline:
 
 Policy for the first cloud replay:
 
-- **Judge deployment replay gate:** replay the sampled judge prompts through the pinned judge deployment before cloud benchmark replay. The deployment replay disagreement rate against frozen labels must be no more than `0.05`. This is the current frozen-label noise floor rounded up with a small operational margin.
-- **Benchmark pass-rate gate:** cloud candidate `cumulative_pass_at@1` and `cumulative_pass_at@8` must not regress by more than `0.05` absolute for method/model rollups or per-question-type groups.
+- **Judge deployment replay gate:** replay the sampled judge prompts through the pinned judge deployment before cloud benchmark replay. The first approved-prompt replay produced `0.205` disagreement against the frozen labels, so the frozen labels must not be treated as same-judge ground truth for this approved prompt. Cloud parity must compare local and cloud candidate outputs judged by the same approved prompt/deployment.
+- **Benchmark pass-rate gate:** cloud candidate `cumulative_pass_at@1` and `cumulative_pass_at@8` must not regress by more than `0.05` absolute against a local baseline regenerated with the approved judge prompt/deployment for method/model rollups or per-question-type groups.
 - **Candidate-shape gate:** candidate CSVs must use the checked-in benchmark filenames and columns; candidate-only methods fail under `--strict-cloud-parity`.
 - **Rebaseline triggers:** any change to embedding deployment/model/version/dimension, chat/judge deployment/model/version, prompt templates, tree build configuration, extraction configuration, or materialization fingerprint format requires a new baseline capture and policy review before parity claims.
 - **Failure action:** any failed gate blocks production-readiness claims. It does not block development deployments marked as non-production smoke environments.
@@ -125,9 +125,31 @@ An initial 20-sample replay through `gpt-4-1-mini-dev` produced:
 - `disagreement_rate`: `0.35`
 - `invalid_count`: `0`
 
-This exceeds the provisional `0.05` judge deployment replay gate, so cloud parity claims remain blocked until the judge prompt/deployment is calibrated or the parity policy is revised before a full replay.
+The full approved-prompt 200-sample replay through `gpt-4-1-mini-dev` produced:
 
-The original judge prompt used to create the checked-in `judge_1..judge_8` labels is not present in this repository snapshot. Before using deployment replay as a production gate, recover that original judge prompt from the benchmark-generation environment or explicitly approve a new judge prompt/policy and regenerate the baseline labels.
+- `valid_count`: `200`
+- `disagreement_count`: `41`
+- `disagreement_rate`: `0.205`
+- `invalid_count`: `0`
+
+This confirms the approved prompt is not directly comparable to the frozen labels at the prior `0.05` gate. Cloud parity must therefore compare local and cloud candidates under the same approved judge prompt/deployment.
+
+The original judge prompt used to create the checked-in `judge_1..judge_8` labels is not present in this repository snapshot. The approved calibration path for this repository is to use the judge prompt in `src/evaluation/judge_variance.py` and treat deployment replay disagreement against the frozen labels as a policy calibration signal, not as proof of original-judge reproducibility.
+
+## Cloud replay plan
+
+The first cloud replay must run as a staged, resumable workflow:
+
+1. **Fixture selection:** use the checked-in benchmark CSVs as the source of questions/gold answers and retain their `method`, `model_size`, `question_type`, and `qid` keys.
+2. **Local baseline artifact:** use the latest `benchmark/baseline-captures/local-*` capture as the deterministic scoring-code baseline.
+3. **Cloud ingest:** for each benchmark subject/session fixture, submit ordered Service Bus jobs through the API or worker command surface and wait for committed manifests with snapshot hashes.
+4. **Cloud query:** issue cloud query requests with the same question order, `top_k`, and `max_facts` policy; persist returned answer, facts, trace id, forest version, and manifest fingerprint.
+5. **Judge replay:** judge local and cloud candidate answers with the same approved prompt/deployment in `src/evaluation/judge_variance.py`; do not compare new-prompt labels directly to the frozen labels except as a calibration diagnostic.
+6. **Candidate CSV:** emit per-question CSVs with the existing benchmark columns and cloud method labels mapped explicitly to the baseline method labels.
+7. **Diff gate:** run `benchmark_diff --strict-cloud-parity` over the candidate directory and fail on missing baseline keys, candidate-only keys, baseline checksum mismatch, or pass-rate regressions above policy tolerance.
+8. **Audit bundle:** keep manifest fingerprints, model deployment versions, judge replay outputs, trace ids, queue/DLQ counts, and cost/latency counters in the ignored capture directory.
+
+Cloud replay is not a production-readiness claim until every stage has a complete artifact and the policy gate passes.
 
 ## Current Phase 0 gate
 
