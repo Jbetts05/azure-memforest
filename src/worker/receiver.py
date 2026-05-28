@@ -96,12 +96,7 @@ class ServiceBusSessionReceiverLoop:
 
     async def process_next_session(self, *, stop_event: asyncio.Event | None = None) -> ReceiverLoopOutcome:
         try:
-            receiver = await _maybe_await(
-                self._client.accept_next_session(
-                    queue_name=self._config.queue_name,
-                    max_wait_time=self._config.session_accept_wait_seconds,
-                )
-            )
+            receiver = await self._accept_next_session()
         except Exception as exc:
             if _is_operation_timeout(exc):
                 return ReceiverLoopOutcome(action="idle", reason="no_session_available")
@@ -112,24 +107,29 @@ class ServiceBusSessionReceiverLoop:
             return ReceiverLoopOutcome(action="idle", reason="no_session_available")
 
         processed = 0
-        async with receiver:
-            await self._register_session_lock_renewal(receiver)
-            while processed < self._config.max_messages_per_session:
-                if stop_event is not None and stop_event.is_set():
-                    break
-                messages = await _maybe_await(
-                    receiver.receive_messages(
-                        max_message_count=1,
-                        max_wait_time=self._config.message_wait_seconds,
+        try:
+            async with receiver:
+                await self._register_session_lock_renewal(receiver)
+                while processed < self._config.max_messages_per_session:
+                    if stop_event is not None and stop_event.is_set():
+                        break
+                    messages = await _maybe_await(
+                        receiver.receive_messages(
+                            max_message_count=1,
+                            max_wait_time=self._config.message_wait_seconds,
+                        )
                     )
-                )
-                if not messages:
-                    break
-                message = messages[0]
-                outcome = await self._process_message(receiver, message)
-                processed += 1
-                if outcome.action == "abandon":
-                    break
+                    if not messages:
+                        break
+                    message = messages[0]
+                    outcome = await self._process_message(receiver, message)
+                    processed += 1
+                    if outcome.action == "abandon":
+                        break
+        except Exception as exc:
+            if processed == 0 and _is_operation_timeout(exc):
+                return ReceiverLoopOutcome(action="idle", reason="no_session_available")
+            raise
         return ReceiverLoopOutcome(action="processed", processed_count=processed)
 
     async def close(self) -> None:
@@ -150,6 +150,22 @@ class ServiceBusSessionReceiverLoop:
                 session,
                 max_lock_renewal_duration=self._config.session_lock_renewal_seconds,
             )
+        )
+
+    async def _accept_next_session(self) -> Any:
+        if hasattr(self._client, "accept_next_session"):
+            return await _maybe_await(
+                self._client.accept_next_session(
+                    queue_name=self._config.queue_name,
+                    max_wait_time=self._config.session_accept_wait_seconds,
+                )
+            )
+        from azure.servicebus import NEXT_AVAILABLE_SESSION
+
+        return self._client.get_queue_receiver(
+            queue_name=self._config.queue_name,
+            session_id=NEXT_AVAILABLE_SESSION,
+            max_wait_time=self._config.session_accept_wait_seconds,
         )
 
     async def _process_message(self, receiver: Any, message: Any) -> WorkerOutcome:

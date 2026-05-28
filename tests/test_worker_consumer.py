@@ -99,6 +99,16 @@ class FakeServiceBusClient:
         self.closed = True
 
 
+class FakeRealSdkServiceBusClient:
+    def __init__(self, receiver):
+        self.receiver = receiver
+        self.calls = []
+
+    def get_queue_receiver(self, *, queue_name, session_id, max_wait_time):
+        self.calls.append((queue_name, session_id, max_wait_time))
+        return self.receiver
+
+
 class FakeOperationTimeoutError(Exception):
     pass
 
@@ -368,6 +378,26 @@ async def test_receiver_loop_processes_session_messages_in_order() -> None:
     assert receiver.entered is True
     assert receiver.exited is True
     assert renewer.registered[0][1] is receiver.session
+
+
+@pytest.mark.asyncio
+async def test_receiver_loop_supports_real_sdk_get_queue_receiver_path() -> None:
+    envelope = _envelope()
+    store = await _store_with_job(envelope)
+    worker = ServiceBusWriteWorker(job_store=store, handler=RecordingHandler(), owner_id="worker-1")
+    receiver = FakeSessionReceiver([FakeAzureMessage(envelope.to_json().encode("utf-8"), message_id=envelope.job_id)])
+    client = FakeRealSdkServiceBusClient(receiver)
+    loop = ServiceBusSessionReceiverLoop(
+        servicebus_client=client,
+        worker=worker,
+        config=WorkerReceiverConfig(queue_name="writes", message_wait_seconds=0.1),
+    )
+
+    outcome = await loop.process_next_session()
+
+    assert outcome.processed_count == 1
+    assert client.calls[0][0] == "writes"
+    assert receiver.completed == [envelope.job_id]
 
 
 @pytest.mark.asyncio
