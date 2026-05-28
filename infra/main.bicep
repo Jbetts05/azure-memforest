@@ -32,6 +32,9 @@ param deployWorker bool = false
 @description('Allow the worker entrypoint to connect to Service Bus. Keep false until smoke testing is approved.')
 param workerFactoryReady bool = false
 
+@description('Enable development header auth for the API. Dev only; use Entra for production.')
+param enableDevHeaderAuth bool = false
+
 @minValue(1)
 @description('Minimum worker replicas when deployWorker=true. Scale-to-zero requires a validated managed-identity Service Bus scaler.')
 param workerMinReplicas int = 1
@@ -677,6 +680,10 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
             {
               name: 'AZURE_OPENAI_EMBEDDING_MODEL_VERSION'
               value: openAiEmbeddingModelVersion
+            }
+            {
+              name: 'AZURE_MEMFOREST_DEV_AUTH'
+              value: string(enableDevHeaderAuth)
             }
           ]
           resources: {
