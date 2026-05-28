@@ -53,7 +53,7 @@ def create_app(
         lifespan=lifespan,
     )
     app.add_middleware(RequestIdMiddleware)
-    app.state.auth_provider = auth_provider or entra_auth_provider_from_env(os.environ) or _dev_auth_provider_from_env(os.environ)
+    app.state.auth_provider = auth_provider or _dev_auth_provider_from_env(os.environ) or entra_auth_provider_from_env(os.environ)
     job_store = job_store_from_env(os.environ)
     command_service = service_bus_command_service_from_env(os.environ)
     app.state.memory_command_service = (
