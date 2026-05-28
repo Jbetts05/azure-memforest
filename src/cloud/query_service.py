@@ -6,6 +6,7 @@ import asyncio
 import math
 import os
 import uuid
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -17,9 +18,13 @@ from src.cloud.cosmos_browse_embeddings import CosmosBrowseEmbeddingStore
 from src.cloud.cosmos_facts import CosmosFactStore
 from src.cloud.cosmos_manifests import CosmosManifestStore, ForestManifest
 from src.cloud.cosmos_source import CosmosTreeNodeStore
+from src.cloud.cosmos_traces import trace_recorder_from_database
 from src.cloud.query_prerequisites import CloudQueryNotReady
+from src.observability import TraceEvent, TraceEventType
 from src.service.auth import ActorContext
 from src.service.schemas import MemoryFactResponse, QueryRequest, QueryResponse
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +46,7 @@ class CloudMemoryQueryService:
         recall_index: Any,
         model_client: Any,
         config: CloudQueryConfig,
+        trace_recorder: Any | None = None,
     ) -> None:
         self._manifest_store_factory = manifest_store_factory
         self._fact_store_factory = fact_store_factory
@@ -49,9 +55,20 @@ class CloudMemoryQueryService:
         self._recall_index = recall_index
         self._model_client = model_client
         self._config = config
+        self._trace_recorder = trace_recorder
 
     async def query(self, actor: ActorContext, *, user_id: str, request: QueryRequest) -> QueryResponse:
         tenant_id = actor.tenant.tenant_id
+        query_id = str(uuid.uuid4())
+        events: list[TraceEvent] = [
+            TraceEvent(
+                query_id=query_id,
+                event_type=TraceEventType.QUERY_STARTED,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                attributes={"trace_requested": bool(request.trace_requested)},
+            )
+        ]
         manifest_store = self._manifest_store_factory(tenant_id, user_id)
         manifest = await manifest_store.latest_committed()
         if manifest is None:
@@ -64,6 +81,15 @@ class CloudMemoryQueryService:
 
         query_embedding = _normalize((await asyncio.to_thread(self._model_client.embed_texts, [request.question]))[0])
         recall_top_k = request.top_k or self._config.default_recall_top_k
+        events.append(
+            TraceEvent(
+                query_id=query_id,
+                event_type=TraceEventType.RECALL_SEARCH_STARTED,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                attributes={"forest_version": manifest.forest_version, "recall_top_k": recall_top_k},
+            )
+        )
         candidates = await asyncio.to_thread(
             self._recall_index.search,
             query_embedding,
@@ -76,13 +102,44 @@ class CloudMemoryQueryService:
             },
         )
         if not candidates:
-            return QueryResponse(query_id=str(uuid.uuid4()), facts=[])
+            await self._record_trace(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                query_id=query_id,
+                forest_version=manifest.forest_version,
+                events=events
+                + [
+                    TraceEvent(
+                        query_id=query_id,
+                        event_type=TraceEventType.QUERY_COMPLETED,
+                        tenant_id=tenant_id,
+                        user_id=user_id,
+                        attributes={"fact_count": 0, "recall_count": 0},
+                    )
+                ],
+            )
+            return QueryResponse(query_id=query_id, facts=[])
 
         tree_store = self._tree_node_store_factory(tenant_id, user_id, manifest.forest_version)
         embedding_store = self._browse_embedding_store_factory(tenant_id, user_id, manifest.forest_version, embedding_model_version)
         fact_ids: list[str] = []
         seen: set[str] = set()
         for candidate in candidates:
+            events.append(
+                TraceEvent(
+                    query_id=query_id,
+                    event_type=TraceEventType.RECALL_TREE_SELECTED,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    tree_id=candidate.tree_id,
+                    node_id=candidate.node_id,
+                    score=candidate.score,
+                    attributes={
+                        "tree_type": candidate.tree_type or "",
+                        "forest_version": candidate.forest_version or manifest.forest_version,
+                    },
+                )
+            )
             for fact_id in await _browse_tree(
                 tree_store,
                 embedding_store,
@@ -96,11 +153,36 @@ class CloudMemoryQueryService:
                     fact_ids.append(fact_id)
 
         facts = await self._fact_store_factory(tenant_id, user_id).get_facts(fact_ids)
+        events.append(
+            TraceEvent(
+                query_id=query_id,
+                event_type=TraceEventType.FACTS_LOADED,
+                tenant_id=tenant_id,
+                user_id=user_id,
+                attributes={"fact_count": len(facts), "raw_fact_id_count": len(fact_ids)},
+            )
+        )
         max_facts = request.max_facts if request.max_facts is not None else self._config.default_max_facts
         if max_facts and max_facts > 0:
             facts = facts[:max_facts]
+        await self._record_trace(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            query_id=query_id,
+            forest_version=manifest.forest_version,
+            events=events
+            + [
+                TraceEvent(
+                    query_id=query_id,
+                    event_type=TraceEventType.QUERY_COMPLETED,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    attributes={"fact_count": len(facts), "recall_count": len(candidates)},
+                )
+            ],
+        )
         return QueryResponse(
-            query_id=str(uuid.uuid4()),
+            query_id=query_id,
             facts=[
                 MemoryFactResponse(
                     fact_id=fact.fact_id,
@@ -112,6 +194,20 @@ class CloudMemoryQueryService:
                 for fact in facts
             ],
         )
+
+    async def _record_trace(self, *, tenant_id: str, user_id: str, query_id: str, forest_version: str, events: list[TraceEvent]) -> None:
+        if self._trace_recorder is None:
+            return
+        try:
+            await self._trace_recorder.record_events(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                query_id=query_id,
+                forest_version=forest_version,
+                events=events,
+            )
+        except Exception:
+            log.exception("failed to persist cloud query trace")
 
 
 async def _browse_tree(
@@ -201,6 +297,7 @@ def cloud_query_service_from_env(environ: dict[str, str] | None = None) -> Cloud
         config=CloudQueryConfig(
             embedding_model_version=values["AZURE_OPENAI_EMBEDDING_MODEL_VERSION"],
         ),
+        trace_recorder=trace_recorder_from_database(database),
     )
 
 

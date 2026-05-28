@@ -75,6 +75,15 @@ class FakeFactStore:
         ]
 
 
+class FakeTraceRecorder:
+    def __init__(self):
+        self.calls = []
+
+    async def record_events(self, **kwargs):
+        self.calls.append(kwargs)
+        return kwargs
+
+
 def _manifest():
     return ForestManifest(
         manifest_id="manifest-1",
@@ -88,7 +97,7 @@ def _manifest():
     )
 
 
-def _service(manifest=None, recall=None):
+def _service(manifest=None, recall=None, trace_recorder=None):
     return CloudMemoryQueryService(
         manifest_store_factory=lambda tenant_id, user_id: FakeManifestStore(manifest),
         fact_store_factory=lambda tenant_id, user_id: FakeFactStore(),
@@ -97,6 +106,7 @@ def _service(manifest=None, recall=None):
         recall_index=recall or FakeRecallIndex(),
         model_client=FakeModel(),
         config=CloudQueryConfig(embedding_model_version="embed-v1", default_beam_width=2),
+        trace_recorder=trace_recorder,
     )
 
 
@@ -126,3 +136,24 @@ async def test_cloud_query_filters_recall_by_latest_manifest_and_embedding_model
         "embedding_model_version": "embed-v1",
     }
     assert [fact.fact_id for fact in response.facts] == ["fact-a"]
+
+
+@pytest.mark.asyncio
+async def test_cloud_query_records_safe_trace_events() -> None:
+    recorder = FakeTraceRecorder()
+    response = await _service(_manifest(), trace_recorder=recorder).query(
+        ActorContext(actor_id="user-1", tenant=TenantContext("tenant-1")),
+        user_id="user-1",
+        request=QueryRequest(question="Where?", trace_requested=True),
+    )
+
+    assert recorder.calls
+    call = recorder.calls[0]
+    assert call["query_id"] == response.query_id
+    assert call["forest_version"] == "v1"
+    event_types = [str(event.event_type) for event in call["events"]]
+    assert "query_started" in event_types
+    assert "recall_search_started" in event_types
+    assert "facts_loaded" in event_types
+    assert "query_completed" in event_types
+    assert all("Where?" not in str(event.attributes) for event in call["events"])
