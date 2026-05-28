@@ -31,6 +31,9 @@ class FakeModel:
     def embed_texts(self, texts):
         return [[1.0, 0.0]]
 
+    def generate_json(self, **kwargs):
+        return {"answer": "Alice moved to Seattle.", "reason": "The retrieved memory says Alice moved to Seattle."}
+
 
 class FakeTreeStore:
     def __init__(self):
@@ -136,6 +139,8 @@ async def test_cloud_query_filters_recall_by_latest_manifest_and_embedding_model
         "embedding_model_version": "embed-v1",
     }
     assert [fact.fact_id for fact in response.facts] == ["fact-a"]
+    assert response.answer == "Alice moved to Seattle."
+    assert response.reason == "The retrieved memory says Alice moved to Seattle."
 
 
 @pytest.mark.asyncio
@@ -155,5 +160,6 @@ async def test_cloud_query_records_safe_trace_events() -> None:
     assert "query_started" in event_types
     assert "recall_search_started" in event_types
     assert "facts_loaded" in event_types
+    assert "answer_generated" in event_types
     assert "query_completed" in event_types
     assert all("Where?" not in str(event.attributes) for event in call["events"])

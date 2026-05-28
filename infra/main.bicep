@@ -35,6 +35,12 @@ param workerFactoryReady bool = false
 @description('Enable development header auth for the API. Dev only; use Entra for production.')
 param enableDevHeaderAuth bool = false
 
+@description('Microsoft Entra tenant ID for API bearer-token validation. Leave empty to disable Entra auth.')
+param entraTenantId string = ''
+
+@description('Comma-separated accepted API audiences for Entra bearer-token validation.')
+param entraAudiences string = ''
+
 @minValue(1)
 @description('Minimum worker replicas when deployWorker=true. Scale-to-zero requires a validated managed-identity Service Bus scaler.')
 param workerMinReplicas int = 1
@@ -684,6 +690,14 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
             {
               name: 'AZURE_MEMFOREST_DEV_AUTH'
               value: string(enableDevHeaderAuth)
+            }
+            {
+              name: 'ENTRA_TENANT_ID'
+              value: entraTenantId
+            }
+            {
+              name: 'ENTRA_AUDIENCES'
+              value: entraAudiences
             }
           ]
           resources: {

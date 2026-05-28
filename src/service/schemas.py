@@ -50,6 +50,8 @@ class MemoryFactResponse(BaseModel):
 class QueryResponse(BaseModel):
     query_id: str
     status: Literal["succeeded"] = "succeeded"
+    answer: str | None = None
+    reason: str | None = None
     facts: list[MemoryFactResponse] = Field(default_factory=list)
 
 

@@ -21,6 +21,7 @@ from src.cloud.cosmos_source import CosmosTreeNodeStore
 from src.cloud.cosmos_traces import trace_recorder_from_database
 from src.cloud.query_prerequisites import CloudQueryNotReady
 from src.observability import TraceEvent, TraceEventType
+from src.prompt.answer_prompts import ANSWER_SYSTEM, build_answer_user_message
 from src.service.auth import ActorContext
 from src.service.schemas import MemoryFactResponse, QueryRequest, QueryResponse
 
@@ -33,6 +34,7 @@ class CloudQueryConfig:
     default_beam_width: int = 8
     default_max_facts: int = 20
     embedding_model_version: str = ""
+    compose_answer: bool = True
 
 
 class CloudMemoryQueryService:
@@ -165,6 +167,17 @@ class CloudMemoryQueryService:
         max_facts = request.max_facts if request.max_facts is not None else self._config.default_max_facts
         if max_facts and max_facts > 0:
             facts = facts[:max_facts]
+        answer, reason = await self._compose_answer(request.question, facts)
+        if answer:
+            events.append(
+                TraceEvent(
+                    query_id=query_id,
+                    event_type=TraceEventType.ANSWER_GENERATED,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    attributes={"answer_length": len(answer), "fact_count": len(facts)},
+                )
+            )
         await self._record_trace(
             tenant_id=tenant_id,
             user_id=user_id,
@@ -183,6 +196,8 @@ class CloudMemoryQueryService:
         )
         return QueryResponse(
             query_id=query_id,
+            answer=answer,
+            reason=reason,
             facts=[
                 MemoryFactResponse(
                     fact_id=fact.fact_id,
@@ -194,6 +209,25 @@ class CloudMemoryQueryService:
                 for fact in facts
             ],
         )
+
+    async def _compose_answer(self, question: str, facts: list[Any]) -> tuple[str | None, str | None]:
+        if not self._config.compose_answer or not facts:
+            return None, None
+        context = _facts_context(facts)
+        try:
+            payload = await asyncio.to_thread(
+                self._model_client.generate_json,
+                system_prompt=ANSWER_SYSTEM,
+                user_prompt=build_answer_user_message(question, context),
+                model_name="answer",
+                step_label="cloud_query_answer",
+            )
+        except Exception:
+            log.exception("failed to compose cloud query answer")
+            return None, None
+        answer = str(payload.get("answer") or "").strip()
+        reason = str(payload.get("reason") or "").strip()
+        return (answer or None), (reason or None)
 
     async def _record_trace(self, *, tenant_id: str, user_id: str, query_id: str, forest_version: str, events: list[TraceEvent]) -> None:
         if self._trace_recorder is None:
@@ -308,3 +342,13 @@ def _normalize(vec: list[float]) -> list[float]:
 
 def _dot(left: list[float], right: list[float]) -> float:
     return sum(a * b for a, b in zip(left, right))
+
+
+def _facts_context(facts: list[Any]) -> str:
+    lines = []
+    for index, fact in enumerate(facts, start=1):
+        prefix = ""
+        if getattr(fact, "time_start", None) is not None:
+            prefix = f"[time_start={fact.time_start}] "
+        lines.append(f"{index}. {prefix}{fact.fact_text}")
+    return "\n".join(lines)
