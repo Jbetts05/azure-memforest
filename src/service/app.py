@@ -139,4 +139,7 @@ def _cloud_query_service_from_env(environ):
 def _dev_auth_provider_from_env(environ):
     if str(environ.get("AZURE_MEMFOREST_DEV_AUTH", "")).strip().lower() not in {"1", "true", "yes", "on"}:
         return None
-    return DevHeaderAuthProvider(environment=str(environ.get("AZURE_MEMFOREST_ENV", "local")))
+    environment = str(environ.get("AZURE_MEMFOREST_ENV", "")).strip()
+    if not environment:
+        raise ValueError("AZURE_MEMFOREST_ENV must be set when AZURE_MEMFOREST_DEV_AUTH is enabled.")
+    return DevHeaderAuthProvider(environment=environment)

@@ -362,6 +362,13 @@ def test_dev_header_auth_provider_refuses_production_environment() -> None:
         DevHeaderAuthProvider(environment="production")
 
 
+def test_dev_header_auth_requires_explicit_environment() -> None:
+    from src.service.app import _dev_auth_provider_from_env
+
+    with pytest.raises(ValueError, match="AZURE_MEMFOREST_ENV"):
+        _dev_auth_provider_from_env({"AZURE_MEMFOREST_DEV_AUTH": "true"})
+
+
 def test_auth_dependency_fails_closed_when_not_configured() -> None:
     app = create_app()
 
