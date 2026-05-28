@@ -46,6 +46,8 @@ The initial dev hosting foundation has been deployed to:
 | Service Bus namespace | `memforestexamplesb` |
 | Writes queue | `memforest-writes` |
 | Azure OpenAI account | generated as `memforestexampleai<unique>` |
+| Chat deployment | `gpt-4o-mini-dev` (`gpt-4o-mini`, `2024-07-18`) |
+| Embedding deployment | `text-embedding-3-small-dev` (`text-embedding-3-small`, version `1`, dimension `1536`) |
 
 Azure AI Search is deployed in `eastus` for the current dev environment because `eastus2` returned `InsufficientResourcesAvailable` for new Search services on 2026-05-27. Revisit this topology before production.
 

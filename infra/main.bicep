@@ -63,6 +63,33 @@ param searchRecallIndexName string = 'memforest-recall'
 @description('Service Bus queue name for ordered write jobs.')
 param serviceBusWritesQueueName string = 'memforest-writes'
 
+@description('Azure OpenAI chat model deployment name.')
+param openAiChatDeploymentName string = 'gpt-4o-mini-dev'
+
+@description('Azure OpenAI chat model name.')
+param openAiChatModelName string = 'gpt-4o-mini'
+
+@description('Azure OpenAI chat model version.')
+param openAiChatModelVersion string = '2024-07-18'
+
+@description('Azure OpenAI chat deployment capacity in thousands of TPM.')
+param openAiChatCapacity int = 10
+
+@description('Azure OpenAI embedding deployment name.')
+param openAiEmbeddingDeploymentName string = 'text-embedding-3-small-dev'
+
+@description('Azure OpenAI embedding model name.')
+param openAiEmbeddingModelName string = 'text-embedding-3-small'
+
+@description('Azure OpenAI embedding model version.')
+param openAiEmbeddingModelVersion string = '1'
+
+@description('Azure OpenAI embedding dimension.')
+param openAiEmbeddingDimension int = 1536
+
+@description('Azure OpenAI embedding deployment capacity in thousands of TPM.')
+param openAiEmbeddingCapacity int = 50
+
 var normalizedName = toLower(replace('${appName}-${environmentName}', '_', '-'))
 var acrName = replace(take('${replace(normalizedName, '-', '')}acr', 50), '_', '')
 var cosmosName = take('${replace(normalizedName, '-', '')}cosmos', 44)
@@ -435,6 +462,41 @@ resource openAiUserAssignment 'Microsoft.Authorization/roleAssignments@2022-04-0
   }
 }
 
+resource openAiChatDeployment 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = {
+  name: openAiChatDeploymentName
+  parent: openAiAccount
+  sku: {
+    name: 'Standard'
+    capacity: openAiChatCapacity
+  }
+  properties: {
+    model: {
+      format: 'OpenAI'
+      name: openAiChatModelName
+      version: openAiChatModelVersion
+    }
+  }
+}
+
+resource openAiEmbeddingDeployment 'Microsoft.CognitiveServices/accounts/deployments@2024-10-01' = {
+  name: openAiEmbeddingDeploymentName
+  parent: openAiAccount
+  sku: {
+    name: 'Standard'
+    capacity: openAiEmbeddingCapacity
+  }
+  properties: {
+    model: {
+      format: 'OpenAI'
+      name: openAiEmbeddingModelName
+      version: openAiEmbeddingModelVersion
+    }
+  }
+  dependsOn: [
+    openAiChatDeployment
+  ]
+}
+
 resource acrPullAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(containerRegistry.id, appIdentity.id, 'acr-pull')
   scope: containerRegistry
@@ -552,6 +614,54 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
               name: 'AZURE_OPENAI_USE_MANAGED_IDENTITY'
               value: 'true'
             }
+            {
+              name: 'AZURE_OPENAI_API_VERSION'
+              value: '2024-10-21'
+            }
+            {
+              name: 'AZURE_OPENAI_CHAT_DEPLOYMENT'
+              value: openAiChatDeployment.name
+            }
+            {
+              name: 'AZURE_OPENAI_EXTRACTION_DEPLOYMENT'
+              value: openAiChatDeployment.name
+            }
+            {
+              name: 'AZURE_OPENAI_DEDUPE_DEPLOYMENT'
+              value: openAiChatDeployment.name
+            }
+            {
+              name: 'AZURE_OPENAI_SUMMARIZATION_DEPLOYMENT'
+              value: openAiChatDeployment.name
+            }
+            {
+              name: 'AZURE_OPENAI_PLANNER_DEPLOYMENT'
+              value: openAiChatDeployment.name
+            }
+            {
+              name: 'AZURE_OPENAI_BROWSE_DEPLOYMENT'
+              value: openAiChatDeployment.name
+            }
+            {
+              name: 'AZURE_OPENAI_ANSWER_DEPLOYMENT'
+              value: openAiChatDeployment.name
+            }
+            {
+              name: 'AZURE_OPENAI_CHAT_MODEL_VERSION'
+              value: openAiChatModelVersion
+            }
+            {
+              name: 'AZURE_OPENAI_EMBEDDING_DEPLOYMENT'
+              value: openAiEmbeddingDeployment.name
+            }
+            {
+              name: 'AZURE_OPENAI_EMBEDDING_DIMENSION'
+              value: string(openAiEmbeddingDimension)
+            }
+            {
+              name: 'AZURE_OPENAI_EMBEDDING_MODEL_VERSION'
+              value: openAiEmbeddingModelVersion
+            }
           ]
           resources: {
             cpu: json('0.5')
@@ -596,6 +706,9 @@ output serviceBusFullyQualifiedNamespace string = '${serviceBusNamespace.name}.s
 output serviceBusWritesQueueName string = writesQueue.name
 output openAiAccountName string = openAiAccount.name
 output openAiEndpoint string = openAiAccount.properties.endpoint
+output openAiChatDeploymentName string = openAiChatDeployment.name
+output openAiEmbeddingDeploymentName string = openAiEmbeddingDeployment.name
+output openAiEmbeddingDimension int = openAiEmbeddingDimension
 
 @secure()
 output applicationInsightsConnectionString string = appInsights.properties.ConnectionString
