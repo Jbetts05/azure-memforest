@@ -1,274 +1,215 @@
-# MemForest
+# Azure-MemForest
 
-Supplementary artifact for the VLDB 2027 submission:
+![Animated Azure-MemForest chat memory flow](docs/assets/azure-memforest-chat.svg)
 
-**MemForest: An Efficient Agent Memory System with Hierarchical Temporal Indexing**
+Azure-MemForest is an enterprise Azure implementation of **MemForest**, a long-memory substrate for agents that turns conversations into durable, queryable memory forests.
 
-This repository provides the reference implementation, supplementary appendix, configuration files, prompts, and benchmark outputs used to support the results reported in the paper.
+The original MemForest research artifact showed how to preserve agent memory as canonical facts organized into temporal trees. This repository extends that idea into a cloud architecture with Azure Container Apps, Cosmos DB, Azure AI Search, Blob Storage, Service Bus, managed identity, Azure OpenAI, Entra authentication, explainability traces, and benchmark parity tooling.
 
-## Paper and Supplement
+## What Azure-MemForest does
 
-- Main submission PDF: `paper/MemForest_VLDB_Final_12.pdf`
-- Supplementary appendix: `paper/MemForest_Supplementary_Appendix.pdf`
+Azure-MemForest gives an agent a memory system that behaves less like a transcript dump and more like a living forest:
 
-The main paper follows the 12-page PVLDB research-track submission format. The supplementary appendix contains additional derivations, prompts, ablation details, extended result tables, and implementation notes.
+1. **Ingest conversations** as ordered turns.
+2. **Extract canonical facts** with stable IDs, time anchors, entities, topics, and semantic metadata.
+3. **Organize facts into MemTrees** across session, entity, and scene views.
+4. **Summarize internal tree nodes** so large memories can be searched coarsely before browsing finely.
+5. **Project committed memory generations** into cloud stores:
+   - Cosmos DB for source records, canonical facts, tree nodes, fact locations, manifests, jobs, leases, deletions, and traces.
+   - Azure AI Search for managed recall over committed tree roots.
+   - Blob Storage for restorable UserForest snapshots and fingerprint artifacts.
+   - Service Bus sessions for ordered per-user writes.
+6. **Query memory** by recalling trees, browsing tree nodes, loading facts, reranking with stored fact embeddings, and composing grounded answers.
+7. **Explain decisions** through safe trace records that expose recall, browse, rerank, and answer steps without raw prompt or memory payload leakage.
 
-## Artifact Scope
+## Why this exists
 
-This artifact is intended to support transparency and reproducibility of the paper results.
+Long-running agents need memory that is:
 
-It includes:
+- **Durable** across sessions and deployments.
+- **Scoped** per tenant and user.
+- **Updatable** without rebuilding everything.
+- **Queryable** without putting every past turn into the prompt.
+- **Explainable** enough to show which memories shaped an answer.
+- **Governed** by identity, audit, retention, and cloud operational controls.
 
-- Source code for the MemForest memory substrate and retrieval pipeline.
-- Configuration files for the 30B and 4B experimental settings.
-- Prompt templates used for extraction, summarization, browsing, answering, and judging.
-- Per-question benchmark outputs for LongMemEval-S and LoCoMo.
-- CSV files containing answer and judge results used to compute the reported pass@1 and pass@1--8 metrics.
-- Supplementary appendix with additional experimental details.
+Azure-MemForest is the path from a research artifact to a usable cloud memory service.
 
-Reviewers can either inspect the released benchmark outputs directly or run the system with their own OpenAI-compatible model endpoints.
+## Current status
 
-## Overview
+The dev Azure environment has been built and smoke-tested end to end.
 
-MemForest is a persistent memory system for long-context LLM agents. It converts dialogue sessions into canonical facts, organizes memory into scoped temporal trees, and retrieves evidence through tree-level recall followed by tree browsing.
+- API and worker run on Azure Container Apps.
+- Entra bearer-token auth is configured and verified.
+- The worker ingests Service Bus session messages and materializes committed memory generations.
+- Two same-user live ingests successfully committed generation 1 and generation 2.
+- Snapshot hydration preserved generation 1 while writing generation 2.
+- Cloud query returns grounded answers from latest committed memory.
+- Query trace readback is implemented.
+- Build provenance and dirty-tree image guards are in place.
+- Benchmark and parity tooling is present, including judge variance study support.
 
-The main design components are:
+The project has completed more than 190 tracked implementation tasks using a goal-driven, dynamically revised backlog.
 
-- **Canonical facts**: stable, temporally anchored write units extracted from dialogue.
-- **MemTree**: a scoped temporal index whose leaves preserve time-local evidence and whose internal nodes summarize contiguous intervals.
-- **Three complementary tree views**: session trees, entity trees, and scene trees.
-- **Localized maintenance**: updates refresh only affected tree paths and derived artifacts.
-- **Coarse-to-fine retrieval**: queries first recall relevant trees and then browse from interval summaries to leaf evidence.
+## Architecture
 
-## Repository Layout
+```text
+Client / Agent
+    |
+    |  Ingest / Query / Delete
+    v
+Azure Container Apps API
+    |
+    |  accepted write job
+    v
+Service Bus session queue  ----->  Worker Container App
+                                      |
+                                      | acquire per-user lease
+                                      | hydrate latest snapshot
+                                      | run MemForest core
+                                      | project committed generation
+                                      v
+       +----------------------+----------------------+----------------------+
+       |                      |                      |                      |
+   Cosmos DB              Azure AI Search        Blob Storage          Azure OpenAI
+   source of truth        tree-root recall       snapshots             extraction,
+   facts, trees,          vector index           fingerprint           summary,
+   manifests, jobs,                             artifacts              query,
+   leases, traces                                                      answer
+```
+
+### Write path
+
+The write worker is intentionally strict:
+
+1. Accept a Service Bus message scoped by `tenant_id:user_id`.
+2. Claim the job in Cosmos DB.
+3. Acquire a fenced per-user write lease.
+4. Read the latest committed manifest.
+5. Hydrate the previous UserForest snapshot from Blob Storage.
+6. Apply ingest or delete through the synchronous MemForest core.
+7. Project facts, trees, locations, embeddings, Search documents, summaries, snapshots, and fingerprints.
+8. Assert the lease is still current.
+9. Commit the new manifest.
+
+Only committed manifests are visible to query readers.
+
+### Query path
+
+Cloud query follows the MemForest paper semantics:
+
+1. Read the latest committed manifest.
+2. Embed the question with the configured Azure OpenAI embedding deployment.
+3. Recall candidate tree roots from Azure AI Search filtered by tenant, user, forest version, and embedding model version.
+4. Browse Cosmos-backed tree nodes using browse embeddings.
+5. Collect leaf fact IDs.
+6. Load canonical facts from Cosmos DB.
+7. Rerank facts using stored extraction-time fact embeddings.
+8. Compose a grounded answer and reason.
+9. Persist safe explainability traces.
+
+## Repository layout
 
 ```text
 .
-├── paper/                  # Main submission PDF and supplementary appendix
-├── benchmark/              # Per-question outputs and judge results
-├── src/                    # MemForest implementation
-│   ├── api/                # OpenAI-compatible chat and embedding clients
-│   ├── build/              # Tree construction, routing, and indexing
-│   ├── config/             # Configuration dataclasses and YAML files
-│   ├── extraction/         # Chunking, extraction, deduplication, fact store
-│   ├── forest/             # Multi-user MemForest coordinator
-│   ├── logger/             # Per-call and per-step logging
-│   ├── prompt/             # Prompt templates
-│   ├── query/              # Recall, planner, browser, reranker, answer pipeline
-│   └── utils/              # Shared dataclasses and utilities
-├── requirements.txt
-└── README.md
+├── benchmark/              # Frozen paper benchmark CSVs and baseline summary
+├── docs/                   # Azure design, auth, worker, security, production readiness docs
+├── infra/                  # Bicep infrastructure for Azure Container Apps and data plane
+├── paper/                  # Original MemForest paper assets
+├── scripts/                # Build/deploy helper scripts
+├── src/
+│   ├── build/              # MemTree construction, summaries, node indexes
+│   ├── cloud/              # Cosmos, Search, Blob, model, trace, query adapters
+│   ├── config/             # Dataclass-backed configuration
+│   ├── extraction/         # Chunk extraction and canonical fact management
+│   ├── forest/             # UserForest and MemForest orchestration
+│   ├── query/              # Local recall, browse, rerank, answer pipeline
+│   ├── service/            # FastAPI service, auth, routes, readiness, logging
+│   └── worker/             # Service Bus receive loop and materialization runtime
+└── tests/                  # Contract, service, worker, cloud, benchmark tests
 ```
 
-## Requirements
+## Azure components
 
-- Python 3.10+
-- FAISS
-- OpenAI-compatible chat-completion endpoint
-- OpenAI-compatible embedding endpoint
+| Concern | Azure service |
+| --- | --- |
+| API and worker hosting | Azure Container Apps |
+| Container images | Azure Container Registry |
+| Source of truth | Azure Cosmos DB |
+| Recall | Azure AI Search |
+| Snapshots and cold artifacts | Azure Blob Storage |
+| Ordered writes | Azure Service Bus sessions |
+| Model deployments | Azure OpenAI |
+| Identity | Microsoft Entra ID and managed identity |
+| Observability | Application Insights, Log Analytics, query trace records |
 
-Install dependencies with:
+## Development
 
-```bash
-python -m pip install -r requirements.txt
+Use the repo-local virtual environment.
+
+```powershell
+python -m venv .venv
+$env:PIP_REQUIRE_VIRTUALENV = "true"
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-The experiments in the paper use Qwen3 instruction models and Qwen3-Embedding-0.6B served through OpenAI-compatible APIs. Other compatible endpoints can be used by editing the configuration files.
+Run tests:
 
-## Configuration
-
-Default configurations are in `src/config/`:
-
-- `src/config/default.yaml`: Qwen3-30B setting
-- `src/config/default_4b.yaml`: Qwen3-4B setting
-
-Each configuration specifies:
-
-- chat-completion endpoint
-- embedding endpoint
-- model name
-- API key
-- extraction settings
-- tree summarization settings
-- query and browse settings
-- logging settings
-
-To use a different model server, edit the `url`, `model_name`, and `key` fields in the YAML files or override them through the environment variables consumed by `src/config/config.py`.
-
-## Quick Start
-
-The repository exposes a Python API. There is no separate HTTP server required.
-
-```python
-from src.forest.memforest import MemForest
-from src.config.config import load_default_config
-
-config = load_default_config()  # or load_default_config("default_4b")
-forest = MemForest("data/memforest", config=config)
-
-turns = [
-    {
-        "role": "user",
-        "content": "Bob moved from Boston to Davis in May 2023.",
-        "timestamp": "2023-05-01T00:00:00Z"
-    },
-    {
-        "role": "user",
-        "content": "Bob moved from Davis to Miami in July 2024.",
-        "timestamp": "2024-07-01T00:00:00Z"
-    }
-]
-
-forest.register_user("alice")
-forest.ingest_session("alice", "sess_001", turns)
-
-result = forest.query("alice", "Where did Bob live before moving to Miami?")
-for fact in result.top_facts:
-    print(fact.text)
-
-forest.save("alice")
+```powershell
+$env:PIP_REQUIRE_VIRTUALENV = "true"
+.\.venv\Scripts\python.exe -m pytest -q
 ```
 
-Parallel multi-user operations are also supported:
+Build a clean ACR image:
 
-```python
-forest.ingest_parallel([
-    {"user_id": "alice", "session_id": "s1", "turns": turns_a},
-    {"user_id": "bob", "session_id": "s1", "turns": turns_b},
-])
-
-forest.query_parallel([
-    {"user_id": "alice", "question": "..."},
-    {"user_id": "bob", "question": "..."},
-])
+```powershell
+.\scripts\build_acr.ps1
 ```
 
-## Runtime Data Layout
+The build script refuses dirty trees and stamps the image with Git SHA metadata.
 
-Runtime artifacts are written under the `snapshot_dir` passed to `MemForest`, with one subdirectory per user:
+## Deployment notes
 
-```text
-<snapshot_dir>/<user_id>/
-├── sqlite/        # Fact and turn store
-├── index/         # FAISS indexes and sidecar metadata
-├── trees/         # Serialized session/entity/scene trees
-└── logs/          # Retrieval traces and per-step API logs
-```
+Infrastructure is defined in `infra/main.bicep`.
 
-The persistent state consists of canonical facts, scope assignments, tree structure, and source-session references. Summaries, embeddings, and retrieval index rows are derived artifacts that can be regenerated from the persistent state.
+Important deployment switches:
 
-## Benchmark Outputs
+- `containerImage`: immutable image to deploy.
+- `deployWorker`: deploy the worker Container App.
+- `workerFactoryReady`: allow the worker to connect to Service Bus.
+- `enableDevHeaderAuth`: development-only header auth.
+- `entraTenantId` and `entraAudiences`: production bearer-token validation settings.
 
-Per-question benchmark outputs are provided under `benchmark/`. Each row contains the question, gold answer, model answer, and LLM-judge verdicts for repeated runs.
+Dev-header auth should remain disabled outside controlled smoke tests.
 
-| Benchmark | Model size | File |
-|---|---|---|
-| LoCoMo | Qwen3-30B | `benchmark/locomo_per_question_30b.csv` |
-| LoCoMo | Qwen3-4B | `benchmark/locomo_per_question_4b.csv` |
-| LongMemEval-S | Qwen3-30B | `benchmark/longmemeval_per_question_30b.csv` |
-| LongMemEval-S | Qwen3-4B | `benchmark/longmemeval_per_question_4b.csv` |
+## Benchmark and parity
 
-Expected columns:
+Azure-MemForest keeps the original benchmark CSVs and adds deterministic summary/diff tooling:
 
-```text
-method, model_size, question_type, qid, question, gold_answer,
-answer_1, ..., answer_8,
-judge_1, ..., judge_8
-```
+- `src.evaluation.benchmark_summary`
+- `src.evaluation.benchmark_diff`
+- `src.evaluation.judge_variance`
+- `src.evaluation.cloud_replay`
 
-The `judge_*` columns are binary correctness labels produced by the LLM judge. The paper reports pass@1 as the main metric and reports pass@1--8 curves in the supplementary appendix.
+Current policy:
 
-## Reproducing Accuracy Tables
+- Frozen benchmark labels are preserved for reproducibility.
+- New cloud parity must compare local and cloud candidates under the same approved judge prompt/deployment.
+- Candidate-only methods fail under strict parity.
+- Manifest fingerprints record model/config/code inputs for each committed generation.
 
-The reported accuracy numbers can be recomputed from the benchmark CSV files by aggregating the judge columns.
+## Applications
 
-For pass@1:
+Azure-MemForest can be used anywhere an agent needs durable, explainable, tenant-scoped memory:
 
-```python
-import pandas as pd
+- Customer support copilots that remember long-running customer histories.
+- Enterprise assistants that keep project, entity, and meeting memory over months.
+- Research agents that preserve evolving findings and evidence trails.
+- Personal productivity agents with controlled memory retention and deletion.
+- Multi-agent systems that need shared, auditable memory state.
+- Regulated domain assistants where retrieval must be explainable and deletions must be enforceable.
 
-df = pd.read_csv("benchmark/longmemeval_per_question_30b.csv")
-score = df.groupby("method")["judge_1"].mean() * 100
-print(score.sort_values(ascending=False))
-```
+## Original research artifact
 
-For pass@8:
+The original MemForest paper assets remain in `paper/`, and benchmark CSVs remain in `benchmark/`. Azure-MemForest preserves the research behavior contract while adding cloud durability, identity, operational readiness, and deployment scaffolding.
 
-```python
-judge_cols = [f"judge_{i}" for i in range(1, 9)]
-df["pass_at_8"] = df[judge_cols].max(axis=1)
-score = df.groupby("method")["pass_at_8"].mean() * 100
-print(score.sort_values(ascending=False))
-```
-
-For per-category accuracy:
-
-```python
-score = (
-    df.groupby(["method", "question_type"])["judge_1"]
-      .mean()
-      .mul(100)
-      .reset_index()
-)
-print(score)
-```
-
-## Reproducing System Runs
-
-A full end-to-end rerun requires:
-
-- the original LongMemEval-S and LoCoMo benchmark data;
-- OpenAI-compatible endpoints for the chat model and embedding model;
-- sufficient GPU resources for serving the selected models;
-- the configuration files in `src/config/`.
-
-The main paper uses:
-
-- Qwen3-30B-A3B-Instruct-2507 and Qwen3-4B-Instruct-2507 as answer/build models;
-- Qwen3-Embedding-0.6B as the embedding model;
-- DeepSeek-V3.2 as the LLM judge;
-- vLLM with FlashAttention for model serving.
-
-Because full benchmark reruns depend on model-serving infrastructure and external benchmark licenses, this repository provides the per-question outputs used in the paper so that the reported tables can be independently checked from the released CSV files.
-
-## Module Overview
-
-- `src/api/`: OpenAI-compatible wrappers for chat completion and embedding, with optional API-call logging.
-- `src/build/`: tree construction, session/entity/scene routing, summary caching, tree primitives, tree storage, and FAISS node indexing.
-- `src/config/`: YAML loading and typed configuration dataclasses.
-- `src/extraction/`: chunking, extraction orchestration, embedding-based deduplication, and fact-store management.
-- `src/forest/`: public MemForest coordinator, per-user forest state, and forest merge utilities.
-- `src/logger/`: API-call latency/token logging and extraction-stage logging.
-- `src/prompt/`: prompt builders for extraction, deduplication, tree summarization, answer generation, and judging.
-- `src/query/`: forest recall, optional planner, tree browser, reranker, and answer pipeline.
-- `src/utils/`: shared dataclasses, time helpers, and text utilities.
-
-## Notes for Reviewers
-
-The fastest way to verify the main reported accuracy numbers is to inspect the CSV files in `benchmark/` and recompute pass@1 or pass@8 using the snippets above.
-
-The fastest way to inspect the system implementation is to start from:
-
-- `src/forest/memforest.py`: public API and multi-user coordination
-- `src/extraction/pipeline.py`: parallel extraction pipeline
-- `src/build/tree_builder.py`: MemTree construction and refresh
-- `src/query/pipeline.py`: recall, browse, rerank, and answer workflow
-- `src/forest/forest_merge.py`: migration and merge support
-
-## Reproducibility Status
-
-The artifact supports three levels of reproducibility:
-
-1. **Direct result verification**: use the released CSV files in `benchmark/` to recompute the reported pass@1 and pass@8 numbers.
-2. **Pipeline inspection**: inspect the source code, prompts, configurations, and logging utilities.
-3. **Full rerun**: rerun the system with compatible model-serving infrastructure and the original benchmark data.
-
-The first level is lightweight and does not require GPUs. The full rerun requires external model-serving resources.
-
-## License
-
-This artifact is released for academic review and research use. Please see `LICENSE` for details.
-
-## Citation
-
-If this work is accepted, please cite the camera-ready PVLDB version. A BibTeX entry will be added after publication.

@@ -1,0 +1,127 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="360" viewBox="0 0 980 360" role="img" aria-labelledby="title desc">
+  <title id="title">Azure-MemForest chat turns into memory trees</title>
+  <desc id="desc">Animated diagram of a chat interface feeding canonical facts into session, entity, and scene memory trees, then returning a grounded answer.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#071827"/>
+      <stop offset="50%" stop-color="#0b2540"/>
+      <stop offset="100%" stop-color="#102f4f"/>
+    </linearGradient>
+    <linearGradient id="azure" x1="0" x2="1">
+      <stop offset="0%" stop-color="#48c6ef"/>
+      <stop offset="100%" stop-color="#0078d4"/>
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <style>
+      .label { font: 600 15px Segoe UI, Arial, sans-serif; fill: #eaf6ff; }
+      .small { font: 12px Segoe UI, Arial, sans-serif; fill: #b9daf2; }
+      .tiny { font: 11px Segoe UI, Arial, sans-serif; fill: #8fb8d8; }
+      .panel { fill: rgba(255,255,255,.07); stroke: rgba(255,255,255,.16); stroke-width: 1.2; }
+      .bubbleUser { fill: #0e6eb8; }
+      .bubbleAgent { fill: #123b5d; }
+      .treeLine { stroke: #7dd3fc; stroke-width: 2; stroke-linecap: round; opacity: .75; }
+      .treeNode { fill: #38bdf8; stroke: #e0f2fe; stroke-width: 1.4; }
+      .fact { fill: #22c55e; stroke: #dcfce7; stroke-width: 1.2; }
+      .pulse { animation: pulse 2.4s ease-in-out infinite; transform-origin: center; }
+      .float { animation: float 4s ease-in-out infinite; }
+      .dash { stroke-dasharray: 10 8; animation: dash 3s linear infinite; }
+      .fade1 { animation: fade 6s ease-in-out infinite; }
+      .fade2 { animation: fade 6s ease-in-out infinite 1.2s; opacity: .25; }
+      .fade3 { animation: fade 6s ease-in-out infinite 2.4s; opacity: .25; }
+      @keyframes pulse { 0%,100% { r: 7; opacity: .7; } 50% { r: 11; opacity: 1; } }
+      @keyframes float { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-8px); } }
+      @keyframes dash { to { stroke-dashoffset: -72; } }
+      @keyframes fade { 0%,100% { opacity: .25; } 45%,65% { opacity: 1; } }
+    </style>
+  </defs>
+
+  <rect width="980" height="360" rx="24" fill="url(#bg)"/>
+  <circle cx="850" cy="70" r="90" fill="#1d9bf0" opacity=".12"/>
+  <circle cx="120" cy="300" r="110" fill="#22c55e" opacity=".08"/>
+
+  <text x="36" y="42" class="label" font-size="24">Azure-MemForest</text>
+  <text x="36" y="65" class="small">chat memory becomes durable session, entity, and scene trees</text>
+
+  <g class="float">
+    <rect x="36" y="92" width="255" height="210" rx="18" class="panel"/>
+    <text x="58" y="122" class="label">Agent chat</text>
+    <rect x="58" y="142" width="164" height="34" rx="15" class="bubbleUser"/>
+    <text x="74" y="164" class="small" fill="#fff">Alice moved to Seattle</text>
+    <rect x="94" y="187" width="166" height="34" rx="15" class="bubbleAgent"/>
+    <text x="110" y="209" class="small">I will remember that</text>
+    <rect x="58" y="232" width="188" height="34" rx="15" class="bubbleUser"/>
+    <text x="74" y="254" class="small" fill="#fff">Alice adopted Pixel</text>
+  </g>
+
+  <path d="M294 195 C345 195 348 195 398 195" fill="none" stroke="url(#azure)" stroke-width="4" class="dash"/>
+  <circle cx="326" cy="195" r="7" class="pulse fact"/>
+  <text x="318" y="176" class="tiny">extract</text>
+
+  <g>
+    <rect x="398" y="92" width="184" height="210" rx="18" class="panel"/>
+    <text x="420" y="122" class="label">Canonical facts</text>
+    <g class="fade1">
+      <rect x="420" y="145" width="136" height="28" rx="14" class="fact"/>
+      <text x="435" y="164" class="tiny" fill="#052e16">moved_to: Seattle</text>
+    </g>
+    <g class="fade2">
+      <rect x="420" y="188" width="136" height="28" rx="14" class="fact"/>
+      <text x="435" y="207" class="tiny" fill="#052e16">pet_name: Pixel</text>
+    </g>
+    <g class="fade3">
+      <rect x="420" y="231" width="136" height="28" rx="14" class="fact"/>
+      <text x="435" y="250" class="tiny" fill="#052e16">time: 2024-2025</text>
+    </g>
+  </g>
+
+  <path d="M584 195 C625 145 640 145 680 145" fill="none" stroke="#7dd3fc" stroke-width="3" class="dash"/>
+  <path d="M584 195 C625 195 640 195 680 195" fill="none" stroke="#7dd3fc" stroke-width="3" class="dash"/>
+  <path d="M584 195 C625 245 640 245 680 245" fill="none" stroke="#7dd3fc" stroke-width="3" class="dash"/>
+
+  <g filter="url(#glow)">
+    <text x="680" y="104" class="label">MemTrees</text>
+    <g transform="translate(704 126)">
+      <text x="-24" y="-8" class="tiny">session</text>
+      <line x1="42" y1="18" x2="18" y2="54" class="treeLine"/>
+      <line x1="42" y1="18" x2="68" y2="54" class="treeLine"/>
+      <circle cx="42" cy="18" r="8" class="treeNode pulse"/>
+      <circle cx="18" cy="54" r="7" class="treeNode"/>
+      <circle cx="68" cy="54" r="7" class="treeNode"/>
+    </g>
+    <g transform="translate(704 176)">
+      <text x="-24" y="-8" class="tiny">entity</text>
+      <line x1="42" y1="18" x2="20" y2="54" class="treeLine"/>
+      <line x1="42" y1="18" x2="64" y2="54" class="treeLine"/>
+      <line x1="20" y1="54" x2="8" y2="86" class="treeLine"/>
+      <circle cx="42" cy="18" r="8" class="treeNode pulse"/>
+      <circle cx="20" cy="54" r="7" class="treeNode"/>
+      <circle cx="64" cy="54" r="7" class="treeNode"/>
+      <circle cx="8" cy="86" r="6" class="fact"/>
+    </g>
+    <g transform="translate(704 245)">
+      <text x="-24" y="-8" class="tiny">scene</text>
+      <line x1="42" y1="18" x2="18" y2="54" class="treeLine"/>
+      <line x1="42" y1="18" x2="70" y2="54" class="treeLine"/>
+      <circle cx="42" cy="18" r="8" class="treeNode pulse"/>
+      <circle cx="18" cy="54" r="7" class="treeNode"/>
+      <circle cx="70" cy="54" r="7" class="treeNode"/>
+    </g>
+  </g>
+
+  <path d="M804 195 C842 195 854 195 890 195" fill="none" stroke="url(#azure)" stroke-width="4" class="dash"/>
+  <g>
+    <rect x="830" y="92" width="116" height="210" rx="18" class="panel"/>
+    <text x="852" y="122" class="label">Answer</text>
+    <circle cx="888" cy="158" r="20" fill="url(#azure)" opacity=".9" class="pulse"/>
+    <text x="854" y="207" class="small">Recall trees</text>
+    <text x="854" y="230" class="small">Browse leaves</text>
+    <text x="854" y="253" class="small">Return facts</text>
+    <text x="854" y="276" class="small">Explain trace</text>
+  </g>
+</svg>
