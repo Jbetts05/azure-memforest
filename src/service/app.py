@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 
 from src import __version__
 from src.service.auth import AuthError, AuthProvider
+from src.service.auth import DevHeaderAuthProvider
 from src.service.azure_readiness import build_azure_readiness_checks
 from src.cloud.cosmos_jobs import CosmosJobStatusService, job_store_from_env
 from src.service.entra_auth import entra_auth_provider_from_env
@@ -51,7 +52,7 @@ def create_app(
         lifespan=lifespan,
     )
     app.add_middleware(RequestIdMiddleware)
-    app.state.auth_provider = auth_provider or entra_auth_provider_from_env(os.environ)
+    app.state.auth_provider = auth_provider or entra_auth_provider_from_env(os.environ) or _dev_auth_provider_from_env(os.environ)
     job_store = job_store_from_env(os.environ)
     command_service = service_bus_command_service_from_env(os.environ)
     app.state.memory_command_service = (
@@ -133,3 +134,9 @@ def _cloud_query_service_from_env(environ):
     from src.cloud.query_service import cloud_query_service_from_env
 
     return cloud_query_service_from_env(environ)
+
+
+def _dev_auth_provider_from_env(environ):
+    if str(environ.get("AZURE_MEMFOREST_DEV_AUTH", "")).strip().lower() not in {"1", "true", "yes", "on"}:
+        return None
+    return DevHeaderAuthProvider(environment=str(environ.get("AZURE_MEMFOREST_ENV", "local")))
