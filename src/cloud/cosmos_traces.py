@@ -153,12 +153,7 @@ class CosmosTraceRecorder:
             trace_truncated=trace_truncated,
             dropped_attribute_count=dropped_attribute_count,
         )
-        await _maybe_await(
-            self.container.upsert_item(
-                document,
-                partition_key=tenant_id,
-            )
-        )
+        await _maybe_await(_upsert_item(self.container, document, partition_key=tenant_id))
         return document
 
     async def get_trace(self, *, tenant_id: str, user_id: str, query_id: str) -> dict[str, Any]:
@@ -290,6 +285,13 @@ async def _maybe_await(value):
     if hasattr(value, "__await__"):
         return await value
     return value
+
+
+def _upsert_item(container: Any, document: dict[str, Any], *, partition_key: str):
+    try:
+        return container.upsert_item(document)
+    except TypeError:
+        return container.upsert_item(document, partition_key=partition_key)
 
 
 def _is_cosmos_not_found(exc: Exception) -> bool:
