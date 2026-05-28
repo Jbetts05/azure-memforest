@@ -29,7 +29,12 @@ class FakeRecallIndex:
 
 class FakeModel:
     def embed_texts(self, texts):
-        return [[1.0, 0.0]]
+        embeddings = {
+            "Where?": [1.0, 0.0],
+            "Text for fact-a": [0.1, 1.0],
+            "Text for fact-b": [1.0, 0.0],
+        }
+        return [embeddings.get(text, [1.0, 0.0]) for text in texts]
 
     def generate_json(self, **kwargs):
         return {"answer": "Alice moved to Seattle.", "reason": "The retrieved memory says Alice moved to Seattle."}
@@ -138,7 +143,7 @@ async def test_cloud_query_filters_recall_by_latest_manifest_and_embedding_model
         "forest_version": "v1",
         "embedding_model_version": "embed-v1",
     }
-    assert [fact.fact_id for fact in response.facts] == ["fact-a"]
+    assert [fact.fact_id for fact in response.facts] == ["fact-b"]
     assert response.answer == "Alice moved to Seattle."
     assert response.reason == "The retrieved memory says Alice moved to Seattle."
 
@@ -160,6 +165,28 @@ async def test_cloud_query_records_safe_trace_events() -> None:
     assert "query_started" in event_types
     assert "recall_search_started" in event_types
     assert "facts_loaded" in event_types
+    assert "facts_reranked" in event_types
     assert "answer_generated" in event_types
     assert "query_completed" in event_types
     assert all("Where?" not in str(event.attributes) for event in call["events"])
+
+
+@pytest.mark.asyncio
+async def test_cloud_query_can_disable_fact_rerank() -> None:
+    service = CloudMemoryQueryService(
+        manifest_store_factory=lambda tenant_id, user_id: FakeManifestStore(_manifest()),
+        fact_store_factory=lambda tenant_id, user_id: FakeFactStore(),
+        tree_node_store_factory=lambda tenant_id, user_id, forest_version: FakeTreeStore(),
+        browse_embedding_store_factory=lambda tenant_id, user_id, forest_version, embedding_model_version: FakeEmbeddingStore(),
+        recall_index=FakeRecallIndex(),
+        model_client=FakeModel(),
+        config=CloudQueryConfig(embedding_model_version="embed-v1", default_beam_width=2, rerank_facts=False),
+    )
+
+    response = await service.query(
+        ActorContext(actor_id="user-1", tenant=TenantContext("tenant-1")),
+        user_id="user-1",
+        request=QueryRequest(question="Where?", max_facts=2),
+    )
+
+    assert [fact.fact_id for fact in response.facts] == ["fact-a", "fact-b"]

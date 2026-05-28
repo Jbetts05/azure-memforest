@@ -35,6 +35,7 @@ class CloudQueryConfig:
     default_max_facts: int = 20
     embedding_model_version: str = ""
     compose_answer: bool = True
+    rerank_facts: bool = True
 
 
 class CloudMemoryQueryService:
@@ -164,6 +165,21 @@ class CloudMemoryQueryService:
                 attributes={"fact_count": len(facts), "raw_fact_id_count": len(fact_ids)},
             )
         )
+        scored_facts = await self._rerank_facts(facts, query_embedding)
+        if scored_facts:
+            events.append(
+                TraceEvent(
+                    query_id=query_id,
+                    event_type=TraceEventType.FACTS_RERANKED,
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    attributes={
+                        "candidate_count": len(scored_facts),
+                        "top_score": round(scored_facts[0][0], 6),
+                    },
+                )
+            )
+        facts = [fact for _, fact in scored_facts] if scored_facts else facts
         max_facts = request.max_facts if request.max_facts is not None else self._config.default_max_facts
         if max_facts and max_facts > 0:
             facts = facts[:max_facts]
@@ -228,6 +244,22 @@ class CloudMemoryQueryService:
         answer = str(payload.get("answer") or "").strip()
         reason = str(payload.get("reason") or "").strip()
         return (answer or None), (reason or None)
+
+    async def _rerank_facts(self, facts: list[Any], query_embedding: list[float]) -> list[tuple[float, Any]]:
+        if not self._config.rerank_facts or not facts:
+            return []
+        texts = [str(getattr(fact, "fact_text", "") or "") for fact in facts]
+        try:
+            embeddings = await asyncio.to_thread(self._model_client.embed_texts, texts)
+        except Exception:
+            log.exception("failed to rerank cloud query facts")
+            return []
+        scored = [
+            (_dot(query_embedding, _normalize(embedding)), fact)
+            for embedding, fact in zip(embeddings, facts)
+        ]
+        scored.sort(key=lambda item: item[0], reverse=True)
+        return scored
 
     async def _record_trace(self, *, tenant_id: str, user_id: str, query_id: str, forest_version: str, events: list[TraceEvent]) -> None:
         if self._trace_recorder is None:
