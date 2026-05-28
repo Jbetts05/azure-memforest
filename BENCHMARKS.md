@@ -127,6 +127,8 @@ An initial 20-sample replay through `gpt-4-1-mini-dev` produced:
 
 This exceeds the provisional `0.05` judge deployment replay gate, so cloud parity claims remain blocked until the judge prompt/deployment is calibrated or the parity policy is revised before a full replay.
 
+The original judge prompt used to create the checked-in `judge_1..judge_8` labels is not present in this repository snapshot. Before using deployment replay as a production gate, recover that original judge prompt from the benchmark-generation environment or explicitly approve a new judge prompt/policy and regenerate the baseline labels.
+
 ## Current Phase 0 gate
 
 Phase 0 only verifies that the checked-in artifacts are present and structurally usable. Full benchmark replays require configured OpenAI-compatible model endpoints and are not run by default in CI.
