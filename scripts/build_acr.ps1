@@ -1,6 +1,7 @@
 param(
     [string]$Registry = "memforestexampleacr",
-    [string]$Repository = "azure-memforest-api"
+    [string]$Repository = "azure-memforest-api",
+    [string]$BaseImage = "${Registry}.azurecr.io/base/python:3.11-bookworm"
 )
 
 $ErrorActionPreference = "Stop"
@@ -16,6 +17,7 @@ $image = "${Repository}:${sha}"
 az acr build `
     --registry $Registry `
     --image $image `
+    --build-arg BASE_IMAGE=$BaseImage `
     --build-arg GIT_SHA=$sha `
     --build-arg IMAGE_DIRTY=false `
     .
