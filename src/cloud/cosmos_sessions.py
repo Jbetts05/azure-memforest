@@ -49,6 +49,9 @@ class CosmosSessionStore:
         self.tenant_user_key = partition_key(tenant_id=tenant_id, user_id=user_id)
 
     async def upsert_session(self, session_id: str, *, cell_ids: list[str] | None = None, metadata: dict[str, Any] | None = None) -> SourceSessionDocument:
+        existing = await self._read_raw_session(session_id)
+        if existing is not None and existing.get("tombstoned"):
+            return _session_from_doc(existing)
         doc = SourceSessionDocument(
             session_id=session_id,
             tenant_id=self.tenant_id,
@@ -69,6 +72,17 @@ class CosmosSessionStore:
         if item.get("tenant_id") != self.tenant_id or item.get("user_id") != self.user_id or item.get("tombstoned"):
             return None
         return _session_from_doc(item)
+
+    async def _read_raw_session(self, session_id: str) -> dict[str, Any] | None:
+        try:
+            item = await _maybe_await(self.container.read_item(item=_session_id(session_id), partition_key=self.tenant_user_key))
+        except Exception as exc:
+            if _is_not_found(exc):
+                return None
+            raise
+        if item.get("tenant_id") != self.tenant_id or item.get("user_id") != self.user_id:
+            return None
+        return item
 
     async def tombstone_session(self, session_id: str, *, reason: str, scrub: bool = False) -> None:
         """Tombstone the session record.
@@ -101,6 +115,15 @@ class CosmosTurnStore:
         self.tenant_user_key = partition_key(tenant_id=tenant_id, user_id=user_id)
 
     async def upsert_turns(self, session_id: str, turns: list[dict[str, Any]]) -> list[SourceTurnDocument]:
+        new_turn_ids = {
+            str(turn.get("turn_id") or turn.get("content_id") or f"{session_id}:{index}")
+            for index, turn in enumerate(turns)
+        }
+        stale_tail_ids = await self._tombstone_stale_tail(
+            session_id,
+            new_count=len(turns),
+            new_turn_ids=new_turn_ids,
+        )
         docs: list[SourceTurnDocument] = []
         for turn_index, turn in enumerate(turns):
             content = str(turn.get("content", ""))
@@ -119,6 +142,9 @@ class CosmosTurnStore:
                 tenant_id=self.tenant_id,
                 user_id=self.user_id,
             )
+            existing = await self._read_raw_turn(session_id, turn_id)
+            if existing is not None and existing.get("tombstoned") and existing["id"] not in stale_tail_ids:
+                continue
             await _maybe_await(self.container.upsert_item(_turn_to_doc(doc, self.tenant_user_key)))
             docs.append(doc)
         return docs
@@ -152,6 +178,37 @@ class CosmosTurnStore:
                 item["content"] = ""
                 item["metadata"] = {}
             await _maybe_await(self.container.upsert_item(item))
+
+    async def _tombstone_stale_tail(self, session_id: str, *, new_count: int, new_turn_ids: set[str]) -> set[str]:
+        query = "SELECT * FROM c WHERE c.tenant_user_key=@pk AND c.session_id=@session_id"
+        params = [
+            {"name": "@pk", "value": self.tenant_user_key},
+            {"name": "@session_id", "value": session_id},
+        ]
+        tombstoned_ids: set[str] = set()
+        async for item in _aiter(self.container.query_items(query=query, parameters=params, partition_key=self.tenant_user_key)):
+            stale_by_index = int(item.get("turn_index", -1)) >= new_count
+            stale_by_id = str(item.get("turn_id", "")) not in new_turn_ids
+            if (stale_by_index or stale_by_id) and not item.get("tombstoned"):
+                item["tombstoned"] = True
+                item["tombstone_reason"] = "stale_reingest_tail"
+                item["tombstoned_at_unix"] = time.time()
+                item["content"] = ""
+                item["metadata"] = {}
+                await _maybe_await(self.container.upsert_item(item))
+                tombstoned_ids.add(item["id"])
+        return tombstoned_ids
+
+    async def _read_raw_turn(self, session_id: str, turn_id: str) -> dict[str, Any] | None:
+        try:
+            item = await _maybe_await(self.container.read_item(item=_turn_id(session_id, turn_id), partition_key=self.tenant_user_key))
+        except Exception as exc:
+            if _is_not_found(exc):
+                return None
+            raise
+        if item.get("tenant_id") != self.tenant_id or item.get("user_id") != self.user_id:
+            return None
+        return item
 
 
 def _session_to_doc(doc: SourceSessionDocument, tenant_user_key: str) -> dict[str, Any]:

@@ -49,6 +49,20 @@ async def test_cosmos_session_store_upsert_get_tombstone() -> None:
 
 
 @pytest.mark.asyncio
+async def test_cosmos_session_store_upsert_does_not_resurrect_tombstone() -> None:
+    container = FakeContainer()
+    store = CosmosSessionStore(container, tenant_id="tenant-1", user_id="user-1")
+    await store.upsert_session("session-1", cell_ids=["cell-1"])
+    await store.tombstone_session("session-1", reason="delete", scrub=True)
+
+    await store.upsert_session("session-1", cell_ids=["cell-2"])
+
+    stored = next(iter(container.items.values()))
+    assert stored["tombstoned"] is True
+    assert stored["cell_ids"] == []
+
+
+@pytest.mark.asyncio
 async def test_cosmos_turn_store_preserves_order_and_scrubs_on_tombstone() -> None:
     container = FakeContainer()
     store = CosmosTurnStore(container, tenant_id="tenant-1", user_id="user-1")
@@ -67,6 +81,49 @@ async def test_cosmos_turn_store_preserves_order_and_scrubs_on_tombstone() -> No
     assert [turn.content for turn in turns] == ["second", "first"]
     assert after_delete == []
     assert all(item["content"] == "" for item in container.items.values())
+
+
+@pytest.mark.asyncio
+async def test_cosmos_turn_store_tombstones_stale_reingest_tail() -> None:
+    container = FakeContainer()
+    store = CosmosTurnStore(container, tenant_id="tenant-1", user_id="user-1")
+    await store.upsert_turns(
+        "session-1",
+        [
+            {"role": "user", "content": "one", "content_id": "t1"},
+            {"role": "user", "content": "two", "content_id": "t2"},
+        ],
+    )
+
+    await store.upsert_turns("session-1", [{"role": "user", "content": "one updated", "content_id": "t1"}])
+
+    turns = await store.list_turns("session-1")
+    assert [turn.content for turn in turns] == ["one updated"]
+    assert any(item.get("tombstone_reason") == "stale_reingest_tail" for item in container.items.values())
+
+
+@pytest.mark.asyncio
+async def test_cosmos_turn_store_allows_reordered_tail_id_in_same_reingest() -> None:
+    container = FakeContainer()
+    store = CosmosTurnStore(container, tenant_id="tenant-1", user_id="user-1")
+    await store.upsert_turns(
+        "session-1",
+        [
+            {"role": "user", "content": "one", "content_id": "t1"},
+            {"role": "user", "content": "two", "content_id": "t2"},
+            {"role": "user", "content": "three", "content_id": "t3"},
+        ],
+    )
+
+    await store.upsert_turns(
+        "session-1",
+        [
+            {"role": "user", "content": "three moved", "content_id": "t3"},
+        ],
+    )
+
+    turns = await store.list_turns("session-1")
+    assert [turn.content for turn in turns] == ["three moved"]
 
 
 @pytest.mark.asyncio
