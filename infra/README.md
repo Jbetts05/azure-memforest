@@ -45,6 +45,7 @@ The initial dev hosting foundation has been deployed to:
 | Snapshot container | `snapshots` |
 | Service Bus namespace | `memforestexamplesb` |
 | Writes queue | `memforest-writes` |
+| Azure OpenAI account | generated as `memforestexampleai<unique>` |
 
 Azure AI Search is deployed in `eastus` for the current dev environment because `eastus2` returned `InsufficientResourcesAvailable` for new Search services on 2026-05-27. Revisit this topology before production.
 

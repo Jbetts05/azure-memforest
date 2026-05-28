@@ -69,6 +69,7 @@ var cosmosName = take('${replace(normalizedName, '-', '')}cosmos', 44)
 var searchName = take('${replace(normalizedName, '-', '')}search', 60)
 var storageName = '${take(replace(normalizedName, '-', ''), 9)}st${uniqueString(resourceGroup().id)}'
 var serviceBusName = take('${replace(normalizedName, '-', '')}sb', 50)
+var openAiName = '${take(replace(normalizedName, '-', ''), 11)}ai${uniqueString(resourceGroup().id)}'
 var acrPullRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
 var cosmosDataContributorRoleDefinitionId = '${cosmosAccount.id}/sqlRoleDefinitions/00000000-0000-0000-0000-000000000002'
 var searchServiceContributorRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7ca78c08-252a-4471-8644-bb5ff32d4ba0')
@@ -76,6 +77,7 @@ var searchIndexDataContributorRoleDefinitionId = subscriptionResourceId('Microso
 var storageBlobDataContributorRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
 var serviceBusDataSenderRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '69a216fc-b8fb-44d8-bc22-1f3c2cd27a39')
 var serviceBusDataReceiverRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4f6d3b9b-027b-4f4c-9142-0e5a2a2247e0')
+var cognitiveServicesOpenAiUserRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd')
 
 resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2023-09-01' = {
   name: '${normalizedName}-law'
@@ -408,6 +410,31 @@ resource serviceBusReceiverAssignment 'Microsoft.Authorization/roleAssignments@2
   }
 }
 
+resource openAiAccount 'Microsoft.CognitiveServices/accounts@2024-10-01' = {
+  name: openAiName
+  location: location
+  tags: tags
+  kind: 'OpenAI'
+  sku: {
+    name: 'S0'
+  }
+  properties: {
+    customSubDomainName: openAiName
+    disableLocalAuth: true
+    publicNetworkAccess: 'Enabled'
+  }
+}
+
+resource openAiUserAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(openAiAccount.id, appIdentity.id, 'cognitive-services-openai-user')
+  scope: openAiAccount
+  properties: {
+    roleDefinitionId: cognitiveServicesOpenAiUserRoleDefinitionId
+    principalId: appIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
 resource acrPullAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(containerRegistry.id, appIdentity.id, 'acr-pull')
   scope: containerRegistry
@@ -517,6 +544,14 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
               name: 'AZURE_SERVICEBUS_WRITES_QUEUE_NAME'
               value: writesQueue.name
             }
+            {
+              name: 'AZURE_OPENAI_ENDPOINT'
+              value: openAiAccount.properties.endpoint
+            }
+            {
+              name: 'AZURE_OPENAI_USE_MANAGED_IDENTITY'
+              value: 'true'
+            }
           ]
           resources: {
             cpu: json('0.5')
@@ -538,6 +573,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
     storageBlobDataContributorAssignment
     serviceBusSenderAssignment
     serviceBusReceiverAssignment
+    openAiUserAssignment
   ]
 }
 
@@ -558,6 +594,8 @@ output storageSnapshotContainerName string = snapshotsContainer.name
 output serviceBusNamespaceName string = serviceBusNamespace.name
 output serviceBusFullyQualifiedNamespace string = '${serviceBusNamespace.name}.servicebus.windows.net'
 output serviceBusWritesQueueName string = writesQueue.name
+output openAiAccountName string = openAiAccount.name
+output openAiEndpoint string = openAiAccount.properties.endpoint
 
 @secure()
 output applicationInsightsConnectionString string = appInsights.properties.ConnectionString
