@@ -390,6 +390,25 @@ async def test_receiver_loop_treats_accept_timeout_as_idle() -> None:
 
 
 @pytest.mark.asyncio
+async def test_receiver_loop_treats_wrapped_timeout_as_idle() -> None:
+    worker = ServiceBusWriteWorker(
+        job_store=CosmosJobStore(FakeJobsContainer()),
+        handler=RecordingHandler(),
+        owner_id="worker-1",
+    )
+    loop = ServiceBusSessionReceiverLoop(
+        servicebus_client=FakeServiceBusClient(error=RuntimeError("Service Bus operation timed out")),
+        worker=worker,
+        config=WorkerReceiverConfig(queue_name="writes", message_wait_seconds=0.1),
+    )
+
+    outcome = await loop.process_next_session()
+
+    assert outcome.action == "idle"
+    assert outcome.reason == "no_session_available"
+
+
+@pytest.mark.asyncio
 async def test_receiver_loop_releases_session_after_abandon() -> None:
     envelope = _envelope()
     store = await _store_with_job(envelope)

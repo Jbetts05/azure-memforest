@@ -195,8 +195,14 @@ async def _maybe_await(value: Any) -> Any:
 def _is_operation_timeout(exc: Exception) -> bool:
     if exc.__class__.__name__ == "OperationTimeoutError":
         return True
+    text = f"{exc.__class__.__name__}: {exc}".lower()
+    if "operationtimeout" in text or "operation timeout" in text or "timed out" in text or "timeout" in text:
+        return True
     inner = getattr(exc, "__cause__", None)
-    return inner is not None and inner.__class__.__name__ == "OperationTimeoutError"
+    if inner is None:
+        return False
+    inner_text = f"{inner.__class__.__name__}: {inner}".lower()
+    return "operationtimeout" in inner_text or "operation timeout" in inner_text or "timed out" in inner_text or "timeout" in inner_text
 
 
 def _safe_str(value: Any) -> str:
