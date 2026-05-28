@@ -161,6 +161,22 @@ class TreeNodeStore(Protocol):
         ...
 
 
+class AsyncTreeNodeStore(Protocol):
+    """Async random-access tree-node storage for cloud adapters."""
+
+    async def get_node(self, tree_id: str, node_id: str) -> StoredTreeNode | None:
+        ...
+
+    async def get_nodes(self, tree_id: str, node_ids: list[str]) -> list[StoredTreeNode]:
+        ...
+
+    async def upsert_nodes(self, nodes: list[StoredTreeNode]) -> None:
+        ...
+
+    async def tombstone_tree(self, tree_id: str, *, reason: str) -> None:
+        ...
+
+
 class TreeSnapshotStore(Protocol):
     """Versioned tree/forest snapshot storage for archive and restore."""
 
@@ -221,6 +237,19 @@ class FactLocationIndex(Protocol):
 
     def delete_locations_for_tree(self, tree_id: str) -> None:
         """Remove all locations for a tree within the implementation scope."""
+        ...
+
+
+class AsyncFactLocationIndex(Protocol):
+    """Async fact-location index for cloud adapters."""
+
+    async def get_locations(self, fact_ids: list[str]) -> dict[str, list[FactLocation]]:
+        ...
+
+    async def upsert_locations(self, locations: list[FactLocation]) -> None:
+        ...
+
+    async def delete_locations_for_tree(self, tree_id: str) -> None:
         ...
 
 

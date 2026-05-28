@@ -2,6 +2,8 @@
 
 from src.cloud.contracts import (
     BrowseEmbeddingStore,
+    AsyncFactLocationIndex,
+    AsyncTreeNodeStore,
     FactLocation,
     FactLocationIndex,
     FactStore,
@@ -38,6 +40,8 @@ from src.cloud.local_adapters import (
 
 __all__ = [
     "BrowseEmbeddingStore",
+    "AsyncFactLocationIndex",
+    "AsyncTreeNodeStore",
     "FactLocation",
     "FactLocationIndex",
     "FactStore",
