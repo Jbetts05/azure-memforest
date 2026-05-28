@@ -45,7 +45,7 @@ The initial dev hosting foundation has been deployed to:
 | Snapshot container | `snapshots` |
 | Service Bus namespace | `memforestexamplesb` |
 | Writes queue | `memforest-writes` |
-| Azure OpenAI account | generated as `memforestexampleai<unique>` |
+| Azure OpenAI account | `memforestexampleopenai` |
 | Chat deployment | `gpt-4-1-mini-dev` (`gpt-4.1-mini`, `2025-04-14`) |
 | Embedding deployment | `text-embedding-3-small-dev` (`text-embedding-3-small`, version `1`, dimension `1536`) |
 
@@ -66,6 +66,6 @@ Expected current behavior:
 - `/version` returns `200` with service name/version.
 - `/health/ready` returns `200` when Cosmos DB, Azure AI Search, Blob Storage, and Service Bus configuration checks are healthy.
 
-Cosmos containers and Azure AI Search indexes are intentionally not declared in Bicep yet. Store/search adapters will create or migrate containers and indexes idempotently with the correct partition keys, vector dimensions, model versions, and indexing policies when those adapters are implemented. The Blob `snapshots` container is declared in Bicep because it has no schema or partition-key coupling.
+Cosmos containers are declared in Bicep. The Azure AI Search recall index `memforest-recall` is created idempotently by the Search bootstrap code because its vector dimensions are tied to the configured embedding deployment. The Blob `snapshots` container is declared in Bicep because it has no schema or partition-key coupling.
 
 The Service Bus writes queue has sessions enabled for per-tenant/user write ordering. The dev namespace uses Standard SKU; private endpoints require Premium and should be revisited before production.
