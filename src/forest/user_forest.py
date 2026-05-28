@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 import threading
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -314,8 +314,19 @@ class UserForest:
                     embedding = self._node_index.get_embedding(node_id)
                     if embedding is not None:
                         node_embeddings[node_id] = list(embedding)
+            fact_embeddings = self._fact_manager.fact_embeddings()
+            facts = [
+                replace(
+                    fact,
+                    metadata={
+                        **dict(fact.metadata),
+                        **({"embedding": fact_embeddings[fact.fact_id]} if fact.fact_id in fact_embeddings else {}),
+                    },
+                )
+                for fact in self._fact_manager.iter_facts()
+            ]
             return ForestMaterializationSnapshot(
-                facts=list(self._fact_manager.iter_facts()),
+                facts=facts,
                 trees=trees,
                 node_embeddings=node_embeddings,
                 summary_cache=dict(self._summary_cache),

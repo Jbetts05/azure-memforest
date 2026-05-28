@@ -128,6 +128,20 @@ class DeletableFactManager(FactManager):
                     self._exact_index[key] = fact.fact_id
                     self._index.add(vec.reshape(1, -1))
 
+    def fact_embeddings(self) -> dict[str, list[float]]:
+        """Return stored extraction-time fact embeddings by fact_id."""
+        with self._lock:
+            embeddings: dict[str, list[float]] = {}
+            if not self._faiss_ids:
+                return embeddings
+            buf = np.zeros(self.vector_dim, dtype="float32")
+            for index, fact_id in enumerate(self._faiss_ids):
+                if fact_id not in self._facts:
+                    continue
+                self._index.reconstruct(index, buf)
+                embeddings[fact_id] = [float(value) for value in buf.tolist()]
+            return embeddings
+
 
 # ── CachingTreeBuilder ────────────────────────────────────────────────────────
 

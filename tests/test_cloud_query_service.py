@@ -28,7 +28,11 @@ class FakeRecallIndex:
 
 
 class FakeModel:
+    def __init__(self):
+        self.embed_calls = []
+
     def embed_texts(self, texts):
+        self.embed_calls.append(list(texts))
         embeddings = {
             "Where?": [1.0, 0.0],
             "Text for fact-a": [0.1, 1.0],
@@ -61,6 +65,9 @@ class FakeEmbeddingStore:
 
 
 class FakeFactStore:
+    def __init__(self, *, include_embeddings=True):
+        self.include_embeddings = include_embeddings
+
     async def get_facts(self, fact_ids):
         return [
             ManagedFact(
@@ -78,6 +85,7 @@ class FakeFactStore:
                 confidence=1.0,
                 first_session_id="s1",
                 first_cell_id="c1",
+                metadata={"embedding": [0.1, 1.0] if fact_id == "fact-a" else [1.0, 0.0]} if self.include_embeddings else {},
             )
             for fact_id in fact_ids
         ]
@@ -105,14 +113,16 @@ def _manifest():
     )
 
 
-def _service(manifest=None, recall=None, trace_recorder=None):
+def _service(manifest=None, recall=None, trace_recorder=None, model=None, fact_store=None):
+    model = model or FakeModel()
+    fact_store = fact_store or FakeFactStore()
     return CloudMemoryQueryService(
         manifest_store_factory=lambda tenant_id, user_id: FakeManifestStore(manifest),
-        fact_store_factory=lambda tenant_id, user_id: FakeFactStore(),
+        fact_store_factory=lambda tenant_id, user_id: fact_store,
         tree_node_store_factory=lambda tenant_id, user_id, forest_version: FakeTreeStore(),
         browse_embedding_store_factory=lambda tenant_id, user_id, forest_version, embedding_model_version: FakeEmbeddingStore(),
         recall_index=recall or FakeRecallIndex(),
-        model_client=FakeModel(),
+        model_client=model,
         config=CloudQueryConfig(embedding_model_version="embed-v1", default_beam_width=2),
         trace_recorder=trace_recorder,
     )
@@ -146,6 +156,32 @@ async def test_cloud_query_filters_recall_by_latest_manifest_and_embedding_model
     assert [fact.fact_id for fact in response.facts] == ["fact-b"]
     assert response.answer == "Alice moved to Seattle."
     assert response.reason == "The retrieved memory says Alice moved to Seattle."
+
+
+@pytest.mark.asyncio
+async def test_cloud_query_rerank_uses_stored_fact_embeddings() -> None:
+    model = FakeModel()
+    response = await _service(_manifest(), model=model).query(
+        ActorContext(actor_id="user-1", tenant=TenantContext("tenant-1")),
+        user_id="user-1",
+        request=QueryRequest(question="Where?", max_facts=2),
+    )
+
+    assert [fact.fact_id for fact in response.facts] == ["fact-b", "fact-a"]
+    assert model.embed_calls == [["Where?"]]
+
+
+@pytest.mark.asyncio
+async def test_cloud_query_rerank_falls_back_to_fact_text_embedding_when_missing() -> None:
+    model = FakeModel()
+    response = await _service(_manifest(), model=model, fact_store=FakeFactStore(include_embeddings=False)).query(
+        ActorContext(actor_id="user-1", tenant=TenantContext("tenant-1")),
+        user_id="user-1",
+        request=QueryRequest(question="Where?", max_facts=2),
+    )
+
+    assert [fact.fact_id for fact in response.facts] == ["fact-b", "fact-a"]
+    assert model.embed_calls == [["Where?"], ["Text for fact-a", "Text for fact-b"]]
 
 
 @pytest.mark.asyncio

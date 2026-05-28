@@ -248,12 +248,17 @@ class CloudMemoryQueryService:
     async def _rerank_facts(self, facts: list[Any], query_embedding: list[float]) -> list[tuple[float, Any]]:
         if not self._config.rerank_facts or not facts:
             return []
-        texts = [str(getattr(fact, "fact_text", "") or "") for fact in facts]
-        try:
-            embeddings = await asyncio.to_thread(self._model_client.embed_texts, texts)
-        except Exception:
-            log.exception("failed to rerank cloud query facts")
-            return []
+        embeddings = [_stored_fact_embedding(fact) for fact in facts]
+        missing_indexes = [index for index, embedding in enumerate(embeddings) if not embedding]
+        if missing_indexes:
+            texts = [str(getattr(facts[index], "fact_text", "") or "") for index in missing_indexes]
+            try:
+                fallback_embeddings = await asyncio.to_thread(self._model_client.embed_texts, texts)
+            except Exception:
+                log.exception("failed to rerank cloud query facts")
+                return []
+            for index, embedding in zip(missing_indexes, fallback_embeddings):
+                embeddings[index] = embedding
         scored = [
             (_dot(query_embedding, _normalize(embedding)), fact)
             for embedding, fact in zip(embeddings, facts)
@@ -384,3 +389,11 @@ def _facts_context(facts: list[Any]) -> str:
             prefix = f"[time_start={fact.time_start}] "
         lines.append(f"{index}. {prefix}{fact.fact_text}")
     return "\n".join(lines)
+
+
+def _stored_fact_embedding(fact: Any) -> list[float] | None:
+    metadata = getattr(fact, "metadata", {}) or {}
+    embedding = metadata.get("embedding")
+    if isinstance(embedding, list) and embedding:
+        return [float(value) for value in embedding]
+    return None
