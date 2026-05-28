@@ -41,7 +41,7 @@ class CosmosUserLeaseStore:
                 ttl_seconds=ttl_seconds,
             )
             try:
-                await _maybe_await(self.container.create_item(document, partition_key=self.tenant_user_key))
+                await _maybe_await(_create_item(self.container, document, partition_key=self.tenant_user_key))
                 return _lease_from_doc(document)
             except Exception as exc:
                 if not _is_conflict(exc):
@@ -189,6 +189,13 @@ async def _maybe_await(value: Any):
     if hasattr(value, "__await__"):
         return await value
     return value
+
+
+def _create_item(container: Any, document: dict[str, Any], *, partition_key: str):
+    try:
+        return container.create_item(document)
+    except TypeError:
+        return container.create_item(document, partition_key=partition_key)
 
 
 def _is_conflict(exc: Exception) -> bool:

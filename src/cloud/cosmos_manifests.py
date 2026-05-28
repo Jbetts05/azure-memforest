@@ -69,7 +69,7 @@ class CosmosManifestStore:
         )
         document = _manifest_to_doc(manifest, self.tenant_user_key)
         try:
-            await _maybe_await(self.container.create_item(document, partition_key=self.tenant_id))
+            await _maybe_await(_create_item(self.container, document, partition_key=self.tenant_id))
         except Exception as exc:
             if _is_conflict(exc):
                 return await self.get_manifest(manifest.manifest_id)
@@ -174,7 +174,7 @@ class CosmosDeletionLog:
             metadata=dict(metadata or {}),
         )
         try:
-            await _maybe_await(self.container.create_item(_deletion_to_doc(record), partition_key=self.tenant_id))
+            await _maybe_await(_create_item(self.container, _deletion_to_doc(record), partition_key=self.tenant_id))
         except Exception as exc:
             if _is_conflict(exc):
                 return await self.get_deletion(record.deletion_id)
@@ -283,6 +283,13 @@ async def _maybe_await(value):
     if hasattr(value, "__await__"):
         return await value
     return value
+
+
+def _create_item(container: Any, document: dict[str, Any], *, partition_key: str):
+    try:
+        return container.create_item(document)
+    except TypeError:
+        return container.create_item(document, partition_key=partition_key)
 
 
 async def _conditional_replace(container: Any, item: dict[str, Any], *, partition_key: str, etag: str | None):

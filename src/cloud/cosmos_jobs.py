@@ -36,10 +36,7 @@ class CosmosJobStore:
         document = _job_document(envelope)
         try:
             await _maybe_await(
-                self.container.create_item(
-                    document,
-                    partition_key=envelope.tenant_id,
-                )
+                _create_item(self.container, document, partition_key=envelope.tenant_id)
             )
         except Exception as exc:
             if _is_cosmos_conflict(exc):
@@ -204,6 +201,13 @@ async def _maybe_await(value):
     if hasattr(value, "__await__"):
         return await value
     return value
+
+
+def _create_item(container: Any, document: dict[str, Any], *, partition_key: str):
+    try:
+        return container.create_item(document)
+    except TypeError:
+        return container.create_item(document, partition_key=partition_key)
 
 
 async def _conditional_replace(container: Any, item: dict[str, Any], *, partition_key: str, etag: str | None):
