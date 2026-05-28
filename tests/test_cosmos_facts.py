@@ -1,0 +1,114 @@
+from __future__ import annotations
+
+import pytest
+
+from src.cloud.cosmos_facts import CosmosFactStore
+from src.utils.types import FactOccurrence, ManagedFact
+
+
+class NotFoundError(Exception):
+    status_code = 404
+
+
+class FakeContainer:
+    def __init__(self):
+        self.items = {}
+
+    def upsert_item(self, item):
+        self.items[(item["tenant_user_key"], item["id"])] = dict(item)
+
+    def read_item(self, *, item, partition_key):
+        key = (partition_key, item)
+        if key not in self.items:
+            raise NotFoundError()
+        return dict(self.items[key])
+
+    def query_items(self, *, query, parameters, partition_key):
+        params = {param["name"]: param["value"] for param in parameters}
+        result = []
+        for (pk, _id), item in self.items.items():
+            if pk != partition_key or item["id"] not in params["@ids"]:
+                continue
+            if item.get("tombstoned"):
+                continue
+            result.append(dict(item))
+        return result
+
+
+def _fact(fact_id="fact-1") -> ManagedFact:
+    return ManagedFact(
+        fact_id=fact_id,
+        fact_text="Bob moved to Davis.",
+        embedding_id="emb-1",
+        origin="user",
+        semantic_role="event",
+        entities=["Bob", "Davis"],
+        topics=["move"],
+        attribute_keys=["location"],
+        domain_keys=["personal"],
+        collection_keys=["memory"],
+        detail_level="atomic",
+        confidence=0.9,
+        first_session_id="session-1",
+        first_cell_id="cell-1",
+        occurrences=[
+            FactOccurrence(
+                session_id="session-1",
+                cell_id="cell-1",
+                item_id="item-1",
+                source_turn_ids=["turn-1"],
+                source_spans=["span"],
+                participants=["Bob"],
+                time_text="today",
+                time_start=1.0,
+                time_end=1.0,
+            )
+        ],
+        metadata={"embedding": [0.1, 0.2]},
+        time_start=1.0,
+        time_end=1.0,
+    )
+
+
+@pytest.mark.asyncio
+async def test_cosmos_fact_store_round_trips_managed_fact() -> None:
+    store = CosmosFactStore(FakeContainer(), tenant_id="tenant-1", user_id="user-1")
+
+    await store.upsert_facts([_fact()])
+    fact = await store.get_fact("fact-1")
+
+    assert fact == _fact()
+    assert fact.occurrences[0].source_turn_ids == ["turn-1"]
+
+
+@pytest.mark.asyncio
+async def test_cosmos_fact_store_get_facts_batches_and_preserves_order() -> None:
+    store = CosmosFactStore(FakeContainer(), tenant_id="tenant-1", user_id="user-1")
+    await store.upsert_facts([_fact("fact-1"), _fact("fact-2")])
+
+    facts = await store.get_facts(["missing", "fact-2", "fact-1"])
+
+    assert [fact.fact_id for fact in facts] == ["fact-2", "fact-1"]
+
+
+@pytest.mark.asyncio
+async def test_cosmos_fact_store_tombstone_hides_fact_without_scrubbing_text() -> None:
+    container = FakeContainer()
+    store = CosmosFactStore(container, tenant_id="tenant-1", user_id="user-1")
+    await store.upsert_facts([_fact()])
+
+    await store.tombstone_facts(["fact-1"], reason="session_deleted")
+
+    assert await store.get_fact("fact-1") is None
+    stored = next(iter(container.items.values()))
+    assert stored["fact_text"] == "Bob moved to Davis."
+    assert stored["tombstoned"] is True
+
+
+@pytest.mark.asyncio
+async def test_cosmos_fact_store_is_not_forest_version_scoped() -> None:
+    store = CosmosFactStore(FakeContainer(), tenant_id="tenant-1", user_id="user-1")
+    await store.upsert_facts([_fact()])
+    stored = next(iter(store.container.items.values()))
+
+    assert "forest_version" not in stored

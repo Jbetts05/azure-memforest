@@ -1,0 +1,162 @@
+"""Async Cosmos canonical fact store."""
+
+from __future__ import annotations
+
+import json
+import time
+from dataclasses import asdict
+from typing import Any
+
+from src.cloud.schema import SCHEMA_VERSION, partition_key
+from src.utils.types import FactOccurrence, ManagedFact
+
+MAX_FACT_DOCUMENT_BYTES = 1024 * 1024
+
+
+class CosmosFactStore:
+    """Canonical facts scoped by tenant/user.
+
+    Facts are source-of-truth records and are not forest-version scoped.
+    Derived projections such as tree nodes and fact locations carry
+    forest_version. Hard-delete/erasure compaction is implemented separately.
+    """
+
+    def __init__(self, container: Any, *, tenant_id: str, user_id: str) -> None:
+        self.container = container
+        self.tenant_id = tenant_id
+        self.user_id = user_id
+        self.tenant_user_key = partition_key(tenant_id=tenant_id, user_id=user_id)
+
+    async def get_fact(self, fact_id: str) -> ManagedFact | None:
+        try:
+            item = await _maybe_await(self.container.read_item(item=_fact_doc_id(fact_id), partition_key=self.tenant_user_key))
+        except Exception as exc:
+            if _is_not_found(exc):
+                return None
+            raise
+        if item.get("tenant_id") != self.tenant_id or item.get("user_id") != self.user_id or item.get("tombstoned"):
+            return None
+        return _fact_from_doc(item)
+
+    async def get_facts(self, fact_ids: list[str]) -> list[ManagedFact]:
+        if not fact_ids:
+            return []
+        docs_by_fact_id: dict[str, ManagedFact] = {}
+        for chunk in _chunks([_fact_doc_id(fact_id) for fact_id in fact_ids], 100):
+            query = (
+                "SELECT * FROM c WHERE c.tenant_user_key=@pk AND ARRAY_CONTAINS(@ids, c.id) "
+                "AND (NOT IS_DEFINED(c.tombstoned) OR c.tombstoned=false)"
+            )
+            params = [
+                {"name": "@pk", "value": self.tenant_user_key},
+                {"name": "@ids", "value": chunk},
+            ]
+            async for item in _aiter(self.container.query_items(query=query, parameters=params, partition_key=self.tenant_user_key)):
+                if item.get("tenant_id") == self.tenant_id and item.get("user_id") == self.user_id:
+                    fact = _fact_from_doc(item)
+                    docs_by_fact_id[fact.fact_id] = fact
+        return [docs_by_fact_id[fact_id] for fact_id in fact_ids if fact_id in docs_by_fact_id]
+
+    async def upsert_facts(self, facts: list[ManagedFact]) -> None:
+        for fact in facts:
+            doc = _fact_to_doc(fact, self.tenant_id, self.user_id, self.tenant_user_key)
+            if len(json.dumps(doc, ensure_ascii=False).encode("utf-8")) > MAX_FACT_DOCUMENT_BYTES:
+                raise ValueError("fact document exceeds Cosmos size budget.")
+            await _maybe_await(self.container.upsert_item(doc))
+
+    async def tombstone_facts(self, fact_ids: list[str], *, reason: str) -> None:
+        for fact_id in fact_ids:
+            try:
+                item = await _maybe_await(self.container.read_item(item=_fact_doc_id(fact_id), partition_key=self.tenant_user_key))
+            except Exception as exc:
+                if _is_not_found(exc):
+                    continue
+                raise
+            if item.get("tenant_id") != self.tenant_id or item.get("user_id") != self.user_id:
+                continue
+            item["tombstoned"] = True
+            item["tombstone_reason"] = reason
+            item["tombstoned_at_unix"] = time.time()
+            await _maybe_await(self.container.upsert_item(item))
+
+
+def _fact_to_doc(fact: ManagedFact, tenant_id: str, user_id: str, tenant_user_key: str) -> dict[str, Any]:
+    return {
+        "id": _fact_doc_id(fact.fact_id),
+        "schema_version": SCHEMA_VERSION,
+        "tenant_id": tenant_id,
+        "user_id": user_id,
+        "tenant_user_key": tenant_user_key,
+        "fact_id": fact.fact_id,
+        "fact_text": fact.fact_text,
+        "embedding_id": fact.embedding_id,
+        "origin": fact.origin,
+        "semantic_role": fact.semantic_role,
+        "entities": list(fact.entities),
+        "topics": list(fact.topics),
+        "attribute_keys": list(fact.attribute_keys),
+        "domain_keys": list(fact.domain_keys),
+        "collection_keys": list(fact.collection_keys),
+        "detail_level": fact.detail_level,
+        "confidence": fact.confidence,
+        "first_session_id": fact.first_session_id,
+        "first_cell_id": fact.first_cell_id,
+        "occurrences": [asdict(occurrence) for occurrence in fact.occurrences],
+        "metadata": dict(fact.metadata),
+        "time_start": fact.time_start,
+        "time_end": fact.time_end,
+        "tombstoned": False,
+        "updated_at_unix": time.time(),
+    }
+
+
+def _fact_from_doc(item: dict[str, Any]) -> ManagedFact:
+    occurrences = [FactOccurrence(**occurrence) for occurrence in item.get("occurrences", [])]
+    return ManagedFact(
+        fact_id=item["fact_id"],
+        fact_text=item["fact_text"],
+        embedding_id=item.get("embedding_id", ""),
+        origin=item.get("origin", ""),
+        semantic_role=item.get("semantic_role", ""),
+        entities=list(item.get("entities", [])),
+        topics=list(item.get("topics", [])),
+        attribute_keys=list(item.get("attribute_keys", [])),
+        domain_keys=list(item.get("domain_keys", [])),
+        collection_keys=list(item.get("collection_keys", [])),
+        detail_level=item.get("detail_level", ""),
+        confidence=float(item.get("confidence", 1.0)),
+        first_session_id=item.get("first_session_id", ""),
+        first_cell_id=item.get("first_cell_id", ""),
+        occurrences=occurrences,
+        metadata=dict(item.get("metadata", {})),
+        time_start=item.get("time_start"),
+        time_end=item.get("time_end"),
+    )
+
+
+def _fact_doc_id(fact_id: str) -> str:
+    return f"fact_{fact_id}"
+
+
+def _chunks(values: list[str], size: int):
+    for index in range(0, len(values), size):
+        yield values[index : index + size]
+
+
+async def _maybe_await(value):
+    if hasattr(value, "__await__"):
+        return await value
+    return value
+
+
+async def _aiter(values):
+    if hasattr(values, "__aiter__"):
+        async for item in values:
+            yield item
+    else:
+        for item in values:
+            yield item
+
+
+def _is_not_found(exc: Exception) -> bool:
+    return exc.__class__.__name__ == "CosmosResourceNotFoundError" or getattr(exc, "status_code", None) == 404

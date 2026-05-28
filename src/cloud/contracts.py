@@ -11,6 +11,7 @@ from types import MappingProxyType
 from typing import Any, Mapping, Protocol
 
 from src.cloud.schema import SCHEMA_VERSION
+from src.utils.types import ManagedFact
 
 
 @dataclass(frozen=True)
@@ -142,6 +143,22 @@ class FactStore(Protocol):
         ...
 
     def tombstone_facts(self, fact_ids: list[str], *, reason: str) -> None:
+        ...
+
+
+class AsyncFactStore(Protocol):
+    """Async canonical fact source-of-truth store."""
+
+    async def get_fact(self, fact_id: str) -> ManagedFact | None:
+        ...
+
+    async def get_facts(self, fact_ids: list[str]) -> list[ManagedFact]:
+        ...
+
+    async def upsert_facts(self, facts: list[ManagedFact]) -> None:
+        ...
+
+    async def tombstone_facts(self, fact_ids: list[str], *, reason: str) -> None:
         ...
 
 
