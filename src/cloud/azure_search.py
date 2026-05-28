@@ -93,6 +93,22 @@ class AzureSearchRecallIndex:
         else:
             raise RuntimeError("delete_by_tree exceeded maximum Azure AI Search deletion iterations.")
 
+    def ensure_index(self) -> None:
+        index_client = self._index_admin_client()
+        try:
+            index = index_client.get_index(self.index_name)
+        except Exception as exc:
+            if not _is_not_found(exc):
+                raise
+            try:
+                index_client.create_index(build_recall_search_index(self.index_name, self.vector_dimensions))
+                return
+            except Exception as create_exc:
+                if not _is_conflict(create_exc):
+                    raise
+                index = index_client.get_index(self.index_name)
+        validate_recall_search_index(index, vector_dimensions=self.vector_dimensions)
+
     def _client(self):
         if self._search_client is not None:
             return self._search_client
@@ -102,6 +118,84 @@ class AzureSearchRecallIndex:
         credential = self._credential or DefaultAzureCredential(exclude_interactive_browser_credential=True)
         self._search_client = SearchClient(self.endpoint, self.index_name, credential)
         return self._search_client
+
+    def _index_admin_client(self):
+        if self._index_client is not None:
+            return self._index_client
+        from azure.identity import DefaultAzureCredential
+        from azure.search.documents.indexes import SearchIndexClient
+
+        credential = self._credential or DefaultAzureCredential(exclude_interactive_browser_credential=True)
+        self._index_client = SearchIndexClient(self.endpoint, credential)
+        return self._index_client
+
+
+def build_recall_search_index(index_name: str, vector_dimensions: int):
+    if vector_dimensions <= 1:
+        raise ValueError("vector_dimensions must be configured from the embedding deployment.")
+    from azure.search.documents.indexes.models import (
+        HnswAlgorithmConfiguration,
+        SearchField,
+        SearchFieldDataType,
+        SearchIndex,
+        SearchableField,
+        SimpleField,
+        VectorSearch,
+        VectorSearchProfile,
+    )
+
+    return SearchIndex(
+        name=index_name,
+        fields=[
+            SimpleField(name="id", type=SearchFieldDataType.String, key=True, filterable=True),
+            SimpleField(name="tenant_id", type=SearchFieldDataType.String, filterable=True),
+            SimpleField(name="user_id", type=SearchFieldDataType.String, filterable=True),
+            SimpleField(name="tree_id", type=SearchFieldDataType.String, filterable=True),
+            SimpleField(name="node_id", type=SearchFieldDataType.String, filterable=True),
+            SimpleField(name="tree_type", type=SearchFieldDataType.String, filterable=True),
+            SimpleField(name="forest_version", type=SearchFieldDataType.String, filterable=True),
+            SimpleField(name="embedding_model_version", type=SearchFieldDataType.String, filterable=True),
+            SimpleField(name="schema_version", type=SearchFieldDataType.Int32, filterable=True),
+            SearchableField(name="summary", type=SearchFieldDataType.String),
+            SearchField(
+                name=VECTOR_FIELD_NAME,
+                type=SearchFieldDataType.Collection(SearchFieldDataType.Single),
+                searchable=True,
+                vector_search_dimensions=vector_dimensions,
+                vector_search_profile_name="hnsw",
+            ),
+        ],
+        vector_search=VectorSearch(
+            algorithms=[HnswAlgorithmConfiguration(name="hnsw-algorithm")],
+            profiles=[VectorSearchProfile(name="hnsw", algorithm_configuration_name="hnsw-algorithm")],
+        ),
+    )
+
+
+def validate_recall_search_index(index: Any, *, vector_dimensions: int) -> None:
+    fields = {field.name: field for field in index.fields}
+    required = {
+        "id",
+        "tenant_id",
+        "user_id",
+        "tree_id",
+        "node_id",
+        "tree_type",
+        "forest_version",
+        "embedding_model_version",
+        "schema_version",
+        "summary",
+        VECTOR_FIELD_NAME,
+    }
+    missing = sorted(required - set(fields))
+    if missing:
+        raise ValueError(f"Azure AI Search index is missing required fields: {missing}")
+    vector_field = fields[VECTOR_FIELD_NAME]
+    actual_dimensions = getattr(vector_field, "vector_search_dimensions", None)
+    if actual_dimensions != vector_dimensions:
+        raise ValueError(
+            f"Azure AI Search vector dimension {actual_dimensions} != configured {vector_dimensions}"
+        )
 
 
 def _document_to_search_payload(document: RecallDocument, vector_dimensions: int) -> dict[str, Any]:
@@ -158,3 +252,11 @@ def _vector_query(query_embedding: list[float], *, top_k: int):
 def _chunks(values: list[dict[str, str]], size: int):
     for index in range(0, len(values), size):
         yield values[index : index + size]
+
+
+def _is_not_found(exc: Exception) -> bool:
+    return exc.__class__.__name__ == "ResourceNotFoundError" or getattr(exc, "status_code", None) == 404
+
+
+def _is_conflict(exc: Exception) -> bool:
+    return exc.__class__.__name__ == "ResourceExistsError" or getattr(exc, "status_code", None) == 409

@@ -39,7 +39,7 @@ Partial writes before manifest commit must be invisible to query readers.
 
 ## Search index and embedding version gate
 
-Azure AI Search vector dimensions are immutable for an index field. `ensure_index` must read dimensions from configuration, not hardcode them. Changing embedding model or dimension requires:
+Azure AI Search vector dimensions are immutable for an index field. `ensure_index` must read dimensions from configuration, not hardcode them. The current recall index bootstrap rejects dimensions less than or equal to `1` to prevent placeholder deployments. Changing embedding model or dimension requires:
 
 - new index or full index rebuild;
 - re-embedding affected records;
