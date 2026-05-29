@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { api, ApiError, type ApiConfig, type ChatResult, type FactDetail, type Manifest, type QueryResult, type QueryTrace, type Session, type TreeNode, type Turn } from './api';
 import { getApiConfig } from './auth';
@@ -19,8 +19,10 @@ function App() {
   const [query, setQuery] = useState<QueryResult | null>(null);
   const [trace, setTrace] = useState<QueryTrace | null>(null);
   const [factDetail, setFactDetail] = useState<FactDetail | null>(null);
+  const [forestFacts, setForestFacts] = useState<FactDetail[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [emptyForest, setEmptyForest] = useState(false);
+  const forestFactsRequestRef = useRef(0);
   const visibleQuery: QueryResult = query ?? {
     query_id: '',
     answer: undefined,
@@ -39,6 +41,7 @@ function App() {
       setManifest(latest);
       const roots = await api.treeRoots(cfg, latest.forest_version);
       setNodes(roots.roots);
+      void loadForestFacts(cfg, latest.forest_version, roots.roots);
       return latest;
     } catch (err) {
       if (_isForestNotFound(err)) {
@@ -47,6 +50,7 @@ function App() {
         setNodes([]);
         setTrace(null);
         setFactDetail(null);
+        setForestFacts([]);
       }
       throw err;
     }
@@ -60,6 +64,27 @@ function App() {
     }
     const firstFact = result.facts[0];
     if (firstFact) setFactDetail(await api.fact(cfg, forestVersion, firstFact.fact_id));
+    else setFactDetail(null);
+  }
+
+  async function loadForestFacts(cfg: ApiConfig, forestVersion: string, roots: TreeNode[]) {
+    const requestId = forestFactsRequestRef.current + 1;
+    forestFactsRequestRef.current = requestId;
+    const subtrees = await Promise.allSettled(
+      roots.slice(0, 6).map((root) => api.subtree(cfg, forestVersion, root.tree_id, root.node_id))
+    );
+    const factIds = new Set<string>();
+    for (const result of subtrees) {
+      if (result.status !== 'fulfilled') continue;
+      for (const node of result.value.nodes) {
+        for (const factId of node.fact_ids) {
+          if (factIds.size < 24) factIds.add(factId);
+        }
+      }
+    }
+    const facts = await Promise.allSettled([...factIds].map((factId) => api.fact(cfg, forestVersion, factId)));
+    if (forestFactsRequestRef.current !== requestId) return;
+    setForestFacts(facts.flatMap((result) => result.status === 'fulfilled' ? [result.value] : []));
   }
 
   useEffect(() => {
@@ -133,7 +158,7 @@ function App() {
             {error ? <p className="error">{error}</p> : null}
           </section>
           <MemoryForestViz manifest={manifest} nodes={nodes} />
-          <FactInspector result={visibleQuery} detail={factDetail} />
+          <FactInspector result={visibleQuery} detail={factDetail} forestFacts={forestFacts} />
           <QueryTraceViz trace={trace} />
           <SessionBrowser sessions={sessions} turns={turns} />
           <OpsStatus manifest={manifest} authMode={config?.devMode ? 'Dev headers' : 'Entra'} error={error} />

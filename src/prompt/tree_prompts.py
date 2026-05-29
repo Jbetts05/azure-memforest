@@ -11,7 +11,7 @@ TREE_SUMMARY_SESSION = PromptTemplate(
 node in a memory index. This summary must serve as both an answer source AND a \
 navigation guide for downstream tree search.
 
-Write one concise prose summary ({max_words} words or fewer).
+Write one concise prose summary ({max_words} words or fewer). Use 1-2 short sentences.
 
 Rules:
 1. Lead with the most answer-bearing facts: who, what, when, where, how many.
@@ -20,11 +20,12 @@ Rules:
 4. Chronological order. End with latest known state.
 5. Major clusters only — no exhaustive enumeration of minor details.
 6. No assistant advice, interpretation, or filler phrases.
+7. Date headers and observation timestamps are provenance only. Do not turn them into start/join/validity dates unless the source fact explicitly says started, joined, began, or since.
 
 - OUTPUT FORMAT: respond with exactly one JSON key:
   {{"summary": "your prose here"}}
   Do NOT add any other keys.""",
-    user="""Conversation window: {session_id} ({time_range_text}):
+    user="""Conversation observed in window: {session_id} ({time_range_text}):
 {input_text}""",
 )
 
@@ -33,21 +34,23 @@ TREE_SUMMARY_ENTITY_USER = PromptTemplate(
     system="""You are writing a STRUCTURAL NAVIGATION SUMMARY for the user entity \
 tree. This summary must serve as both an answer source AND a navigation guide.
 
-Write one concise prose summary ({max_words} words or fewer).
+Write one concise prose summary ({max_words} words or fewer). Use 1-2 short sentences.
 
 Rules:
 1. Lead with answer-bearing user facts: role, preferences, states, constraints.
-2. Preserve ALL exact numbers, dates, prices, amounts, and named outcomes.
+2. Preserve concrete values for the latest or most salient states; include dates only when the child facts explicitly state them.
 3. Use "X → Y" notation for state changes (e.g. "weight 180lb → 165lb").
 4. Group by domain cluster, then chronological within each cluster.
 5. End with latest known user state, role, or preference.
 6. No personality analysis, assistant advice, or interpretation.
 7. Do NOT generalize away specific entities or value changes.
+8. Date headers and observation timestamps are provenance only. Do not write "started", "joined", "as of", or "since" unless the source fact explicitly says started, joined, began, or since.
+9. Do not write negative filler such as "no other documented preferences" or timeline bookkeeping.
 
 - OUTPUT FORMAT: respond with exactly one JSON key:
   {{"summary": "your prose here"}}
   Do NOT add any other keys.""",
-    user="""Facts ({time_range_text}):
+    user="""Facts observed between {time_range_text}:
 {input_text}""",
 )
 
@@ -56,21 +59,24 @@ TREE_SUMMARY_ENTITY_GENERIC = PromptTemplate(
     system="""You are writing a STRUCTURAL NAVIGATION SUMMARY for one named entity \
 tree. This summary must serve as both an answer source AND a navigation guide.
 
-Write one concise prose summary ({max_words} words or fewer).
+Write one concise prose summary ({max_words} words or fewer). Use 1-2 short sentences.
 
 Rules:
 1. First sentence: what this entity is (person, place, organization, product).
 2. Then major interactions, events, values, or decisions in chronological order.
-3. Preserve ALL exact names, prices, quantities, dates, and time anchors.
+3. Preserve exact names, prices, quantities, and explicit dates that are material to the entity.
 4. Use "X → Y" notation for state changes.
 5. Stay entity-focal — do not drift into unrelated narrative.
 6. End with latest known entity state or outcome.
 7. No recommendations or interpretation.
+8. Date headers and observation timestamps are provenance only. Do not turn them into start/join/validity dates unless the source fact explicitly says started, joined, began, or since.
+9. Do not write negative filler or timeline bookkeeping.
 
 - OUTPUT FORMAT: respond with exactly one JSON key:
   {{"summary": "your prose here"}}
   Do NOT add any other keys.""",
-    user="""Entity: {tree_label} ({time_range_text}):
+    user="""Entity: {tree_label}
+Facts observed between {time_range_text}:
 {input_text}""",
 )
 
@@ -79,7 +85,7 @@ TREE_SUMMARY_SCENE = PromptTemplate(
     system="""You are writing a STRUCTURAL NAVIGATION SUMMARY for one scene tree. \
 This summary must serve as both an answer source AND a navigation guide.
 
-Write one concise prose summary ({max_words} words or fewer).
+Write one concise prose summary ({max_words} words or fewer). Use 1-2 short sentences.
 
 Rules:
 1. Lead with the most answer-bearing scene facts.
@@ -89,11 +95,14 @@ Rules:
 5. Mention key recurring actors or entities.
 6. End with latest known scene outcome or state.
 7. No recommendations, exposition, or generalization beyond the provided facts.
+8. Date headers and observation timestamps are provenance only. Do not turn them into start/join/validity dates unless the source fact explicitly says started, joined, began, or since.
+9. Do not write negative filler or timeline bookkeeping.
 
 - OUTPUT FORMAT: respond with exactly one JSON key:
   {{"summary": "your prose here"}}
   Do NOT add any other keys.""",
-    user="""Domain: {tree_label} ({time_range_text}):
+    user="""Domain: {tree_label}
+Facts observed between {time_range_text}:
 {input_text}""",
 )
 

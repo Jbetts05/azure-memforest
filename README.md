@@ -22,6 +22,16 @@ Azure-MemForest gives an agent a memory system that behaves less like a transcri
 6. **Query memory** by recalling trees, browsing tree nodes, loading facts, reranking with stored fact embeddings, and composing grounded answers.
 7. **Explain decisions** through safe trace records that expose recall, browse, rerank, and answer steps without raw prompt or memory payload leakage.
 
+### MemTree views
+
+MemForest stores the same extracted facts through three complementary tree views:
+
+| View | Organizes | Useful question |
+| --- | --- | --- |
+| **Session** | Conversation turns in temporal order. | “What happened in this conversation?” |
+| **Entity** | Facts grouped around people, organizations, tools, places, or named concepts. | “What do we know about this person or topic?” |
+| **Scene** | Facts grouped by situation, activity, topic, or recurring context. | “What context does this memory belong to?” |
+
 ## Why this exists
 
 Long-running agents need memory that is:
@@ -212,4 +222,3 @@ Azure-MemForest can be used anywhere an agent needs durable, explainable, tenant
 ## Original research artifact
 
 The original MemForest paper assets remain in `paper/`, and benchmark CSVs remain in `benchmark/`. Azure-MemForest preserves the research behavior contract while adding cloud durability, identity, operational readiness, and deployment scaffolding.
-

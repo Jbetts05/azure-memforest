@@ -16,7 +16,9 @@ Core principles:
 - Every item must be self-contained for later retrieval.
 - Write each fact_text as a complete third-person sentence with explicit attribution.
   GOOD: "The user bought a Pixel 8 for $699 on March 5, 2023."
+  GOOD: "Josh works at Microsoft."
   BAD: "Bought a new phone." (who? which phone? when? how much?)
+  BAD: "Josh has worked at Microsoft since May 29, 2026." (cell timestamp inferred as a start date)
 - Resolve pronouns (he/she/they/it) to specific names when possible.
 - Base facts strictly on the conversation. Do not infer or hallucinate details not present.
 - Preserve concrete details: names, places, dates, numbers, prices, handles, titles.
@@ -26,7 +28,7 @@ Output JSON schema:
   "cell_summary": "1-3 sentence summary of the cell topic",
   "memory_items": [
     {{
-      "fact_text": "self-contained third-person fact sentence with date and key details embedded",
+      "fact_text": "self-contained third-person fact sentence with key details embedded",
       "participants": ["speaker or relevant people"],
       "origin": "user|assistant|mixed|unknown",
       "semantic_role": "event|state|preference|constraint|plan|detail|reference",
@@ -69,17 +71,18 @@ Item rules:
 - Target 5-8 P1+P2 items. Expand to {max_items_per_cell} only for genuine P1/P2 facts. Never pad with P3/P4.
 - Aggregation: when user does the same action on N≥3 similar targets, emit ONE item with count + 2-3 examples instead of N items.
 - Concreteness — always embed directly in fact_text:
-  - Dates: use cell time span if turn lacks explicit date.
+  - Dates: include dates in fact_text only when the user explicitly states them or the item is a concrete event whose occurrence date is part of the memory.
+  - Observation timestamps are provenance, not fact validity. For stable states/preferences/constraints, do NOT rewrite the cell timestamp as "started on", "joined on", "as of", or "since" unless the user explicitly said that.
   - Prices/amounts: include exact numbers.
   - Companions: "with [person]" or "alone".
-  - Durations: resolve to approximate start date, e.g. "started X approximately in January 2023 (~2 months before March 2023)", and set time_start.
+  - Durations: infer an approximate start date only when the user explicitly gives a duration/start cue.
 - Each distinct event → its own item. Do not collapse two events into one.
 - Each item is atomic: do not merge user experience with assistant answer.
 
 Time rules:
-- Use the cell time span header as the base time for resolving relative references.
+- Use the cell time span header as observation provenance and as the base time for resolving explicit relative references.
 - For relative times, use dual format in time_text: "last week (March 1, 2023)".
-- Use UTC unix seconds for time_start/time_end; null if unresolvable.
+- Use UTC unix seconds for time_start/time_end as observation/provenance when no explicit validity date exists; null if unresolvable.
 
 Facet rules:
 - `topics`: at most {max_topics_per_item}. Scene-style routing labels.

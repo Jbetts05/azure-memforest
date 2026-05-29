@@ -168,7 +168,7 @@ def _prompt_name_for(tree_type: str, tree_label: str) -> str:
 
 
 def _max_words_for(tree_type: str) -> int:
-    return 250 if tree_type == "entity" else 200
+    return 110 if tree_type == "entity" else 80
 
 
 def _render_time_range(time_start: float, time_end: float) -> str:

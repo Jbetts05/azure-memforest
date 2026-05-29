@@ -1,23 +1,59 @@
 import type { Manifest, TreeNode } from '../api';
 
 export function MemoryForestViz({ manifest, nodes }: { manifest?: Manifest | null; nodes: TreeNode[] }) {
-  const visible = nodes.slice(0, 10);
+  const visible = nodes.slice(0, 8);
+  const types = visible.reduce<Record<string, number>>((acc, node) => {
+    const type = String(node.metadata.tree_type ?? node.level ?? 'tree');
+    acc[type] = (acc[type] ?? 0) + 1;
+    return acc;
+  }, {});
+  const factCount = visible.reduce((total, node) => total + node.fact_ids.length, 0);
+  const childCount = visible.reduce((total, node) => total + node.child_ids.length, 0);
   return (
     <section className="treePanel" aria-label="Memory forest visualization">
       <strong>Memory forest</strong>
       <p className="tiny">{manifest ? `${manifest.forest_version} · generation ${manifest.generation}` : 'No committed forest loaded'}</p>
       {!nodes.length ? <p className="tiny">No tree roots loaded.</p> : null}
-      <p className="sr-only">Memory tree visualization. Each point represents a loaded tree root or node from the latest committed forest.</p>
-      <svg viewBox="0 0 420 220" role="img" aria-label="MemTree roots">
-        <line x1="210" y1="32" x2="100" y2="150" />
-        <line x1="210" y1="32" x2="210" y2="160" />
-        <line x1="210" y1="32" x2="320" y2="150" />
-        {visible.map((node, index) => {
-          const x = 80 + (index % 5) * 64;
-          const y = index === 0 ? 32 : 140 + (index % 2) * 34;
-          return <g key={`${node.tree_id}:${node.node_id}`}><circle cx={x} cy={y} r="12" /><text x={x + 16} y={y + 4}>{node.metadata.tree_type ? String(node.metadata.tree_type) : node.level}</text></g>;
+      <div className="forestStats" aria-label="Latest forest stats">
+        <div><b>{nodes.length}</b><span>trees</span></div>
+        <div><b>{factCount}</b><span>root facts</span></div>
+        <div><b>{childCount}</b><span>children</span></div>
+      </div>
+      <div className="typeStrip">
+        {Object.entries(types).map(([type, count]) => <span key={type}>{type}: {count}</span>)}
+      </div>
+      <div className="treeList">
+        {visible.map((node) => {
+          const type = String(node.metadata.tree_type ?? node.level ?? 'tree');
+          return (
+            <article key={`${node.tree_id}:${node.node_id}`} className="treeItem">
+              <div>
+                <span>{type}</span>
+                <small>{node.level} · {node.fact_ids.length} fact(s) · {node.child_ids.length} child node(s)</small>
+              </div>
+              <p>{_summaryBody(node.summary) || 'No summary generated for this tree yet.'}</p>
+              <small>{node.tree_id}</small>
+            </article>
+          );
         })}
-      </svg>
+      </div>
     </section>
   );
+}
+
+function _summaryBody(summary: string): string {
+  const withoutHeader = summary.replace(/^(\s*\[[^\]]*\]\s*)+/, '').trim();
+  const cleaned = withoutHeader
+    .replace(/,\s*starting\s+[A-Z][a-z]+\s+\d{1,2},\s+\d{4}/g, '')
+    .replace(/\s+starting\s+[A-Z][a-z]+\s+\d{1,2},\s+\d{4}/g, '')
+    .replace(/On that same date,\s*/g, '')
+    .split(/(?<=[.!?])\s+/)
+    .filter((sentence) => !/no other documented|timeline of facts spans|latest known user state/i.test(sentence))
+    .join(' ')
+    .trim();
+  const sentences = cleaned.match(/[^.!?]+[.!?]+/g);
+  const compact = sentences ? sentences.slice(0, 2).join(' ').trim() : cleaned;
+  if (compact.length <= 260) return compact;
+  const slice = compact.slice(0, 257);
+  return `${slice.slice(0, Math.max(slice.lastIndexOf(' '), 180)).trimEnd()}...`;
 }

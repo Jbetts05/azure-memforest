@@ -40,6 +40,7 @@ export type Session = { session_id: string; cell_ids: string[]; metadata: Record
 export type Turn = { turn_id: string; session_id: string; turn_index: number; role: string; content: string; timestamp?: string | null };
 export type Manifest = { manifest_id: string; forest_version: string; generation: number; status: string; metadata: Record<string, unknown> };
 export type TreeNode = { tree_id: string; node_id: string; level: string; summary: string; child_ids: string[]; fact_ids: string[]; metadata: Record<string, unknown> };
+export type Subtree = { forest_version: string; tree_id: string; root_node_id: string; truncated: boolean; nodes: TreeNode[] };
 export type QueryResult = { query_id: string; answer?: string; reason?: string; facts: Array<{ fact_id: string; text: string; metadata: Record<string, unknown> }> };
 export type QueryTrace = { query_id: string; forest_version: string; event_count: number; event_summaries: Array<Record<string, unknown>> };
 export type FactDetail = { fact_id: string; text: string; metadata: Record<string, unknown>; locations: Array<Record<string, unknown>> };
@@ -60,6 +61,7 @@ export const api = {
   turns: (config: ApiConfig, sessionId: string) => request<Turn[]>(config, `/v1/users/${config.userId}/sessions/${sessionId}/turns`),
   latestForest: (config: ApiConfig) => request<Manifest>(config, `/v1/users/${config.userId}/forest/latest`),
   treeRoots: (config: ApiConfig, forestVersion: string) => request<{ forest_version: string; roots: TreeNode[] }>(config, `/v1/users/${config.userId}/forest/${forestVersion}/trees`),
+  subtree: (config: ApiConfig, forestVersion: string, treeId: string, rootNodeId: string) => request<Subtree>(config, `/v1/users/${config.userId}/forest/${forestVersion}/trees/${treeId}/subtree?root_node_id=${encodeURIComponent(rootNodeId)}&max_depth=4&max_nodes=80`),
   query: (config: ApiConfig, question: string) => request<QueryResult>(config, `/v1/users/${config.userId}/query`, { method: 'POST', body: JSON.stringify({ question, max_facts: 8, trace_requested: true }) }),
   chat: (config: ApiConfig, message: string, turns: TurnInput[]) => request<ChatResult>(config, `/v1/users/${config.userId}/chat`, {
     method: 'POST',

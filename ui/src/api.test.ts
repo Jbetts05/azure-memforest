@@ -43,6 +43,13 @@ describe('api client', () => {
     expect(body.trace_requested).toBe(true);
   });
 
+  it('passes root node id when loading a subtree', async () => {
+    await api.subtree(config, 'forest-1', 'tree-1', 'root node');
+    const call = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+
+    expect(call[0]).toBe('https://api.example/v1/users/user-1/forest/forest-1/trees/tree-1/subtree?root_node_id=root%20node&max_depth=4&max_nodes=80');
+  });
+
   it('builds trace URL from query id', async () => {
     await api.trace(config, 'query-1');
     const call = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
