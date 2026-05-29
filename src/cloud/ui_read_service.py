@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import deque
+from collections.abc import Mapping
 from typing import Any
 
 from src.cloud.cosmos_facts import CosmosFactStore
@@ -130,8 +131,8 @@ class CloudUiReadService:
             text=fact.fact_text,
             time_start=fact.time_start,
             time_end=fact.time_end,
-            metadata=dict(fact.metadata),
-            locations=[loc.__dict__ for loc in locations.get(fact_id, [])],
+            metadata=_json_safe(fact.metadata),
+            locations=[_json_safe(loc.__dict__) for loc in locations.get(fact_id, [])],
         )
 
     async def _require_committed_forest(self, actor: ActorContext, user_id: str, forest_version: str) -> None:
@@ -184,3 +185,11 @@ def _node_response(node) -> TreeNodeResponse:
 
 def _clamp(value: int, minimum: int, maximum: int) -> int:
     return max(minimum, min(maximum, int(value)))
+
+
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [_json_safe(item) for item in value]
+    return value
