@@ -97,7 +97,7 @@ class SummaryManager:
         Retries up to ``config.max_retries`` times when the response comes back
         empty without an explicit error (silent JSON truncation path).
         """
-        prompt_name = _prompt_name_for(req.tree_type, req.tree_label)
+        prompt_name = _prompt_name_for(req.tree_type, req.tree_label, tree_id=req.tree_id)
         context = {
             "session_id": req.tree_label if req.tree_type == "session" else req.tree_id,
             "tree_label": req.tree_label,
@@ -159,11 +159,11 @@ class SummaryManager:
         )
 
 
-def _prompt_name_for(tree_type: str, tree_label: str) -> str:
+def _prompt_name_for(tree_type: str, tree_label: str, *, tree_id: str = "") -> str:
     if tree_type == "session":
         return "tree_summary_session"
     if tree_type == "entity":
-        return "tree_summary_entity_user" if tree_label == "user" else "tree_summary_entity_generic"
+        return "tree_summary_entity_user" if tree_id == "entity:user" or tree_label in {"user", "User profile"} else "tree_summary_entity_generic"
     return "tree_summary_scene"
 
 

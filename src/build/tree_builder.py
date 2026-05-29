@@ -183,7 +183,7 @@ class TreeBuilder:
         all_trees: list[MemTree] = []
 
         for tree_id, facts in entity_buckets.items():
-            label = "user" if tree_id == ENTITY_USER_TREE_ID else tree_id.replace("entity:", "").replace("_", " ")
+            label = "User profile" if tree_id == ENTITY_USER_TREE_ID else tree_id.replace("entity:", "").replace("_", " ")
             k = self._tree_cfg.entity.user_k if tree_id == ENTITY_USER_TREE_ID else self._tree_cfg.entity.entity_k
             tree, _ = build_tree_from_facts(
                 tree_id=tree_id,
@@ -285,7 +285,7 @@ class TreeBuilder:
         for tree_id, facts in self._build_entity_buckets(sorted_facts).items():
             tree = self._trees.get(tree_id)
             if tree is None:
-                label = "user" if tree_id == ENTITY_USER_TREE_ID else tree_id.replace("entity:", "").replace("_", " ")
+                label = "User profile" if tree_id == ENTITY_USER_TREE_ID else tree_id.replace("entity:", "").replace("_", " ")
                 k = self._tree_cfg.entity.user_k if tree_id == ENTITY_USER_TREE_ID else self._tree_cfg.entity.entity_k
                 candidate = self._entity_router.candidate(tree_id.replace("entity:", ""))
                 facts_for_tree = facts
@@ -732,7 +732,7 @@ class TreeBuilder:
 
 def _normalize_entity_key(entity: str) -> str | None:
     text = str(entity).strip().lower().replace("&", " and ")
-    if not text or text in {"user", "assistant", "unknown"}:
+    if not text or text in {"user", "assistant", "listener", "unknown", "the user", "the assistant", "speaker", "me", "i", "you"}:
         return None
     out = []
     last_was_sep = False
@@ -769,5 +769,3 @@ def _make_date_range_str(time_start: float, time_end: float) -> str:
         return f"{start_str} – {end_str}"
     except (OSError, OverflowError, ValueError):
         return ""
-
-

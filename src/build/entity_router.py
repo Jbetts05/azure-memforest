@@ -363,7 +363,7 @@ def _normalise_entity(entity: str) -> str | None:
     if not text:
         return None
     lowered = text.lower()
-    if lowered in {"user", "assistant", "unknown"}:
+    if lowered in {"user", "assistant", "listener", "unknown", "the user", "the assistant", "speaker", "me", "i", "you"}:
         return None
     if _INVALID_ENTITY_RE.match(text):
         return None

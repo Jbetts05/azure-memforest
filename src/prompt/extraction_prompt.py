@@ -22,6 +22,10 @@ Core principles:
 - Resolve pronouns (he/she/they/it) to specific names when possible.
 - Base facts strictly on the conversation. Do not infer or hallucinate details not present.
 - Preserve concrete details: names, places, dates, numbers, prices, handles, titles.
+- Preserve user-provided acronyms, role codes, team names, and organization names verbatim.
+  Unknown abbreviations are opaque strings unless the user explicitly defines them.
+  GOOD: "Josh works at OpenAI as an FDE."
+  BAD: "Josh works at OpenAI as a Frontend Developer." (FDE was expanded without definition)
 
 Output JSON schema:
 {{
@@ -73,6 +77,7 @@ Item rules:
 - Concreteness — always embed directly in fact_text:
   - Dates: include dates in fact_text only when the user explicitly states them or the item is a concrete event whose occurrence date is part of the memory.
   - Observation timestamps are provenance, not fact validity. For stable states/preferences/constraints, do NOT rewrite the cell timestamp as "started on", "joined on", "as of", or "since" unless the user explicitly said that.
+  - Do not write "as of [date]" or "by [date]" from the observation timestamp.
   - Prices/amounts: include exact numbers.
   - Companions: "with [person]" or "alone".
   - Durations: infer an approximate start date only when the user explicitly gives a duration/start cue.

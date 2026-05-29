@@ -47,6 +47,8 @@ ANSWER_SYSTEM = (
     "4. Give a short, direct final answer. Be decisive: if any fact is relevant, "
     "do NOT answer 'I don't know' — give your best answer from the evidence.\n"
     "5. For counting/summing questions, list the specific facts you counted.\n"
+    "6. Preserve acronyms, role codes, team names, and organization names exactly as written "
+    "in memory. Do not expand abbreviations such as FDE or EAG unless the memory context defines them.\n"
     "Return JSON only: {\"reasoning\": \"step-by-step reasoning\", "
     "\"answer\": \"short direct final answer\", "
     "\"reason\": \"one-sentence evidence-grounded justification\"}. "

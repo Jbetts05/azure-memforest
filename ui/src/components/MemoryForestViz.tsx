@@ -33,13 +33,17 @@ export function MemoryForestViz({ manifest, nodes }: { manifest?: Manifest | nul
                 <small>{node.level} · {node.fact_ids.length} fact(s) · {node.child_ids.length} child node(s)</small>
               </div>
               <p>{_summaryBody(node.summary) || 'No summary generated for this tree yet.'}</p>
-              <small>{node.tree_id}</small>
+              <small>{_treeLabel(node)}</small>
             </article>
           );
         })}
       </div>
     </section>
   );
+}
+
+function _treeLabel(node: TreeNode): string {
+  return String(node.metadata.tree_label || (node.tree_id === 'entity:user' ? 'User profile' : node.tree_id));
 }
 
 function _summaryBody(summary: string): string {

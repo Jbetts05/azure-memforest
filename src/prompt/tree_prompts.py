@@ -21,11 +21,13 @@ Rules:
 5. Major clusters only — no exhaustive enumeration of minor details.
 6. No assistant advice, interpretation, or filler phrases.
 7. Date headers and observation timestamps are provenance only. Do not turn them into start/join/validity dates unless the source fact explicitly says started, joined, began, or since.
+8. Preserve acronyms and role codes verbatim. Do not expand FDE, PM, SWE, EAG, or other abbreviations unless a source fact defines them.
 
 - OUTPUT FORMAT: respond with exactly one JSON key:
   {{"summary": "your prose here"}}
   Do NOT add any other keys.""",
-    user="""Conversation observed in window: {session_id} ({time_range_text}):
+    user="""Conversation observation window for ordering only. Do not cite this window in the summary.
+Session: {session_id}
 {input_text}""",
 )
 
@@ -37,7 +39,7 @@ tree. This summary must serve as both an answer source AND a navigation guide.
 Write one concise prose summary ({max_words} words or fewer). Use 1-2 short sentences.
 
 Rules:
-1. Lead with answer-bearing user facts: role, preferences, states, constraints.
+1. Lead with the user's most salient facts verbatim: role codes, preferences, states, constraints.
 2. Preserve concrete values for the latest or most salient states; include dates only when the child facts explicitly state them.
 3. Use "X → Y" notation for state changes (e.g. "weight 180lb → 165lb").
 4. Group by domain cluster, then chronological within each cluster.
@@ -46,11 +48,14 @@ Rules:
 7. Do NOT generalize away specific entities or value changes.
 8. Date headers and observation timestamps are provenance only. Do not write "started", "joined", "as of", or "since" unless the source fact explicitly says started, joined, began, or since.
 9. Do not write negative filler such as "no other documented preferences" or timeline bookkeeping.
+10. Preserve acronyms and role codes verbatim. Do not expand FDE, PM, SWE, EAG, or other abbreviations unless a source fact defines them.
+11. BAD: "Josh works at OpenAI as a Frontend Developer." GOOD: "Josh works at OpenAI as an FDE."
+12. BAD: "Josh works at OpenAI as of December 2025." GOOD: "Josh works at OpenAI as an FDE."
 
 - OUTPUT FORMAT: respond with exactly one JSON key:
   {{"summary": "your prose here"}}
   Do NOT add any other keys.""",
-    user="""Facts observed between {time_range_text}:
+    user="""Observation window for ordering only. Do not cite this window in the summary.
 {input_text}""",
 )
 
@@ -71,12 +76,13 @@ Rules:
 7. No recommendations or interpretation.
 8. Date headers and observation timestamps are provenance only. Do not turn them into start/join/validity dates unless the source fact explicitly says started, joined, began, or since.
 9. Do not write negative filler or timeline bookkeeping.
+10. Preserve acronyms and role codes verbatim. Do not expand FDE, PM, SWE, EAG, or other abbreviations unless a source fact defines them.
 
 - OUTPUT FORMAT: respond with exactly one JSON key:
   {{"summary": "your prose here"}}
   Do NOT add any other keys.""",
     user="""Entity: {tree_label}
-Facts observed between {time_range_text}:
+    Observation window for ordering only. Do not cite this window in the summary.
 {input_text}""",
 )
 
@@ -97,12 +103,13 @@ Rules:
 7. No recommendations, exposition, or generalization beyond the provided facts.
 8. Date headers and observation timestamps are provenance only. Do not turn them into start/join/validity dates unless the source fact explicitly says started, joined, began, or since.
 9. Do not write negative filler or timeline bookkeeping.
+10. Preserve acronyms and role codes verbatim. Do not expand FDE, PM, SWE, EAG, or other abbreviations unless a source fact defines them.
 
 - OUTPUT FORMAT: respond with exactly one JSON key:
   {{"summary": "your prose here"}}
   Do NOT add any other keys.""",
     user="""Domain: {tree_label}
-Facts observed between {time_range_text}:
+    Observation window for ordering only. Do not cite this window in the summary.
 {input_text}""",
 )
 
