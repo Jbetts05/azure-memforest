@@ -83,6 +83,7 @@ export function MemoryExplorerDrawer({
         </nav>
         {tab === 'forest' ? (
           <section className="drawerPane">
+            <MemoryLegend />
             <div className="drawerStats">
               <div><b>{roots.length}</b><span>trees</span></div>
               <div><b>{forestFacts.length}</b><span>facts</span></div>
@@ -131,6 +132,25 @@ export function MemoryExplorerDrawer({
         ) : null}
       </aside>
     </div>
+  );
+}
+
+function MemoryLegend() {
+  const items = [
+    ['Session', 'Conversation memory in time order.'],
+    ['Entity', 'Facts grouped around a person, org, tool, place, or concept.'],
+    ['Scene', 'Facts grouped around a topic, activity, or recurring context.'],
+    ['Fact', 'A durable memory extracted from conversation.'],
+    ['Level', 'L0 is closest to facts; higher levels summarize children.'],
+    ['Trace', 'The retrieval path used to answer a question.']
+  ];
+  return (
+    <details className="memoryLegend">
+      <summary>Memory key</summary>
+      <div>
+        {items.map(([term, text]) => <p key={term}><b>{term}</b><span>{text}</span></p>)}
+      </div>
+    </details>
   );
 }
 

@@ -147,7 +147,7 @@ class MemForestMaterializationHandler:
             snapshot = await asyncio.to_thread(
                 self._ingest_core.ingest_session,
                 session_id=envelope.session_id,
-                turns=turns,
+                turns=_extractable_turns(turns),
                 metadata=request.metadata,
             )
             if _is_factless_snapshot(snapshot):
@@ -803,6 +803,16 @@ def _canonical_level(level: Any) -> str:
 
 def _is_factless_snapshot(snapshot: ForestMaterializationSnapshot) -> bool:
     return not snapshot.facts and not any(_tree_has_fact_payload(tree) for tree in snapshot.trees)
+
+
+def _extractable_turns(turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return turns eligible for memory extraction.
+
+    Source storage may include assistant transcript turns for UI reload. Any
+    rebuild/backfill path that replays source turns into ingest_core must apply
+    this same filter to avoid extracting assistant copy as durable user memory.
+    """
+    return [turn for turn in turns if not ((turn.get("metadata") or {}).get("skip_extraction"))]
 
 
 def _tree_has_fact_payload(tree: Any) -> bool:

@@ -273,9 +273,11 @@ class FakeIngestCore:
         self.deleted = False
         self.delete_missing = delete_missing
         self.hydrated_from = None
+        self.ingested_turns = None
 
     def ingest_session(self, *, session_id, turns, metadata):
         self.called = True
+        self.ingested_turns = turns
         return self.snapshot
 
     def delete_session(self, *, session_id):
@@ -425,6 +427,33 @@ async def test_materialization_handler_does_not_commit_factless_ingest() -> None
     assert manifest_store.pending is None
     assert manifest_store.committed == []
     assert calls == ["source_session", "source_turns"]
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_stores_assistant_turns_but_skips_extraction() -> None:
+    calls = []
+    core = FakeIngestCore(_factless_snapshot())
+    handler = _handler(calls=calls, core=core)
+    envelope = build_write_job_envelope(
+        ActorContext(actor_id="user-1", tenant=TenantContext("tenant-1")),
+        user_id="user-1",
+        session_id="session-1",
+        job_type="ingest_session",
+        idempotency_key="idem-assistant",
+        payload={
+            "turns": [
+                {"role": "user", "content": "I work at OpenAI as an FDE", "metadata": {"source": "chat-ui"}},
+                {"role": "assistant", "content": "Thanks for the update.", "metadata": {"skip_extraction": True}},
+            ],
+            "metadata": {"source": "test"},
+        },
+    )
+
+    await handler.handle(envelope, {"fencing_token": 1})
+
+    assert len(core.ingested_turns) == 1
+    assert core.ingested_turns[0]["role"] == "user"
+    assert core.ingested_turns[0]["content"] == "I work at OpenAI as an FDE"
 
 
 @pytest.mark.asyncio

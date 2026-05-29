@@ -26,6 +26,8 @@ function App() {
   const [job, setJob] = useState<JobStatus | null>(null);
   const [jobEvents, setJobEvents] = useState<JobEvent[]>([]);
   const [extracting, setExtracting] = useState(false);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [hydrated, setHydrated] = useState(false);
   const memoryTriggerRef = useRef<HTMLButtonElement | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [emptyForest, setEmptyForest] = useState(false);
@@ -41,7 +43,12 @@ function App() {
     setEmptyForest(false);
     const loadedSessions = await api.sessions(cfg).catch(() => []);
     setSessions(loadedSessions);
-    setTurns(loadedSessions[0] ? await api.turns(cfg, loadedSessions[0].session_id).catch(() => []) : []);
+    const scopedSessions = _sessionsForActiveChat(loadedSessions, activeSessionId);
+    const loadedTurns = await Promise.all(
+      _orderedSessions(scopedSessions).map((session) => api.turns(cfg, session.session_id).catch(() => []))
+    );
+    setTurns(loadedTurns.flat());
+    setHydrated(true);
     try {
       const latest = await api.latestForest(cfg);
       setEmptyForest(false);
@@ -114,6 +121,15 @@ function App() {
     return () => { cancelled = true; };
   }, []);
 
+  useEffect(() => {
+    if (!config || !activeSessionId) return;
+    setHydrated(false);
+    refresh(config).catch((err) => {
+      if (!_isForestNotFound(err)) setError(err instanceof Error ? err.message : String(err));
+      setHydrated(true);
+    });
+  }, [activeSessionId, config]);
+
   async function handleChatResult(result: ChatResult) {
     const queryResult: QueryResult = {
       query_id: result.query_id ?? '',
@@ -150,6 +166,8 @@ function App() {
         <ChatWorkspace
           config={config}
           initialTurns={turns}
+          hydrated={hydrated}
+          onActiveSession={setActiveSessionId}
           onChatResult={(result) => { void handleChatResult(result); }}
           onMemoryBadgeClick={(message) => {
             setDrawerTab(message.queryId ? 'trace' : 'facts');
@@ -215,4 +233,18 @@ function _memoryStatusCopy(status: ChatResult['memory_status']): string {
   if (status === 'no_forest') return 'No committed forest existed before this turn.';
   if (status === 'no_facts') return 'The forest was queried, but no relevant facts were found.';
   return 'Memory recall was unavailable for this turn.';
+}
+
+function _sessionsForActiveChat(sessions: Session[], activeSessionId: string | null): Session[] {
+  if (!activeSessionId) return [];
+  return sessions.filter((session) => session.session_id.startsWith(`${activeSessionId}-window-`) || session.metadata?.active_session_id === activeSessionId);
+}
+
+function _orderedSessions(sessions: Session[]): Session[] {
+  return [...sessions].sort((left, right) => _windowIndex(left) - _windowIndex(right) || left.session_id.localeCompare(right.session_id));
+}
+
+function _windowIndex(session: Session): number {
+  const value = session.metadata?.window_index;
+  return typeof value === 'number' ? value : Number(value ?? 0);
 }

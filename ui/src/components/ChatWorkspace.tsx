@@ -19,7 +19,9 @@ export function ChatWorkspace({
   onChatResult,
   onIngestComplete,
   onJobUpdate,
-  onMemoryBadgeClick
+  onMemoryBadgeClick,
+  onActiveSession,
+  hydrated
 }: {
   config: ApiConfig | null;
   initialTurns: Turn[];
@@ -27,6 +29,8 @@ export function ChatWorkspace({
   onIngestComplete: () => Promise<void>;
   onJobUpdate?: (job: JobStatus | null, events: JobEvent[], extracting: boolean) => void;
   onMemoryBadgeClick?: (message: { queryId?: string | null; facts?: ChatResult['facts']; memoryStatus?: ChatResult['memory_status'] }) => void;
+  onActiveSession?: (sessionId: string) => void;
+  hydrated: boolean;
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState('');
@@ -41,6 +45,8 @@ export function ChatWorkspace({
   const latestJobRef = useRef<JobStatus | null>(null);
   const latestEventsRef = useRef<JobEvent[]>([]);
   const activeSessionId = useMemo(() => _activeSessionId(config), [config]);
+
+  useEffect(() => { onActiveSession?.(activeSessionId); }, [activeSessionId, onActiveSession]);
 
   useEffect(() => {
     if (!messages.length && initialTurns.length) {
@@ -58,7 +64,7 @@ export function ChatWorkspace({
   }, [messages, busy]);
 
   async function send() {
-    if (!config || busy || !draft.trim()) return;
+    if (!config || !hydrated || busy || !draft.trim()) return;
     const content = draft.trim();
     const now = new Date().toISOString();
     const userMessage: ChatMessage = { id: `local-user-${crypto.randomUUID()}`, role: 'user', content, timestamp: now };
@@ -81,7 +87,7 @@ export function ChatWorkspace({
         facts: result.facts
       };
       setMessages((current) => [...current, assistantMessage]);
-      void ingestWindow(config, activeSessionId, history);
+      void ingestWindow(config, activeSessionId, [...history, assistantMessage]);
     } catch (err) {
       setError(_friendlyError(err));
       const fallback: ChatMessage = {
@@ -109,13 +115,15 @@ export function ChatWorkspace({
       const userMessages = history.filter((message) => message.role === 'user');
       const latestUserIndex = userMessages.length - 1;
       const windowIndex = Math.max(0, Math.floor(latestUserIndex / 6));
-      const windowUserTurns = userMessages.slice(windowIndex * 6, windowIndex * 6 + 6);
-      const turns = windowUserTurns.map((message): TurnInput => ({
-        role: 'user',
+      const windowUsers = new Set(userMessages.slice(windowIndex * 6, windowIndex * 6 + 6).map((message) => message.id));
+      const turns = _messagesForUserWindow(history, windowUsers).map((message): TurnInput => ({
+        role: message.role,
         content: message.content,
         timestamp: message.timestamp,
         content_id: message.id,
-        metadata: { source: 'chat-ui' }
+        metadata: message.role === 'assistant'
+          ? { source: 'chat-ui-assistant', skip_extraction: true }
+          : { source: 'chat-ui' }
       }));
       const accepted = await api.ingestSession(config, `${rootSessionId}-window-${windowIndex}`, turns, { active_session_id: rootSessionId, window_index: windowIndex });
       let current = await api.job(config, accepted.job_id);
@@ -189,7 +197,7 @@ export function ChatWorkspace({
           placeholder="Message MemForest..."
           rows={1}
         />
-        <button disabled={!config || busy || !draft.trim()} type="submit">{busy ? 'Thinking' : 'Send'}</button>
+        <button disabled={!config || !hydrated || busy || !draft.trim()} type="submit">{busy ? 'Thinking' : 'Send'}</button>
       </form>
       <div className="chatStatus" aria-live="polite">
         <span>{extracting ? 'Updating memory in the background...' : job ? `Memory job ${job.status}` : 'Memory extraction runs after each message.'}</span>
@@ -223,6 +231,20 @@ function _turnInputs(messages: ChatMessage[]): TurnInput[] {
     content_id: message.id,
     metadata: { source: 'chat-ui-context' }
   }));
+}
+
+function _messagesForUserWindow(messages: ChatMessage[], windowUsers: Set<string>): ChatMessage[] {
+  const out: ChatMessage[] = [];
+  let includeAssistant = false;
+  for (const message of messages) {
+    if (message.role === 'user') {
+      includeAssistant = windowUsers.has(message.id);
+      if (includeAssistant) out.push(message);
+      continue;
+    }
+    if (includeAssistant) out.push(message);
+  }
+  return out;
 }
 
 function _eventsOrEmpty(value: unknown): JobEvent[] {
