@@ -49,6 +49,10 @@ export function ChatWorkspace({
   useEffect(() => { onActiveSession?.(activeSessionId); }, [activeSessionId, onActiveSession]);
 
   useEffect(() => {
+    if (!initialTurns.length) {
+      setMessages([]);
+      return;
+    }
     if (!messages.length && initialTurns.length) {
       setMessages(initialTurns.map((turn) => ({
         id: turn.turn_id,
