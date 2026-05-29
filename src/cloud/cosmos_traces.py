@@ -18,6 +18,31 @@ from src.service.schemas import QueryTraceResponse
 MAX_ATTRIBUTE_STRING_LENGTH = 256
 MAX_EVENT_BYTES = 4096
 MAX_TRACE_BYTES = 1024 * 1024
+SUMMARY_ATTRIBUTE_KEYS = frozenset(
+    {
+        "answer_length",
+        "browse_plan_count",
+        "browse_type",
+        "direction",
+        "fact_count",
+        "forest_version",
+        "input_fact_count",
+        "loaded_fact_count",
+        "output_fact_count",
+        "plan_count",
+        "purpose",
+        "raw_fact_id_count",
+        "raw_id_count",
+        "recall_count",
+        "recall_top_k",
+        "recalled_tree_count",
+        "text_length",
+        "top_k",
+        "trace_requested",
+        "tree_type",
+        "unique_raw_id_count",
+    }
+)
 FORBIDDEN_ATTRIBUTE_KEYS = frozenset(
     {
         "access_token",
@@ -196,6 +221,7 @@ class CosmosQueryTraceService:
             trace_truncated=bool(item.get("trace_truncated", False)),
             dropped_attribute_count=int(item.get("dropped_attribute_count", 0)),
             events=list(item.get("events", [])),
+            event_summaries=[_event_summary(event) for event in item.get("events", [])],
         )
 
 
@@ -263,6 +289,27 @@ def _safe_attributes(attributes: Any) -> tuple[dict[str, Any], int]:
             continue
         safe[key] = clean
     return safe, dropped
+
+
+def _event_summary(event: dict[str, Any]) -> dict[str, Any]:
+    attributes = dict(event.get("attributes") or {})
+    safe_attributes = {
+        key: value
+        for key, value in attributes.items()
+        if key in SUMMARY_ATTRIBUTE_KEYS and _safe_scalar(value) is not None
+    }
+    summary = {
+        "event_type": event.get("event_type"),
+        "tree_id": event.get("tree_id"),
+        "node_id": event.get("node_id"),
+        "fact_id": event.get("fact_id"),
+        "score": event.get("score"),
+        "service_name": event.get("service_name"),
+        "duration_ms": event.get("duration_ms"),
+        "cache_hit": event.get("cache_hit"),
+        "attributes": safe_attributes,
+    }
+    return {key: value for key, value in summary.items() if value not in (None, {}, [])}
 
 
 def _safe_scalar(value: Any) -> Any | None:

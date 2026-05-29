@@ -73,6 +73,13 @@ class JobStatusResponse(BaseModel):
     error: str | None = None
 
 
+class JobEventResponse(BaseModel):
+    event_type: str
+    timestamp_unix: float | None = None
+    status: str
+    detail: str | None = None
+
+
 class QueryTraceResponse(BaseModel):
     query_id: str
     tenant_id: str
@@ -82,6 +89,66 @@ class QueryTraceResponse(BaseModel):
     trace_truncated: bool = False
     dropped_attribute_count: int = 0
     events: list[dict[str, Any]] = Field(default_factory=list)
+    event_summaries: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class SourceSessionResponse(BaseModel):
+    session_id: str
+    cell_ids: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class SourceTurnResponse(BaseModel):
+    turn_id: str
+    session_id: str
+    turn_index: int
+    role: str
+    content: str
+    timestamp: str | None = None
+    content_id: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ForestManifestResponse(BaseModel):
+    manifest_id: str
+    forest_version: str
+    generation: int
+    status: str
+    created_at_unix: float
+    committed_at_unix: float | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class TreeNodeResponse(BaseModel):
+    tree_id: str
+    node_id: str
+    level: str
+    summary: str
+    child_ids: list[str] = Field(default_factory=list)
+    fact_ids: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class TreeListResponse(BaseModel):
+    forest_version: str
+    roots: list[TreeNodeResponse] = Field(default_factory=list)
+
+
+class SubtreeResponse(BaseModel):
+    forest_version: str
+    tree_id: str
+    root_node_id: str
+    truncated: bool = False
+    nodes: list[TreeNodeResponse] = Field(default_factory=list)
+
+
+class FactDetailResponse(BaseModel):
+    fact_id: str
+    text: str
+    time_start: float | None = None
+    time_end: float | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    locations: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ErrorResponse(BaseModel):

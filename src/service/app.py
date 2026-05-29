@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, status
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 
 from src import __version__
 from src.service.auth import AuthError, AuthProvider
@@ -15,6 +16,7 @@ from src.service.auth import DevHeaderAuthProvider
 from src.service.azure_readiness import build_azure_readiness_checks
 from src.cloud.cosmos_jobs import CosmosJobStatusService, job_store_from_env
 from src.cloud.cosmos_traces import CosmosQueryTraceService, trace_recorder_from_database
+from src.cloud.ui_read_service import CloudUiReadService
 from src.service.entra_auth import entra_auth_provider_from_env
 from src.service.jobs import JobRecordingCommandService
 from src.service.jobs import service_bus_command_service_from_env
@@ -53,6 +55,13 @@ def create_app(
         lifespan=lifespan,
     )
     app.add_middleware(RequestIdMiddleware)
+    if settings.ui_enabled and settings.ui_allowed_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=list(settings.ui_allowed_origins),
+            allow_methods=["GET", "POST", "OPTIONS"],
+            allow_headers=["Authorization", "Content-Type", "Idempotency-Key", "x-tenant-id", "x-actor-id", "x-auth-scopes", "x-auth-roles"],
+        )
     app.state.auth_provider = auth_provider or _dev_auth_provider_from_env(os.environ) or entra_auth_provider_from_env(os.environ)
     job_store = job_store_from_env(os.environ)
     command_service = service_bus_command_service_from_env(os.environ)
@@ -65,6 +74,7 @@ def create_app(
     app.state.memory_query_service = _cloud_query_service_from_env(os.environ)
     trace_recorder = _trace_recorder_from_env(os.environ)
     app.state.query_trace_service = CosmosQueryTraceService(trace_recorder) if trace_recorder is not None else None
+    app.state.ui_read_service = _ui_read_service_from_env(os.environ)
     app.include_router(memory_router)
     app.add_exception_handler(_RouteError, route_error_handler)
 
@@ -151,6 +161,22 @@ def _trace_recorder_from_env(environ):
     credential = ManagedIdentityCredential(client_id=client_id)
     client = CosmosClient(endpoint, credential=credential)
     return trace_recorder_from_database(client.get_database_client(database_name))
+
+
+def _ui_read_service_from_env(environ):
+    if str(environ.get("AZURE_MEMFOREST_UI_ENABLED", "")).strip().lower() not in {"1", "true", "yes", "on"}:
+        return None
+    endpoint = str(environ.get("AZURE_COSMOS_ENDPOINT", "")).strip()
+    database_name = str(environ.get("AZURE_COSMOS_DATABASE_NAME", "")).strip()
+    client_id = str(environ.get("AZURE_CLIENT_ID", "")).strip()
+    if not (endpoint and database_name and client_id):
+        return None
+    from azure.cosmos.aio import CosmosClient
+    from azure.identity.aio import ManagedIdentityCredential
+
+    credential = ManagedIdentityCredential(client_id=client_id)
+    client = CosmosClient(endpoint, credential=credential)
+    return CloudUiReadService(client.get_database_client(database_name))
 
 
 def _dev_auth_provider_from_env(environ):

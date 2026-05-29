@@ -73,6 +73,17 @@ class CosmosSessionStore:
             return None
         return _session_from_doc(item)
 
+    async def list_sessions(self, *, limit: int = 100) -> list[SourceSessionDocument]:
+        query = "SELECT * FROM c WHERE c.tenant_user_key=@pk"
+        params = [{"name": "@pk", "value": self.tenant_user_key}]
+        sessions: list[SourceSessionDocument] = []
+        async for item in _aiter(self.container.query_items(query=query, parameters=params, partition_key=self.tenant_user_key)):
+            if item.get("tenant_id") == self.tenant_id and item.get("user_id") == self.user_id and not item.get("tombstoned"):
+                sessions.append(_session_from_doc(item))
+                if len(sessions) >= limit:
+                    break
+        return sessions
+
     async def _read_raw_session(self, session_id: str) -> dict[str, Any] | None:
         try:
             item = await _maybe_await(self.container.read_item(item=_session_id(session_id), partition_key=self.tenant_user_key))

@@ -35,6 +35,18 @@ param workerFactoryReady bool = false
 @description('Enable development header auth for the API. Dev only; use Entra for production.')
 param enableDevHeaderAuth bool = false
 
+@description('Enable UI routes/assets when a frontend is deployed. Keep false until UI feature gate is ready.')
+param enableUiFeature bool = false
+
+@description('Deploy Azure Static Web Apps hosting scaffold for the UI.')
+param deployUi bool = false
+
+@description('Azure Static Web Apps location for the UI.')
+param uiLocation string = location
+
+@description('Comma-separated browser origins allowed to call UI-enabled API routes.')
+param uiAllowedOrigins string = ''
+
 @description('Microsoft Entra tenant ID for API bearer-token validation. Leave empty to disable Entra auth.')
 param entraTenantId string = ''
 
@@ -692,6 +704,14 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
               value: string(enableDevHeaderAuth)
             }
             {
+              name: 'AZURE_MEMFOREST_UI_ENABLED'
+              value: string(enableUiFeature)
+            }
+            {
+              name: 'AZURE_MEMFOREST_UI_ALLOWED_ORIGINS'
+              value: uiAllowedOrigins
+            }
+            {
               name: 'ENTRA_TENANT_ID'
               value: entraTenantId
             }
@@ -904,9 +924,25 @@ resource workerContainerApp 'Microsoft.App/containerApps@2024-03-01' = if (deplo
   ]
 }
 
+resource uiStaticSite 'Microsoft.Web/staticSites@2022-09-01' = if (deployUi) {
+  name: '${normalizedName}-ui'
+  location: uiLocation
+  tags: tags
+  sku: {
+    name: 'Free'
+    tier: 'Free'
+  }
+  properties: {
+    allowConfigFileUpdates: true
+    provider: 'None'
+    stagingEnvironmentPolicy: 'Enabled'
+  }
+}
+
 output containerAppName string = containerApp.name
 output containerAppFqdn string = containerApp.properties.configuration.ingress.fqdn
 output workerContainerAppName string = deployWorker ? workerContainerApp.name : ''
+output uiStaticSiteName string = deployUi ? uiStaticSite.name : ''
 output containerRegistryLoginServer string = containerRegistry.properties.loginServer
 output managedIdentityClientId string = appIdentity.properties.clientId
 output applicationInsightsName string = appInsights.name

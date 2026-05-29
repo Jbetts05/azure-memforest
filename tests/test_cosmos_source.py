@@ -42,16 +42,17 @@ class FakeCosmosContainer:
         return result
 
 
-def _tree_node(node_id="node-1", tree_id="tree-1") -> StoredTreeNode:
+def _tree_node(node_id="node-1", tree_id="tree-1", *, parent_id=None, level="L1") -> StoredTreeNode:
     return StoredTreeNode(
         tree_id=tree_id,
         node_id=node_id,
-        level="L1",
+        level=level,
         summary="summary",
         child_ids=("child-1",),
         tenant_id="tenant-1",
         user_id="user-1",
         forest_version="v1",
+        metadata={"parent_id": parent_id, "tree_type": "entity"},
     )
 
 
@@ -81,6 +82,22 @@ async def test_cosmos_tree_node_store_upsert_get_and_tombstone() -> None:
     assert node is not None
     assert node.summary == "summary"
     assert tombstoned is None
+
+
+@pytest.mark.asyncio
+async def test_cosmos_tree_node_store_lists_roots_and_tree_nodes() -> None:
+    container = FakeCosmosContainer()
+    store = CosmosTreeNodeStore(container, tenant_id="tenant-1", user_id="user-1", forest_version="v1")
+    await store.upsert_nodes([
+        _tree_node("root", parent_id=None),
+        _tree_node("child", parent_id="root", level="L0"),
+    ])
+
+    roots = await store.list_root_nodes()
+    nodes = await store.list_nodes_in_tree("tree-1")
+
+    assert [node.node_id for node in roots] == ["root"]
+    assert {node.node_id for node in nodes} == {"root", "child"}
 
 
 @pytest.mark.asyncio

@@ -213,3 +213,4 @@ async def test_cosmos_query_trace_service_returns_scoped_trace_response() -> Non
     assert response.tenant_id == "tenant-1"
     assert response.forest_version == "v1"
     assert response.event_count == 1
+    assert response.event_summaries[0]["event_type"] == "query_started"

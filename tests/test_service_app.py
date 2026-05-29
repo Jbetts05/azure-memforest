@@ -199,11 +199,37 @@ def test_service_settings_loads_safe_env_values() -> None:
         {
             "AZURE_MEMFOREST_ENV": "dev",
             "AZURE_MEMFOREST_READINESS_TIMEOUT_SECONDS": "3.5",
+            "AZURE_MEMFOREST_UI_ENABLED": "true",
+            "AZURE_MEMFOREST_UI_ALLOWED_ORIGINS": "https://ui.example, http://localhost:5173",
         }
     )
 
     assert settings.environment == "dev"
     assert settings.readiness_timeout_seconds == 3.5
+    assert settings.ui_enabled is True
+    assert settings.ui_allowed_origins == ("https://ui.example", "http://localhost:5173")
+    assert load_service_settings({}).ui_enabled is False
+    assert load_service_settings({"AZURE_MEMFOREST_UI_ENABLED": "False"}).ui_enabled is False
+
+
+def test_ui_cors_is_gated_by_feature_flag() -> None:
+    app = create_app(
+        settings=ServiceSettings(ui_enabled=True, ui_allowed_origins=("https://ui.example",)),
+        auth_provider=DevHeaderAuthProvider(environment="test"),
+    )
+    client = TestClient(app)
+
+    response = client.options(
+        "/v1/users/user-1/sessions",
+        headers={
+            "Origin": "https://ui.example",
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "Authorization",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "https://ui.example"
 
 
 def test_unhandled_exception_response_is_sanitized_and_correlated() -> None:
@@ -576,12 +602,38 @@ def test_memory_routes_call_injected_services_with_actor_context() -> None:
                 "events": [{"event_type": "query_completed"}],
             }
 
+    class FakeUiReadService:
+        async def list_sessions(self, actor, *, user_id, limit=100):
+            return [{"session_id": "session-1", "cell_ids": [], "metadata": {}}]
+
+        async def get_session(self, actor, *, user_id, session_id):
+            return {"session_id": session_id, "cell_ids": [], "metadata": {}}
+
+        async def list_turns(self, actor, *, user_id, session_id, limit=100):
+            return [{"turn_id": "t1", "session_id": session_id, "turn_index": 0, "role": "user", "content": "hello"}]
+
+        async def latest_manifest(self, actor, *, user_id):
+            return {"manifest_id": "m1", "forest_version": "v1", "generation": 1, "status": "committed", "created_at_unix": 1.0}
+
+        async def list_tree_roots(self, actor, *, user_id, forest_version, limit=100):
+            return {"forest_version": forest_version, "roots": [{"tree_id": "tree-1", "node_id": "root", "level": "L1", "summary": "root"}]}
+
+        async def get_tree_node(self, actor, *, user_id, forest_version, tree_id, node_id):
+            return {"tree_id": tree_id, "node_id": node_id, "level": "L1", "summary": "root"}
+
+        async def get_subtree(self, actor, *, user_id, forest_version, tree_id, root_node_id, max_depth=2, max_nodes=250):
+            return {"forest_version": forest_version, "tree_id": tree_id, "root_node_id": root_node_id, "nodes": [{"tree_id": tree_id, "node_id": root_node_id, "level": "L1", "summary": "root"}]}
+
+        async def get_fact(self, actor, *, user_id, forest_version, fact_id):
+            return {"fact_id": fact_id, "text": "fact", "locations": []}
+
     command_service = FakeCommandService()
     app = create_app(auth_provider=DevHeaderAuthProvider(environment="test"))
     app.state.memory_command_service = command_service
     app.state.memory_query_service = FakeQueryService()
     app.state.job_status_service = FakeJobService()
     app.state.query_trace_service = FakeTraceService()
+    app.state.ui_read_service = FakeUiReadService()
     client = TestClient(app)
     headers = {
         TENANT_ID_HEADER: "tenant-1",
@@ -604,10 +656,21 @@ def test_memory_routes_call_injected_services_with_actor_context() -> None:
         "/v1/users/other-user/jobs/job-1",
         headers=headers,
     )
+    job_events_response = client.get(
+        "/v1/users/other-user/jobs/job-1/events",
+        headers=headers,
+    )
     trace_response = client.get(
         "/v1/users/other-user/queries/query-1/trace",
         headers=headers,
     )
+    sessions_response = client.get("/v1/users/other-user/sessions", headers=headers)
+    turns_response = client.get("/v1/users/other-user/sessions/session-1/turns", headers=headers)
+    manifest_response = client.get("/v1/users/other-user/forest/latest", headers=headers)
+    roots_response = client.get("/v1/users/other-user/forest/v1/trees", headers=headers)
+    node_response = client.get("/v1/users/other-user/forest/v1/trees/tree-1/nodes/root", headers=headers)
+    subtree_response = client.get("/v1/users/other-user/forest/v1/trees/tree-1/subtree?root_node_id=root", headers=headers)
+    fact_response = client.get("/v1/users/other-user/forest/v1/facts/fact-1", headers=headers)
 
     assert ingest_response.status_code == 202
     assert ingest_response.json()["tenant_id"] == "tenant-1"
@@ -617,8 +680,18 @@ def test_memory_routes_call_injected_services_with_actor_context() -> None:
     assert query_response.json()["facts"][0]["fact_id"] == "fact-1"
     assert job_response.status_code == 200
     assert job_response.json()["job_id"] == "job-1"
+    assert job_events_response.status_code == 200
+    assert job_events_response.json()[0]["event_type"] == "accepted"
     assert trace_response.status_code == 200
     assert trace_response.json()["query_id"] == "query-1"
+    assert sessions_response.status_code == 200
+    assert sessions_response.json()[0]["session_id"] == "session-1"
+    assert turns_response.status_code == 200
+    assert manifest_response.status_code == 200
+    assert roots_response.status_code == 200
+    assert node_response.status_code == 200
+    assert subtree_response.status_code == 200
+    assert fact_response.status_code == 200
 
 
 def test_ingest_route_preserves_session_id_from_recording_service() -> None:

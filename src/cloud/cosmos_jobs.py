@@ -76,6 +76,7 @@ class CosmosJobStore:
         previous_token = int(item.get("fencing_token") or 0)
         same_owner_renewal = item["status"] == "running" and current_owner == owner_id
         item["status"] = "running"
+        item.setdefault("started_at", now)
         item["lease_owner_id"] = owner_id
         item["lease_expires_at_unix"] = now + ttl_seconds
         item["fencing_token"] = previous_token if same_owner_renewal else previous_token + 1

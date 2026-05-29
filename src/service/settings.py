@@ -11,6 +11,8 @@ from typing import Mapping
 class ServiceSettings:
     environment: str = "local"
     readiness_timeout_seconds: float = 10.0
+    ui_enabled: bool = False
+    ui_allowed_origins: tuple[str, ...] = ()
 
 
 def load_service_settings(environ: Mapping[str, str] | None = None) -> ServiceSettings:
@@ -23,6 +25,8 @@ def load_service_settings(environ: Mapping[str, str] | None = None) -> ServiceSe
             values.get("AZURE_MEMFOREST_READINESS_TIMEOUT_SECONDS"),
             default=10.0,
         ),
+        ui_enabled=_truthy(values.get("AZURE_MEMFOREST_UI_ENABLED")),
+        ui_allowed_origins=_csv(values.get("AZURE_MEMFOREST_UI_ALLOWED_ORIGINS")),
     )
 
 
@@ -34,3 +38,11 @@ def _positive_float(value: str | None, *, default: float) -> float:
     except ValueError:
         return default
     return parsed if parsed > 0 else default
+
+
+def _truthy(value: str | None) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _csv(value: str | None) -> tuple[str, ...]:
+    return tuple(part.strip() for part in str(value or "").split(",") if part.strip())

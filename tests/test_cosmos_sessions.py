@@ -49,6 +49,19 @@ async def test_cosmos_session_store_upsert_get_tombstone() -> None:
 
 
 @pytest.mark.asyncio
+async def test_cosmos_session_store_lists_non_tombstoned_sessions() -> None:
+    container = FakeContainer()
+    store = CosmosSessionStore(container, tenant_id="tenant-1", user_id="user-1")
+    await store.upsert_session("session-1", cell_ids=["cell-1"])
+    await store.upsert_session("session-2", cell_ids=["cell-2"])
+    await store.tombstone_session("session-2", reason="delete")
+
+    sessions = await store.list_sessions()
+
+    assert [session.session_id for session in sessions] == ["session-1"]
+
+
+@pytest.mark.asyncio
 async def test_cosmos_session_store_upsert_does_not_resurrect_tombstone() -> None:
     container = FakeContainer()
     store = CosmosSessionStore(container, tenant_id="tenant-1", user_id="user-1")

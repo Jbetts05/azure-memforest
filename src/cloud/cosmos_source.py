@@ -39,6 +39,44 @@ class CosmosTreeNodeStore:
                 nodes.append(node)
         return nodes
 
+    async def list_root_nodes(self, *, limit: int = 100) -> list[StoredTreeNode]:
+        query = (
+            "SELECT * FROM c WHERE c.tenant_user_key=@pk AND c.forest_version=@forest_version"
+        )
+        params = [
+            {"name": "@pk", "value": self.tenant_user_key},
+            {"name": "@forest_version", "value": self.forest_version},
+        ]
+        roots: list[StoredTreeNode] = []
+        async for item in _aiter(self.container.query_items(query=query, parameters=params, partition_key=self.tenant_user_key)):
+            if item.get("tombstoned"):
+                continue
+            metadata = dict(item.get("metadata", {}))
+            if metadata.get("parent_id") in {None, ""}:
+                roots.append(_stored_tree_node_from_doc(item))
+                if len(roots) >= limit:
+                    break
+        return roots
+
+    async def list_nodes_in_tree(self, tree_id: str, *, limit: int = 1000) -> list[StoredTreeNode]:
+        query = (
+            "SELECT * FROM c WHERE c.tenant_user_key=@pk AND c.tree_id=@tree_id "
+            "AND c.forest_version=@forest_version"
+        )
+        params = [
+            {"name": "@pk", "value": self.tenant_user_key},
+            {"name": "@tree_id", "value": tree_id},
+            {"name": "@forest_version", "value": self.forest_version},
+        ]
+        nodes: list[StoredTreeNode] = []
+        async for item in _aiter(self.container.query_items(query=query, parameters=params, partition_key=self.tenant_user_key)):
+            if item.get("tombstoned"):
+                continue
+            nodes.append(_stored_tree_node_from_doc(item))
+            if len(nodes) >= limit:
+                break
+        return nodes
+
     async def upsert_nodes(self, nodes: list[StoredTreeNode]) -> None:
         for node in nodes:
             self._validate_node_scope(node)
