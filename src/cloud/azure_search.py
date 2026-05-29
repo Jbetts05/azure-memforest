@@ -93,6 +93,26 @@ class AzureSearchRecallIndex:
         else:
             raise RuntimeError("delete_by_tree exceeded maximum Azure AI Search deletion iterations.")
 
+    def delete_by_user(self, *, tenant_id: str, user_id: str) -> None:
+        if not tenant_id or not user_id:
+            raise TenantScopeRequired("tenant_id and user_id are required when deleting recall documents by user.")
+        for _ in range(100):
+            results = list(self._client().search(
+                search_text="*",
+                filter=_filter_expression({"tenant_id": tenant_id, "user_id": user_id}),
+                select=["id"],
+                top=1000,
+            ))
+            if not results:
+                break
+            keys = [{"id": item["id"]} for item in results]
+            for chunk in _chunks(keys, 1000):
+                self._client().delete_documents(chunk)
+            if len(results) < 1000:
+                break
+        else:
+            raise RuntimeError("delete_by_user exceeded maximum Azure AI Search deletion iterations.")
+
     def ensure_index(self) -> None:
         index_client = self._index_admin_client()
         try:

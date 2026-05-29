@@ -13,12 +13,13 @@ from src.cloud.schema import SCHEMA_VERSION, partition_key
 from src.service.auth import ActorContext
 from src.service.ports import MemoryCommandService
 from src.service.schemas import (
+    ClearMemoryResponse,
     DeleteSessionResponse,
     IngestSessionRequest,
     IngestSessionResponse,
 )
 
-JobType = Literal["ingest_session", "delete_session"]
+JobType = Literal["ingest_session", "delete_session", "clear_memory"]
 MAX_SERVICE_BUS_MESSAGE_BYTES = 240 * 1024
 
 
@@ -169,6 +170,28 @@ class ServiceBusMemoryCommandService(MemoryCommandService):
             session_id=session_id,
         )
 
+    async def submit_clear_memory(
+        self,
+        actor: ActorContext,
+        *,
+        user_id: str,
+        idempotency_key: str,
+    ) -> ClearMemoryResponse:
+        envelope = build_write_job_envelope(
+            actor,
+            user_id=user_id,
+            session_id="__all__",
+            job_type="clear_memory",
+            idempotency_key=idempotency_key,
+            payload={},
+        )
+        await self._publisher.submit_job(envelope)
+        return ClearMemoryResponse(
+            job_id=envelope.job_id,
+            tenant_id=actor.tenant.tenant_id,
+            user_id=user_id,
+        )
+
 
 def build_write_job_envelope(
     actor: ActorContext,
@@ -306,6 +329,34 @@ class JobRecordingCommandService(MemoryCommandService):
             tenant_id=recorded.tenant_id,
             user_id=recorded.user_id,
             session_id=session_id,
+        )
+
+    async def submit_clear_memory(
+        self,
+        actor: ActorContext,
+        *,
+        user_id: str,
+        idempotency_key: str,
+    ) -> ClearMemoryResponse:
+        response = await self._inner.submit_clear_memory(
+            actor,
+            user_id=user_id,
+            idempotency_key=idempotency_key,
+        )
+        envelope = build_write_job_envelope(
+            actor,
+            user_id=user_id,
+            session_id="__all__",
+            job_type="clear_memory",
+            idempotency_key=idempotency_key,
+            payload={},
+        )
+        recorded = await self._job_store.create_accepted_job(envelope)
+        return ClearMemoryResponse(
+            job_id=recorded.job_id,
+            status=recorded.status,
+            tenant_id=recorded.tenant_id,
+            user_id=recorded.user_id,
         )
 
     async def close(self) -> None:

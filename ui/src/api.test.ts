@@ -50,6 +50,16 @@ describe('api client', () => {
     expect(call[0]).toBe('https://api.example/v1/users/user-1/forest/forest-1/trees/tree-1/subtree?root_node_id=root%20node&max_depth=4&max_nodes=80');
   });
 
+  it('sends an idempotent clear memory request', async () => {
+    await api.clearMemory(config);
+    const call = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+    const headers = new Headers(call[1].headers);
+
+    expect(call[0]).toBe('https://api.example/v1/users/user-1/memory:clear');
+    expect(call[1].method).toBe('POST');
+    expect(headers.get('Idempotency-Key')).toBe('uuid-1');
+  });
+
   it('builds trace URL from query id', async () => {
     await api.trace(config, 'query-1');
     const call = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0];

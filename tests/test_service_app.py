@@ -586,6 +586,15 @@ def test_memory_routes_call_injected_services_with_actor_context() -> None:
                 "session_id": session_id,
             }
 
+        async def submit_clear_memory(self, actor, *, user_id, idempotency_key):
+            self.clear_idempotency_key = idempotency_key
+            return {
+                "job_id": "job-clear",
+                "status": "accepted",
+                "tenant_id": actor.tenant.tenant_id,
+                "user_id": user_id,
+            }
+
     class FakeQueryService:
         async def query(self, actor, *, user_id, request):
             return {
@@ -687,6 +696,10 @@ def test_memory_routes_call_injected_services_with_actor_context() -> None:
         headers=headers,
         json={"message": "Where did Bob move?", "turns": [{"role": "user", "content": "Where did Bob move?"}]},
     )
+    clear_response = client.post(
+        "/v1/users/other-user/memory:clear",
+        headers={**headers, "Idempotency-Key": "idem-clear"},
+    )
     job_response = client.get(
         "/v1/users/other-user/jobs/job-1",
         headers=headers,
@@ -717,6 +730,9 @@ def test_memory_routes_call_injected_services_with_actor_context() -> None:
     assert chat_response.json()["reply"] == "I remember Bob moved to Davis."
     assert chat_service.actor.actor_id == "user-1"
     assert chat_service.message == "Where did Bob move?"
+    assert clear_response.status_code == 202
+    assert clear_response.json()["job_id"] == "job-clear"
+    assert command_service.clear_idempotency_key == "idem-clear"
     assert job_response.status_code == 200
     assert job_response.json()["job_id"] == "job-1"
     assert job_events_response.status_code == 200
@@ -760,6 +776,9 @@ def test_ingest_route_preserves_session_id_from_recording_service() -> None:
         async def submit_delete_session(self, actor, *, user_id, session_id, idempotency_key):
             raise AssertionError("not used")
 
+        async def submit_clear_memory(self, actor, *, user_id, idempotency_key):
+            raise AssertionError("not used")
+
     app = create_app(auth_provider=DevHeaderAuthProvider(environment="test"))
     app.state.memory_command_service = JobRecordingCommandService(
         InnerCommandService(),
@@ -779,6 +798,59 @@ def test_ingest_route_preserves_session_id_from_recording_service() -> None:
 
     assert response.status_code == 202
     assert response.json()["session_id"] == "session-abc"
+
+
+def test_clear_memory_route_records_job_with_recording_service() -> None:
+    from src.cloud.cosmos_jobs import CosmosJobStore
+    from src.service.jobs import JobRecordingCommandService
+
+    class FakeContainer:
+        def __init__(self):
+            self.items = {}
+
+        def create_item(self, item, *, partition_key):
+            self.items[(partition_key, item["id"])] = item
+
+        def read_item(self, *, item, partition_key):
+            return self.items[(partition_key, item)]
+
+    class InnerCommandService:
+        async def submit_ingest_session(self, actor, *, user_id, session_id, request, idempotency_key):
+            raise AssertionError("not used")
+
+        async def submit_delete_session(self, actor, *, user_id, session_id, idempotency_key):
+            raise AssertionError("not used")
+
+        async def submit_clear_memory(self, actor, *, user_id, idempotency_key):
+            return {
+                "job_id": "inner-clear",
+                "status": "accepted",
+                "tenant_id": actor.tenant.tenant_id,
+                "user_id": user_id,
+            }
+
+    app = create_app(auth_provider=DevHeaderAuthProvider(environment="test"))
+    container = FakeContainer()
+    app.state.memory_command_service = JobRecordingCommandService(
+        InnerCommandService(),
+        CosmosJobStore(container=container),
+    )
+    client = TestClient(app)
+
+    response = client.post(
+        "/v1/users/user-1/memory:clear",
+        headers={
+            TENANT_ID_HEADER: "tenant-1",
+            ACTOR_ID_HEADER: "user-1",
+            "Idempotency-Key": "idem-clear-route",
+        },
+    )
+
+    assert response.status_code == 202
+    assert response.json()["job_id"].startswith("job_")
+    stored = next(iter(container.items.values()))
+    assert stored["job_type"] == "clear_memory"
+    assert stored["session_id"] == "__all__"
 
 
 def test_job_status_route_returns_404_for_missing_job() -> None:

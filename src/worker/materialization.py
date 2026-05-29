@@ -105,6 +105,9 @@ class MemForestMaterializationHandler:
         if envelope.job_type == "delete_session":
             await self._handle_delete(envelope)
             return
+        if envelope.job_type == "clear_memory":
+            await self._handle_clear_memory(envelope)
+            return
         if envelope.job_type != "ingest_session":
             raise PermanentHandlerError(f"unsupported job_type {envelope.job_type!r}")
         await self._handle_ingest(envelope)
@@ -281,6 +284,48 @@ class MemForestMaterializationHandler:
                 )
             )
             await self._record_deletion(envelope=envelope, manifest=committed)
+        finally:
+            stop_renewal.set()
+            renewal_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await renewal_task
+            try:
+                await _maybe_await(self._stores.lease_store.release(lease))
+            except Exception:
+                log.exception("failed to release materialization lease")
+
+    async def _handle_clear_memory(self, envelope: WriteJobEnvelope) -> None:
+        try:
+            lease = await self._stores.lease_store.acquire(
+                owner_id=self._config.owner_id,
+                ttl_seconds=self._config.lease_ttl_seconds,
+            )
+        except LeaseConflict as exc:
+            raise TransientHandlerError("tenant/user write lease is held by another worker") from exc
+
+        stop_renewal = asyncio.Event()
+        renewal_task = asyncio.create_task(self._renew_lease_until_stopped(lease, stop_renewal))
+        try:
+            await _purge_container_by_tenant_user_key(self._stores.source_session_store, envelope)
+            await _purge_container_by_tenant_user_key(self._stores.source_turn_store, envelope)
+            await _purge_container_by_tenant_user_key(self._stores.fact_store, envelope)
+            await _purge_container_by_tenant_user_key(self._stores.tree_node_store, envelope)
+            await _purge_container_by_tenant_user_key(self._stores.fact_location_index, envelope)
+            await _purge_container_by_tenant_user_key(self._stores.browse_embedding_store, envelope)
+            await _purge_container_by_tenant_user_key(self._stores.summary_cache, envelope)
+            await _purge_factory_container(self._stores.tree_node_store_factory, envelope)
+            await _purge_factory_container(self._stores.fact_location_index_factory, envelope)
+            await _purge_factory_container(self._stores.browse_embedding_store_factory, envelope)
+            await _purge_container_by_tenant_user(self._stores.manifest_store, envelope)
+            if self._stores.deletion_log is not None:
+                await _purge_container_by_tenant_user(self._stores.deletion_log, envelope)
+            if hasattr(self._stores.recall_index, "delete_by_user"):
+                await asyncio.to_thread(self._stores.recall_index.delete_by_user, tenant_id=envelope.tenant_id, user_id=envelope.user_id)
+            if hasattr(self._stores.snapshot_store, "delete_prefix"):
+                await asyncio.to_thread(self._stores.snapshot_store.delete_prefix, f"{envelope.tenant_id}/{envelope.user_id}/")
+            await self._stores.lease_store.assert_current(lease)
+        except LeaseConflict as exc:
+            raise TransientHandlerError("tenant/user write lease expired during clear_memory") from exc
         finally:
             stop_renewal.set()
             renewal_task.cancel()
@@ -813,6 +858,56 @@ def _extractable_turns(turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
     this same filter to avoid extracting assistant copy as durable user memory.
     """
     return [turn for turn in turns if not ((turn.get("metadata") or {}).get("skip_extraction"))]
+
+
+async def _purge_factory_container(factory: Any, envelope: WriteJobEnvelope) -> int:
+    if factory is None:
+        return 0
+    try:
+        store = factory("__purge__")
+    except TypeError:
+        try:
+            store = factory("__purge__", "1")
+        except TypeError:
+            return 0
+    return await _purge_container_by_tenant_user_key(store, envelope)
+
+
+async def _purge_container_by_tenant_user_key(store: Any, envelope: WriteJobEnvelope) -> int:
+    container = getattr(store, "container", None)
+    if container is None:
+        return 0
+    tenant_user_key = f"{envelope.tenant_id}:{envelope.user_id}"
+    query = "SELECT c.id FROM c WHERE c.tenant_user_key=@pk"
+    params = [{"name": "@pk", "value": tenant_user_key}]
+    return await _purge_container_query(container, query=query, params=params, partition_key=tenant_user_key)
+
+
+async def _purge_container_by_tenant_user(store: Any, envelope: WriteJobEnvelope) -> int:
+    container = getattr(store, "container", None)
+    if container is None:
+        return 0
+    query = "SELECT c.id FROM c WHERE c.tenant_id=@tenant_id AND c.user_id=@user_id"
+    params = [{"name": "@tenant_id", "value": envelope.tenant_id}, {"name": "@user_id", "value": envelope.user_id}]
+    return await _purge_container_query(container, query=query, params=params, partition_key=envelope.tenant_id)
+
+
+async def _purge_container_query(container: Any, *, query: str, params: list[dict[str, Any]], partition_key: str) -> int:
+    ids = []
+    async for item in _aiter(container.query_items(query=query, parameters=params, partition_key=partition_key)):
+        ids.append(item["id"])
+    for item_id in ids:
+        await _maybe_await(container.delete_item(item=item_id, partition_key=partition_key))
+    return len(ids)
+
+
+async def _aiter(value):
+    if hasattr(value, "__aiter__"):
+        async for item in value:
+            yield item
+        return
+    for item in value:
+        yield item
 
 
 def _tree_has_fact_payload(tree: Any) -> bool:

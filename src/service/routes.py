@@ -16,6 +16,7 @@ from src.service.middleware import REQUEST_ID_HEADER
 from src.service.schemas import (
     ChatRequest,
     ChatResponse,
+    ClearMemoryResponse,
     DeleteSessionResponse,
     IngestSessionRequest,
     IngestSessionResponse,
@@ -116,6 +117,23 @@ async def delete_session(
         session_id=session_id,
         idempotency_key=key,
     )
+
+
+@router.post(
+    "/users/{user_id}/memory:clear",
+    response_model=ClearMemoryResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def clear_memory(
+    user_id: str,
+    request: Request,
+    actor: ActorContext = Depends(get_actor_context),
+    idempotency_key: str | None = Header(default=None, alias=IDEMPOTENCY_HEADER),
+):
+    _enforce_user_access(actor, user_id)
+    key = _require_idempotency_key(idempotency_key, request)
+    service = _required_service(request, "memory_command_service")
+    return await service.submit_clear_memory(actor, user_id=user_id, idempotency_key=key)
 
 
 @router.get("/users/{user_id}/jobs/{job_id}", response_model=JobStatusResponse)

@@ -266,6 +266,38 @@ class RecordingStore:
         self.items.append((snapshot_id, payload, metadata))
 
 
+class PurgeContainer:
+    def __init__(self, docs):
+        self.docs = {doc["id"]: dict(doc) for doc in docs}
+
+    def query_items(self, *, query, parameters, partition_key):
+        if "tenant_user_key" in query:
+            value = next(param["value"] for param in parameters if param["name"] == "@pk")
+            return [{"id": doc["id"]} for doc in self.docs.values() if doc.get("tenant_user_key") == value]
+        tenant = next(param["value"] for param in parameters if param["name"] == "@tenant_id")
+        user = next(param["value"] for param in parameters if param["name"] == "@user_id")
+        return [{"id": doc["id"]} for doc in self.docs.values() if doc.get("tenant_id") == tenant and doc.get("user_id") == user]
+
+    def delete_item(self, *, item, partition_key):
+        self.docs.pop(item, None)
+
+
+class PurgeStore:
+    def __init__(self, docs):
+        self.container = PurgeContainer(docs)
+
+
+class RecordingRecall:
+    def __init__(self):
+        self.deleted = None
+
+    def delete_by_user(self, *, tenant_id, user_id):
+        self.deleted = (tenant_id, user_id)
+
+    def upsert_documents(self, documents):
+        pass
+
+
 class FakeIngestCore:
     def __init__(self, snapshot, *, delete_missing=False):
         self.snapshot = snapshot
@@ -454,6 +486,35 @@ async def test_materialization_handler_stores_assistant_turns_but_skips_extracti
     assert len(core.ingested_turns) == 1
     assert core.ingested_turns[0]["role"] == "user"
     assert core.ingested_turns[0]["content"] == "I work at OpenAI as an FDE"
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_clear_memory_purges_user_docs() -> None:
+    tenant = "tenant-1"
+    user = "user-1"
+    pk = f"{tenant}:{user}"
+    recall = RecordingRecall()
+    handler = MemForestMaterializationHandler(
+        stores=MaterializationStores(
+            lease_store=FakeLeaseStore(),
+            source_session_store=PurgeStore([{"id": "session", "tenant_user_key": pk}]),
+            source_turn_store=PurgeStore([{"id": "turn", "tenant_user_key": pk}]),
+            fact_store=PurgeStore([{"id": "fact", "tenant_user_key": pk}]),
+            tree_node_store=PurgeStore([{"id": "node", "tenant_user_key": pk}]),
+            fact_location_index=PurgeStore([{"id": "loc", "tenant_user_key": pk}]),
+            browse_embedding_store=PurgeStore([{"id": "emb", "tenant_user_key": pk}]),
+            manifest_store=PurgeStore([{"id": "manifest", "tenant_id": tenant, "user_id": user}]),
+            recall_index=recall,
+        ),
+        ingest_core=FakeIngestCore(_factless_snapshot()),
+        config=MaterializationHandlerConfig(owner_id="worker-1", embedding_model_version="embed-v1", code_version="test-sha", prompt_config_hash="prompt-hash", lease_renewal_seconds=9999),
+    )
+
+    await handler.handle(_envelope(job_type="clear_memory"), {"fencing_token": 1})
+
+    assert handler._stores.source_session_store.container.docs == {}
+    assert handler._stores.manifest_store.container.docs == {}
+    assert recall.deleted == (tenant, user)
 
 
 @pytest.mark.asyncio

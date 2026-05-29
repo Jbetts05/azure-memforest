@@ -8,6 +8,7 @@ from src.service.auth import ActorContext
 from src.service.schemas import (
     ChatRequest,
     ChatResponse,
+    ClearMemoryResponse,
     DeleteSessionResponse,
     IngestSessionRequest,
     IngestSessionResponse,
@@ -44,6 +45,15 @@ class MemoryCommandService(Protocol):
         session_id: str,
         idempotency_key: str,
     ) -> DeleteSessionResponse:
+        ...
+
+    async def submit_clear_memory(
+        self,
+        actor: ActorContext,
+        *,
+        user_id: str,
+        idempotency_key: str,
+    ) -> ClearMemoryResponse:
         ...
 
 

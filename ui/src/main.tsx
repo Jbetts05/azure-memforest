@@ -147,6 +147,34 @@ function App() {
     }
   }
 
+  async function handleClearMemory() {
+    if (!config) return;
+    const accepted = await api.clearMemory(config);
+    let current = await api.job(config, accepted.job_id);
+    setJob(current);
+    setJobEvents(await api.jobEvents(config, accepted.job_id).catch(() => []));
+    setExtracting(true);
+    for (let index = 0; index < 90 && !['succeeded', 'failed', 'cancelled'].includes(current.status); index += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+      current = await api.job(config, accepted.job_id);
+      setJob(current);
+      setJobEvents(await api.jobEvents(config, accepted.job_id).catch(() => []));
+    }
+    setExtracting(false);
+    if (current.status === 'succeeded') {
+      setTurns([]);
+      setSessions([]);
+      setManifest(null);
+      setNodes([]);
+      setQuery(null);
+      setTrace(null);
+      setFactDetail(null);
+      setForestFacts([]);
+      setEmptyForest(true);
+    }
+    if (current.status === 'failed') setError(current.error ?? 'Clear memory failed.');
+  }
+
   return (
     <main className="appShell">
       <header className="topbar">
@@ -213,6 +241,7 @@ function App() {
         job={job}
         jobEvents={jobEvents}
         extracting={extracting}
+        onClearMemory={handleClearMemory}
         onClose={() => {
           setDrawerOpen(false);
           memoryTriggerRef.current?.focus();

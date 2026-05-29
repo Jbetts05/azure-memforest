@@ -80,6 +80,15 @@ export const api = {
       body: JSON.stringify({ turns, metadata: { source: 'chat-ui', ...metadata } })
     }
   ),
+  clearMemory: (config: ApiConfig) => request<{ job_id: string; status: string }>(
+    config,
+    `/v1/users/${config.userId}/memory:clear`,
+    {
+      method: 'POST',
+      headers: { 'Idempotency-Key': crypto.randomUUID() },
+      body: JSON.stringify({})
+    }
+  ),
   job: (config: ApiConfig, jobId: string) => request<JobStatus>(config, `/v1/users/${config.userId}/jobs/${jobId}`),
   jobEvents: (config: ApiConfig, jobId: string) => request<JobEvent[]>(config, `/v1/users/${config.userId}/jobs/${jobId}/events`)
 };

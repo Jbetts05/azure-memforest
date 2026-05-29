@@ -48,6 +48,14 @@ class BlobTreeSnapshotStore:
                 raise KeyError(snapshot_id) from exc
             raise
 
+    def delete_prefix(self, prefix: str) -> int:
+        safe_prefix = validate_snapshot_prefix(prefix)
+        deleted = 0
+        for blob in self._container.list_blobs(name_starts_with=safe_prefix):
+            self._container.delete_blob(blob.name)
+            deleted += 1
+        return deleted
+
 
 def blob_snapshot_store_from_env(environ: dict[str, str], *, credential: Any | None = None) -> BlobTreeSnapshotStore | None:
     endpoint = str(environ.get("AZURE_STORAGE_BLOB_ENDPOINT", "")).strip()
@@ -76,6 +84,14 @@ def validate_snapshot_id(snapshot_id: str) -> str:
         raise ValueError("snapshot_id contains unsupported characters or path segments.")
     if any(part in {".", ".."} for part in value.split("/")):
         raise ValueError("snapshot_id must not contain relative path segments.")
+    return value
+
+
+def validate_snapshot_prefix(prefix: str) -> str:
+    value = str(prefix or "")
+    if not value.endswith("/"):
+        raise ValueError("snapshot prefix must end with '/'.")
+    validate_snapshot_id(value.rstrip("/"))
     return value
 
 

@@ -15,6 +15,7 @@ export function MemoryExplorerDrawer({
   job,
   jobEvents,
   extracting,
+  onClearMemory,
   onClose
 }: {
   open: boolean;
@@ -28,6 +29,7 @@ export function MemoryExplorerDrawer({
   job: JobStatus | null;
   jobEvents: JobEvent[];
   extracting: boolean;
+  onClearMemory: () => Promise<void>;
   onClose: () => void;
 }) {
   const [tab, setTab] = useState<Tab>(initialTab);
@@ -35,6 +37,8 @@ export function MemoryExplorerDrawer({
   const [loaded, setLoaded] = useState<Record<string, boolean>>({});
   const [nodesByKey, setNodesByKey] = useState<Record<string, TreeNode>>({});
   const [selected, setSelected] = useState<TreeNode | null>(null);
+  const [confirmText, setConfirmText] = useState('');
+  const [clearing, setClearing] = useState(false);
   const factLookup = useMemo(() => new Map(forestFacts.map((fact) => [fact.fact_id, fact])), [forestFacts]);
   const forestVersion = manifest?.forest_version ?? '';
 
@@ -128,6 +132,29 @@ export function MemoryExplorerDrawer({
             <p className="tiny">{extracting ? 'Extraction and materialization are running in the background.' : job ? `Last job ${job.status}` : 'No memory job has run in this session.'}</p>
             {job ? <article><span>{job.job_id}</span><p>{job.status}</p>{job.error ? <small>{job.error}</small> : null}</article> : null}
             <ol>{jobEvents.map((event, index) => <li key={index}>{event.event_type} · {event.status}</li>)}</ol>
+            <div className="dangerZone">
+              <h3>Danger zone</h3>
+              <p className="tiny">Clear all memory for this signed-in user. This removes committed facts, trees, sessions, traces, recall docs, and snapshots. This cannot be undone.</p>
+              <label>
+                Type CLEAR to confirm
+                <input value={confirmText} onChange={(event) => setConfirmText(event.target.value)} placeholder="CLEAR" />
+              </label>
+              <button
+                type="button"
+                disabled={confirmText !== 'CLEAR' || clearing}
+                onClick={async () => {
+                  setClearing(true);
+                  try {
+                    await onClearMemory();
+                    setConfirmText('');
+                  } finally {
+                    setClearing(false);
+                  }
+                }}
+              >
+                {clearing ? 'Clearing...' : 'Clear memory'}
+              </button>
+            </div>
           </section>
         ) : null}
       </aside>
@@ -193,7 +220,9 @@ function _nodeKey(node: TreeNode): string {
 }
 
 function _treeLabel(node: TreeNode): string {
-  return String(node.metadata.tree_label || (node.tree_id === 'entity:user' ? 'User profile' : node.tree_id));
+  const metadataLabel = String(node.metadata.tree_label || '');
+  if (node.tree_id === 'entity:user' || metadataLabel.toLowerCase() === 'user') return 'User profile';
+  return metadataLabel || node.tree_id;
 }
 
 function _compact(text: string): string {

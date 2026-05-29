@@ -138,7 +138,7 @@ def parse_write_job_envelope(body: bytes | str) -> WriteJobEnvelope:
         raise ValueError(f"missing fields: {missing}")
     if int(payload["schema_version"]) != SCHEMA_VERSION:
         raise ValueError("unsupported schema_version")
-    if payload["job_type"] not in {"ingest_session", "delete_session"}:
+    if payload["job_type"] not in {"ingest_session", "delete_session", "clear_memory"}:
         raise ValueError("unsupported job_type")
     return WriteJobEnvelope(
         schema_version=int(payload["schema_version"]),

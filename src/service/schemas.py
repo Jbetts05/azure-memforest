@@ -79,6 +79,13 @@ class DeleteSessionResponse(BaseModel):
     session_id: str
 
 
+class ClearMemoryResponse(BaseModel):
+    job_id: str
+    status: JobStatus = "accepted"
+    tenant_id: str
+    user_id: str
+
+
 class JobStatusResponse(BaseModel):
     job_id: str
     status: JobStatus

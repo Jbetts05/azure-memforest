@@ -43,7 +43,9 @@ export function MemoryForestViz({ manifest, nodes }: { manifest?: Manifest | nul
 }
 
 function _treeLabel(node: TreeNode): string {
-  return String(node.metadata.tree_label || (node.tree_id === 'entity:user' ? 'User profile' : node.tree_id));
+  const metadataLabel = String(node.metadata.tree_label || '');
+  if (node.tree_id === 'entity:user' || metadataLabel.toLowerCase() === 'user') return 'User profile';
+  return metadataLabel || node.tree_id;
 }
 
 function _summaryBody(summary: string): string {
