@@ -62,10 +62,13 @@ Do not use dev mode for production demos.
 ```powershell
 Push-Location ui
 npm install
+copy .env.example .env
 npm run test
 npm run build
 Pop-Location
 ```
+
+For production/dev hosted builds, set the `VITE_*` variables explicitly in the shell before `npm run build`. Vite embeds these values into the static bundle at build time; Static Web Apps app settings do not rewrite them after deployment.
 
 Backend/API validation:
 
@@ -74,4 +77,3 @@ $env:PIP_REQUIRE_VIRTUALENV = "true"
 .\.venv\Scripts\python.exe -m pytest -q
 az bicep build --file infra\main.bicep --stdout > $null
 ```
-
