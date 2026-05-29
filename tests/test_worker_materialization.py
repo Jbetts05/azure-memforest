@@ -351,6 +351,10 @@ def _snapshot():
     return ForestMaterializationSnapshot(facts=[], trees=[tree], node_embeddings={"root": [1.0, 0.0]}, summary_cache={"k": "summary"})
 
 
+def _factless_snapshot():
+    return ForestMaterializationSnapshot(facts=[], trees=[], node_embeddings={}, summary_cache={})
+
+
 def _envelope(job_type="ingest_session"):
     return build_write_job_envelope(
         ActorContext(actor_id="user-1", tenant=TenantContext("tenant-1")),
@@ -408,6 +412,19 @@ async def test_materialization_handler_commits_after_projection_writes() -> None
     ]
     assert lease_store.asserted is True
     assert lease_store.released is True
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_does_not_commit_factless_ingest() -> None:
+    calls = []
+    manifest_store = FakeManifestStore()
+    handler = _handler(manifest_store=manifest_store, calls=calls, core=FakeIngestCore(_factless_snapshot()))
+
+    await handler.handle(_envelope(), {"fencing_token": 1})
+
+    assert manifest_store.pending is None
+    assert manifest_store.committed == []
+    assert calls == ["source_session", "source_turns"]
 
 
 @pytest.mark.asyncio

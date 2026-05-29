@@ -131,22 +131,6 @@ class MemForestMaterializationHandler:
             await self._hydrate_core_from_manifest(latest)
             generation = 1 if latest is None else int(latest.generation) + 1
             forest_version = _forest_version(generation=generation, job_id=envelope.job_id)
-            manifest = await _maybe_await(
-                self._stores.manifest_store.create_pending(
-                    forest_version=forest_version,
-                    generation=generation,
-                    metadata={
-                        "job_id": envelope.job_id,
-                        "job_type": envelope.job_type,
-                        "session_id": envelope.session_id,
-                        "idempotency_key": envelope.idempotency_key,
-                        "embedding_model_version": self._config.embedding_model_version,
-                        "code_version": self._config.code_version,
-                        "prompt_config_hash": self._config.prompt_config_hash,
-                        "fencing_token": lease.fencing_token,
-                    },
-                )
-            )
             turns = [turn.model_dump(mode="json") for turn in request.turns]
             await _maybe_await(
                 self._stores.source_session_store.upsert_session(
@@ -165,6 +149,24 @@ class MemForestMaterializationHandler:
                 session_id=envelope.session_id,
                 turns=turns,
                 metadata=request.metadata,
+            )
+            if _is_factless_snapshot(snapshot):
+                return
+            manifest = await _maybe_await(
+                self._stores.manifest_store.create_pending(
+                    forest_version=forest_version,
+                    generation=generation,
+                    metadata={
+                        "job_id": envelope.job_id,
+                        "job_type": envelope.job_type,
+                        "session_id": envelope.session_id,
+                        "idempotency_key": envelope.idempotency_key,
+                        "embedding_model_version": self._config.embedding_model_version,
+                        "code_version": self._config.code_version,
+                        "prompt_config_hash": self._config.prompt_config_hash,
+                        "fencing_token": lease.fencing_token,
+                    },
+                )
             )
             projection = project_forest_snapshot(
                 snapshot,
@@ -797,3 +799,13 @@ def _canonical_level(level: Any) -> str:
     if value.startswith("L"):
         return value
     return f"L{value}"
+
+
+def _is_factless_snapshot(snapshot: ForestMaterializationSnapshot) -> bool:
+    return not snapshot.facts and not any(_tree_has_fact_payload(tree) for tree in snapshot.trees)
+
+
+def _tree_has_fact_payload(tree: Any) -> bool:
+    if getattr(tree, "fact_ids_ordered", None):
+        return True
+    return any(bool(leaf.fact_ids) for leaf in getattr(tree, "session_leaves", {}).values())

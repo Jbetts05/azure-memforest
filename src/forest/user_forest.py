@@ -204,11 +204,13 @@ class UserForest:
                 f for fid in fact_write_result.canonical_fact_ids
                 if (f := self._fact_manager.get_fact(fid)) is not None
             ]
-            build_results = self._tree_builder.ingest_session(
-                new_facts=touched_facts,
-                cells=extraction_result.cells,
-                cell_to_facts=cell_to_facts,
-            )
+            build_results = []
+            if touched_facts:
+                build_results = self._tree_builder.ingest_session(
+                    new_facts=touched_facts,
+                    cells=extraction_result.cells,
+                    cell_to_facts=cell_to_facts,
+                )
 
             # 5. Persist updated trees
             for br in build_results:
@@ -217,13 +219,14 @@ class UserForest:
                     self._tree_store.save_tree(tree)
                     self._tree_store.register(tree)
 
-            # 6. Rebuild NodeIndex
-            self._node_index = self._tree_builder.build_node_index(
-                list(self._tree_builder.trees.values()),
-                index_dir=self._dir / "node_index",
-                vector_dim=self._config.api.embedding.dimension,
-            )
-            self._rewire_query_pipeline()
+            # 6. Rebuild NodeIndex only when tree structure changed.
+            if build_results:
+                self._node_index = self._tree_builder.build_node_index(
+                    list(self._tree_builder.trees.values()),
+                    index_dir=self._dir / "node_index",
+                    vector_dim=self._config.api.embedding.dimension,
+                )
+                self._rewire_query_pipeline()
 
             # 7. Register with SessionRegistry
             self._registry.register_session(

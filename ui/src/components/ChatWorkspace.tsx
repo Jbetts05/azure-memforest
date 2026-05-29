@@ -77,7 +77,9 @@ export function ChatWorkspace({
       const fallback: ChatMessage = {
         id: `local-assistant-${crypto.randomUUID()}`,
         role: 'assistant',
-        content: 'I can keep the conversation here, but the live chat service is not available for this turn.',
+        content: err instanceof ApiError && err.status === 401
+          ? 'Your sign-in session expired or was rejected. Please refresh the page and sign in again.'
+          : 'I can keep the conversation here, but the live chat service is not available for this turn.',
         timestamp: new Date().toISOString()
       };
       setMessages((current) => [...current, fallback]);
@@ -145,7 +147,7 @@ export function ChatWorkspace({
             {message.memoryStatus ? <small>{_memoryLabel(message.memoryStatus)}</small> : null}
           </article>
         ))}
-        {busy ? <article className="bubble assistant pending"><span>MemForest</span><p>Thinking, then updating memory...</p></article> : null}
+        {busy ? <article className="bubble assistant pending"><span>MemForest</span><p>Thinking...</p></article> : null}
         <div ref={bottomRef} />
       </div>
       <form className="composer" onSubmit={(event) => { event.preventDefault(); void send(); }}>
@@ -161,7 +163,7 @@ export function ChatWorkspace({
           placeholder="Message MemForest..."
           rows={1}
         />
-        <button disabled={!config || busy || !draft.trim()} type="submit">Send</button>
+        <button disabled={!config || busy || !draft.trim()} type="submit">{busy ? 'Thinking' : 'Send'}</button>
       </form>
       <div className="chatStatus" aria-live="polite">
         <span>{extracting ? 'Updating memory in the background...' : job ? `Memory job ${job.status}` : 'Memory extraction runs after each message.'}</span>
@@ -209,6 +211,7 @@ function _memoryLabel(status: ChatResult['memory_status']): string {
 }
 
 function _friendlyError(err: unknown): string {
+  if (err instanceof ApiError && err.status === 401) return 'Sign-in expired or unauthorized. Refresh the page and sign in again.';
   if (err instanceof ApiError && err.code === 'forest_not_found') return 'Start chatting; the first forest is still being built.';
   return err instanceof Error ? err.message : String(err);
 }

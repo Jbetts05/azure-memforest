@@ -13,7 +13,8 @@ export function MemoryForestViz({ manifest, nodes }: { manifest?: Manifest | nul
     <section className="treePanel" aria-label="Memory forest visualization">
       <strong>Memory forest</strong>
       <p className="tiny">{manifest ? `${manifest.forest_version} · generation ${manifest.generation}` : 'No committed forest loaded'}</p>
-      {!nodes.length ? <p className="tiny">No tree roots loaded.</p> : null}
+      {!nodes.length ? <p className="tiny">No durable memory has been extracted yet.</p> : null}
+      {nodes.length > 0 && factCount === 0 ? <p className="tiny">This forest has structure but no extracted facts yet. Future factless turns will stay out of the forest.</p> : null}
       <div className="forestStats" aria-label="Latest forest stats">
         <div><b>{nodes.length}</b><span>trees</span></div>
         <div><b>{factCount}</b><span>root facts</span></div>

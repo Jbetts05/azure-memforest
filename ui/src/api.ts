@@ -2,6 +2,7 @@ export type ApiConfig = {
   baseUrl: string;
   userId: string;
   accessToken?: string;
+  getAccessToken?: () => Promise<string>;
   devMode?: boolean;
   devTenantId?: string;
   devActorId?: string;
@@ -16,7 +17,8 @@ export class ApiError extends Error {
 async function request<T>(config: ApiConfig, path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
   headers.set('Content-Type', 'application/json');
-  if (config.accessToken) headers.set('Authorization', `Bearer ${config.accessToken}`);
+  const accessToken = config.getAccessToken ? await config.getAccessToken() : config.accessToken;
+  if (accessToken) headers.set('Authorization', `Bearer ${accessToken}`);
   if (config.devMode) {
     headers.set('x-tenant-id', config.devTenantId ?? 'smoke-tenant');
     headers.set('x-actor-id', config.devActorId ?? config.userId);

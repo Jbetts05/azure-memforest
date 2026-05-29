@@ -31,6 +31,12 @@ export async function getApiConfig(): Promise<ApiConfig> {
   const accounts = msal.getAllAccounts();
   const account = accounts[0] ?? (await msal.loginPopup({ scopes: [scope] })).account;
   if (!account) throw new Error('No signed-in account.');
-  const token = await msal.acquireTokenSilent({ account, scopes: [scope] }).catch(() => msal.acquireTokenPopup({ account, scopes: [scope] }));
-  return { baseUrl, userId: account.localAccountId, accessToken: token.accessToken };
+  const getAccessToken = async () => {
+    const freshAccount = msal.getAccountByHomeId(account.homeAccountId) ?? account;
+    const token = await msal
+      .acquireTokenSilent({ account: freshAccount, scopes: [scope], forceRefresh: true })
+      .catch(() => msal.acquireTokenPopup({ account: freshAccount, scopes: [scope] }));
+    return token.accessToken;
+  };
+  return { baseUrl, userId: account.localAccountId, accessToken: await getAccessToken(), getAccessToken };
 }
