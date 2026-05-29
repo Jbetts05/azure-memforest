@@ -60,16 +60,28 @@ textarea {
 
 .statusPills {
   display: flex;
+  align-items: center;
   gap: 0.5rem;
 }
 
-.statusPills span {
+.statusPills span,
+.memoryTrigger {
   border: 1px solid #e5e5e5;
   border-radius: 999px;
   padding: 0.32rem 0.6rem;
   background: #ffffff;
   color: #333333;
   font-size: 0.78rem;
+}
+
+.memoryTrigger {
+  cursor: pointer;
+  transition: border-color 160ms ease, transform 160ms ease;
+}
+
+.memoryTrigger:hover {
+  border-color: #111111;
+  transform: translateY(-1px);
 }
 
 .appLayout {
@@ -213,6 +225,21 @@ textarea {
   font-size: 0.78rem;
 }
 
+.memoryBadge {
+  justify-self: start;
+  border: 1px solid #dedede;
+  border-radius: 999px;
+  padding: 0.28rem 0.58rem;
+  color: #333333;
+  background: #ffffff;
+  font-size: 0.76rem;
+  cursor: pointer;
+}
+
+.bubble.user .memoryBadge {
+  justify-self: end;
+}
+
 .memoryPanel {
   min-width: 0;
   overflow-y: auto;
@@ -222,6 +249,278 @@ textarea {
   gap: 22px;
   background: #fafafa;
 }
+
+.memoryPanel.compact {
+  display: none;
+}
+
+.drawerLayer {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  pointer-events: none;
+}
+
+.drawerLayer.open {
+  pointer-events: auto;
+}
+
+.drawerScrim {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: rgba(0, 0, 0, 0);
+  transition: background 180ms ease;
+}
+
+.drawerLayer.open .drawerScrim {
+  background: rgba(0, 0, 0, 0.16);
+}
+
+.memoryDrawer {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  bottom: 12px;
+  width: min(920px, calc(100vw - 24px));
+  display: grid;
+  grid-template-rows: auto auto 1fr;
+  border: 1px solid #e7e7e7;
+  border-radius: 26px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.18);
+  backdrop-filter: blur(22px);
+  transform: translateX(calc(100% + 24px));
+  transition: transform 240ms cubic-bezier(.2, .8, .2, 1);
+  overflow: hidden;
+}
+
+.drawerLayer.open .memoryDrawer {
+  transform: translateX(0);
+}
+
+.drawerHeader {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 24px 26px 18px;
+  border-bottom: 1px solid #eeeeee;
+}
+
+.drawerHeader h2 {
+  margin: 0;
+  font-size: 1.45rem;
+  letter-spacing: -0.05em;
+}
+
+.ghostButton {
+  border: 1px solid #e5e5e5;
+  border-radius: 999px;
+  padding: 0.48rem 0.75rem;
+  background: #ffffff;
+  cursor: pointer;
+}
+
+.drawerTabs {
+  display: flex;
+  gap: 0.35rem;
+  padding: 12px 18px;
+  border-bottom: 1px solid #eeeeee;
+}
+
+.drawerTabs button {
+  border: 0;
+  border-radius: 999px;
+  padding: 0.52rem 0.8rem;
+  background: transparent;
+  color: #666666;
+  text-transform: capitalize;
+  cursor: pointer;
+}
+
+.drawerTabs button.active,
+.drawerTabs button[aria-selected="true"] {
+  color: #111111;
+  background: #f1f1f1;
+}
+
+.drawerPane {
+  min-height: 0;
+  overflow: auto;
+  padding: 22px 26px 28px;
+}
+
+.drawerStats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.75rem;
+  margin-bottom: 1.25rem;
+}
+
+.drawerStats div {
+  border: 1px solid #eeeeee;
+  border-radius: 18px;
+  padding: 0.9rem;
+  background: linear-gradient(180deg, #ffffff, #f8f8f8);
+}
+
+.drawerStats b {
+  display: block;
+  font-size: 1.35rem;
+  letter-spacing: -0.05em;
+}
+
+.drawerStats span {
+  color: #777777;
+  font-size: 0.78rem;
+}
+
+.explorerGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  gap: 1rem;
+  align-items: start;
+}
+
+.branchList {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.branchGroup {
+  --depth: 0;
+  display: grid;
+  gap: 0.35rem;
+}
+
+.branchNode {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  grid-template-areas: "type summary meta";
+  gap: 0.7rem;
+  align-items: center;
+  width: calc(100% - (var(--depth) * 22px));
+  margin-left: calc(var(--depth) * 22px);
+  border: 1px solid #eeeeee;
+  border-radius: 16px;
+  padding: 0.8rem 0.9rem;
+  background: #ffffff;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 160ms ease, transform 160ms ease, background 160ms ease;
+}
+
+.branchNode:hover,
+.branchNode.selected {
+  border-color: #111111;
+  transform: translateY(-1px);
+  background: #fbfbfb;
+}
+
+.branchRail {
+  position: absolute;
+  left: -12px;
+  top: 50%;
+  width: 12px;
+  height: 1px;
+  background: #dddddd;
+}
+
+.branchType {
+  grid-area: type;
+  border: 1px solid #e6e6e6;
+  border-radius: 999px;
+  padding: 0.25rem 0.45rem;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.branchSummary {
+  grid-area: summary;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.branchMeta {
+  grid-area: meta;
+  color: #777777;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.nodeDetail {
+  position: sticky;
+  top: 0;
+  display: grid;
+  gap: 0.7rem;
+  border: 1px solid #eeeeee;
+  border-radius: 22px;
+  padding: 1rem;
+  background: #fafafa;
+}
+
+.nodeDetail h3,
+.drawerPane h3 {
+  margin: 0;
+  letter-spacing: -0.04em;
+}
+
+.nodeDetail p,
+.factShelf p,
+.traceShelf p,
+.jobShelf p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.nodeMetrics {
+  display: grid;
+  grid-template-columns: auto 1fr auto 1fr;
+  gap: 0.35rem;
+  align-items: baseline;
+}
+
+.nodeMetrics small,
+.nodeDetail span,
+.factShelf span,
+.factShelf small,
+.traceShelf small,
+.jobShelf span {
+  color: #777777;
+  font-size: 0.76rem;
+}
+
+.nodeDetail article,
+.factShelf article,
+.jobShelf article {
+  border-top: 1px solid #eeeeee;
+  padding-top: 0.75rem;
+}
+
+.factShelf,
+.traceShelf,
+.jobShelf {
+  display: grid;
+  align-content: start;
+  gap: 0.9rem;
+}
+
+.traceShelf ol,
+.jobShelf ol {
+  margin: 0;
+  padding-left: 1.2rem;
+}
+
+.traceShelf li,
+.jobShelf li {
+  margin: 0.55rem 0;
+}
+
 
 .memoryPanel section {
   border-bottom: 1px solid #eaeaea;

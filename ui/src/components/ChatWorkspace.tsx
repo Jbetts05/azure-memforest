@@ -7,6 +7,8 @@ type ChatMessage = {
   content: string;
   timestamp: string;
   memoryStatus?: ChatResult['memory_status'];
+  queryId?: string | null;
+  facts?: ChatResult['facts'];
 };
 
 const terminal = new Set(['succeeded', 'failed', 'cancelled']);
@@ -15,12 +17,16 @@ export function ChatWorkspace({
   config,
   initialTurns,
   onChatResult,
-  onIngestComplete
+  onIngestComplete,
+  onJobUpdate,
+  onMemoryBadgeClick
 }: {
   config: ApiConfig | null;
   initialTurns: Turn[];
   onChatResult: (result: ChatResult) => void;
   onIngestComplete: () => Promise<void>;
+  onJobUpdate?: (job: JobStatus | null, events: JobEvent[], extracting: boolean) => void;
+  onMemoryBadgeClick?: (message: { queryId?: string | null; facts?: ChatResult['facts']; memoryStatus?: ChatResult['memory_status'] }) => void;
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState('');
@@ -32,6 +38,8 @@ export function ChatWorkspace({
   const [pollingTimedOut, setPollingTimedOut] = useState(false);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const ingestSeqRef = useRef(0);
+  const latestJobRef = useRef<JobStatus | null>(null);
+  const latestEventsRef = useRef<JobEvent[]>([]);
   const activeSessionId = useMemo(() => _activeSessionId(config), [config]);
 
   useEffect(() => {
@@ -68,7 +76,9 @@ export function ChatWorkspace({
         role: 'assistant',
         content: result.reply,
         timestamp: new Date().toISOString(),
-        memoryStatus: result.memory_status
+        memoryStatus: result.memory_status,
+        queryId: result.query_id,
+        facts: result.facts
       };
       setMessages((current) => [...current, assistantMessage]);
       void ingestWindow(config, activeSessionId, history);
@@ -92,6 +102,7 @@ export function ChatWorkspace({
     const seq = ingestSeqRef.current + 1;
     ingestSeqRef.current = seq;
     setExtracting(true);
+    onJobUpdate?.(null, [], true);
     setPollingTimedOut(false);
     setEvents([]);
     try {
@@ -110,14 +121,22 @@ export function ChatWorkspace({
       let current = await api.job(config, accepted.job_id);
       if (ingestSeqRef.current === seq) {
         setJob(current);
-        setEvents(_eventsOrEmpty(await api.jobEvents(config, accepted.job_id)));
+        const loadedEvents = _eventsOrEmpty(await api.jobEvents(config, accepted.job_id));
+        setEvents(loadedEvents);
+        latestJobRef.current = current;
+        latestEventsRef.current = loadedEvents;
+        onJobUpdate?.(current, loadedEvents, true);
       }
       for (let i = 0; i < 75 && !terminal.has(current.status); i += 1) {
         await new Promise((resolve) => setTimeout(resolve, i < 10 ? 2000 : 4000));
         current = await api.job(config, accepted.job_id);
         if (ingestSeqRef.current !== seq) return;
         setJob(current);
-        setEvents(_eventsOrEmpty(await api.jobEvents(config, accepted.job_id)));
+        const loadedEvents = _eventsOrEmpty(await api.jobEvents(config, accepted.job_id));
+        setEvents(loadedEvents);
+        latestJobRef.current = current;
+        latestEventsRef.current = loadedEvents;
+        onJobUpdate?.(current, loadedEvents, true);
       }
       if (ingestSeqRef.current !== seq) return;
       if (current.status === 'succeeded') await onIngestComplete();
@@ -126,7 +145,10 @@ export function ChatWorkspace({
     } catch (err) {
       setError(_friendlyError(err));
     } finally {
-      if (ingestSeqRef.current === seq) setExtracting(false);
+      if (ingestSeqRef.current === seq) {
+        setExtracting(false);
+        onJobUpdate?.(latestJobRef.current, latestEventsRef.current, false);
+      }
     }
   }
 
@@ -144,7 +166,11 @@ export function ChatWorkspace({
           <article key={message.id} className={`bubble ${message.role}`}>
             <span>{message.role === 'assistant' ? 'MemForest' : 'You'}</span>
             <p>{message.content}</p>
-            {message.memoryStatus ? <small>{_memoryLabel(message.memoryStatus)}</small> : null}
+            {message.memoryStatus ? (
+              <button className="memoryBadge" type="button" onClick={() => onMemoryBadgeClick?.(message)}>
+                {_memoryLabel(message.memoryStatus)}
+              </button>
+            ) : null}
           </article>
         ))}
         {busy ? <article className="bubble assistant pending"><span>MemForest</span><p>Thinking...</p></article> : null}

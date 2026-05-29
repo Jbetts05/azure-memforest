@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { api, ApiError, type ApiConfig, type ChatResult, type FactDetail, type Manifest, type QueryResult, type QueryTrace, type Session, type TreeNode, type Turn } from './api';
+import { api, ApiError, type ApiConfig, type ChatResult, type FactDetail, type JobEvent, type JobStatus, type Manifest, type QueryResult, type QueryTrace, type Session, type TreeNode, type Turn } from './api';
 import { getApiConfig } from './auth';
 import { ChatWorkspace } from './components/ChatWorkspace';
 import { FactInspector } from './components/FactInspector';
+import { MemoryExplorerDrawer } from './components/MemoryExplorerDrawer';
 import { MemoryForestViz } from './components/MemoryForestViz';
 import { OpsStatus } from './components/OpsStatus';
 import { QueryTraceViz } from './components/QueryTraceViz';
@@ -20,6 +21,12 @@ function App() {
   const [trace, setTrace] = useState<QueryTrace | null>(null);
   const [factDetail, setFactDetail] = useState<FactDetail | null>(null);
   const [forestFacts, setForestFacts] = useState<FactDetail[]>([]);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerTab, setDrawerTab] = useState<'forest' | 'facts' | 'trace' | 'jobs'>('forest');
+  const [job, setJob] = useState<JobStatus | null>(null);
+  const [jobEvents, setJobEvents] = useState<JobEvent[]>([]);
+  const [extracting, setExtracting] = useState(false);
+  const memoryTriggerRef = useRef<HTMLButtonElement | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [emptyForest, setEmptyForest] = useState(false);
   const forestFactsRequestRef = useRef(0);
@@ -134,6 +141,9 @@ function App() {
         <div className="statusPills">
           <span>{config?.devMode ? 'Dev auth' : 'Entra'}</span>
           <span>{manifest ? `generation ${manifest.generation}` : emptyForest ? 'first run' : 'loading'}</span>
+          <button ref={memoryTriggerRef} className="memoryTrigger" type="button" onClick={() => { setDrawerTab('forest'); setDrawerOpen(true); }}>
+            Memory · {nodes.length} trees · {forestFacts.length} facts
+          </button>
         </div>
       </header>
       <section className="appLayout">
@@ -141,6 +151,15 @@ function App() {
           config={config}
           initialTurns={turns}
           onChatResult={(result) => { void handleChatResult(result); }}
+          onMemoryBadgeClick={(message) => {
+            setDrawerTab(message.queryId ? 'trace' : 'facts');
+            setDrawerOpen(true);
+          }}
+          onJobUpdate={(latestJob, latestEvents, isExtracting) => {
+            setJob(latestJob);
+            setJobEvents(latestEvents);
+            setExtracting(isExtracting);
+          }}
           onIngestComplete={async () => {
             if (!config) return;
             try {
@@ -150,7 +169,7 @@ function App() {
             }
           }}
         />
-        <aside className="memoryPanel" aria-label="Memory inspector">
+        <aside className="memoryPanel compact" aria-label="Memory inspector">
           <section className="memoryIntro">
             <p className="kicker">Memory layer</p>
             <h2>{emptyForest ? 'Ready to extract first memories.' : 'Memory updates behind the chat.'}</h2>
@@ -164,6 +183,23 @@ function App() {
           <OpsStatus manifest={manifest} authMode={config?.devMode ? 'Dev headers' : 'Entra'} error={error} />
         </aside>
       </section>
+      <MemoryExplorerDrawer
+        open={drawerOpen}
+        initialTab={drawerTab}
+        config={config}
+        manifest={manifest}
+        roots={nodes}
+        forestFacts={forestFacts}
+        query={visibleQuery}
+        trace={trace}
+        job={job}
+        jobEvents={jobEvents}
+        extracting={extracting}
+        onClose={() => {
+          setDrawerOpen(false);
+          memoryTriggerRef.current?.focus();
+        }}
+      />
     </main>
   );
 }
