@@ -6,6 +6,8 @@ from typing import Protocol
 
 from src.service.auth import ActorContext
 from src.service.schemas import (
+    ChatRequest,
+    ChatResponse,
     DeleteSessionResponse,
     IngestSessionRequest,
     IngestSessionResponse,
@@ -53,6 +55,17 @@ class MemoryQueryService(Protocol):
         user_id: str,
         request: QueryRequest,
     ) -> QueryResponse:
+        ...
+
+
+class MemoryChatService(Protocol):
+    async def chat(
+        self,
+        actor: ActorContext,
+        *,
+        user_id: str,
+        request: ChatRequest,
+    ) -> ChatResponse:
         ...
 
 

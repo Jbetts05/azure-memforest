@@ -19,14 +19,28 @@ beforeEach(() => {
 
 describe('api client', () => {
   it('sends dev auth headers and idempotency key for ingest', async () => {
-    await api.ingestSession(config, 'session-1', 'hello');
+    await api.ingestSession(config, 'session-1', [{ role: 'user', content: 'hello', content_id: 'turn-1' }]);
     const call = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
     const headers = new Headers(call[1].headers);
+    const body = JSON.parse(String(call[1].body));
 
     expect(call[0]).toBe('https://api.example/v1/users/user-1/sessions/session-1:ingest');
     expect(headers.get('x-tenant-id')).toBe('tenant-1');
     expect(headers.get('x-actor-id')).toBe('user-1');
     expect(headers.get('Idempotency-Key')).toBe('uuid-1');
+    expect(body.turns[0].content_id).toBe('turn-1');
+    expect(body.metadata.source).toBe('chat-ui');
+  });
+
+  it('posts chat turns to chat endpoint', async () => {
+    await api.chat(config, 'hello', [{ role: 'user', content: 'hello', content_id: 'turn-1' }]);
+    const call = (fetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+    const body = JSON.parse(String(call[1].body));
+
+    expect(call[0]).toBe('https://api.example/v1/users/user-1/chat');
+    expect(body.message).toBe('hello');
+    expect(body.turns[0].content_id).toBe('turn-1');
+    expect(body.trace_requested).toBe(true);
   });
 
   it('builds trace URL from query id', async () => {

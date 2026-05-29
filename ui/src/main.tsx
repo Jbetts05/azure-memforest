@@ -1,7 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { motion } from 'framer-motion';
-import { api, type ApiConfig, type FactDetail, type Manifest, type QueryResult, type QueryTrace, type Session, type TreeNode, type Turn } from './api';
+import { api, ApiError, type ApiConfig, type ChatResult, type FactDetail, type Manifest, type QueryResult, type QueryTrace, type Session, type TreeNode, type Turn } from './api';
 import { getApiConfig } from './auth';
 import { ChatWorkspace } from './components/ChatWorkspace';
 import { FactInspector } from './components/FactInspector';
@@ -21,29 +20,45 @@ function App() {
   const [trace, setTrace] = useState<QueryTrace | null>(null);
   const [factDetail, setFactDetail] = useState<FactDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [emptyForest, setEmptyForest] = useState(false);
   const visibleQuery: QueryResult = query ?? {
     query_id: '',
-    answer: 'No query run yet.',
-    reason: 'Ask a question to see grounded memory.',
+    answer: undefined,
+    reason: 'Memory used in replies will appear here.',
     facts: []
   };
 
   async function refresh(cfg: ApiConfig): Promise<Manifest> {
-    const [loadedSessions, latest] = await Promise.all([api.sessions(cfg), api.latestForest(cfg)]);
+    setEmptyForest(false);
+    const loadedSessions = await api.sessions(cfg).catch(() => []);
     setSessions(loadedSessions);
-    setManifest(latest);
-    if (loadedSessions[0]) setTurns(await api.turns(cfg, loadedSessions[0].session_id));
-    const roots = await api.treeRoots(cfg, latest.forest_version);
-    setNodes(roots.roots);
-    return latest;
+    setTurns(loadedSessions[0] ? await api.turns(cfg, loadedSessions[0].session_id).catch(() => []) : []);
+    try {
+      const latest = await api.latestForest(cfg);
+      setEmptyForest(false);
+      setManifest(latest);
+      const roots = await api.treeRoots(cfg, latest.forest_version);
+      setNodes(roots.roots);
+      return latest;
+    } catch (err) {
+      if (_isForestNotFound(err)) {
+        setEmptyForest(true);
+        setManifest(null);
+        setNodes([]);
+        setTrace(null);
+        setFactDetail(null);
+      }
+      throw err;
+    }
   }
 
-  async function loadQuery(cfg: ApiConfig, forestVersion: string, result?: QueryResult) {
-    const queryResult = result ?? await api.query(cfg, 'Where did Alice move?');
-    setQuery(queryResult);
-    const loadedTrace = await api.trace(cfg, queryResult.query_id);
-    setTrace(loadedTrace);
-    const firstFact = queryResult.facts[0];
+  async function loadQuery(cfg: ApiConfig, forestVersion: string, result: QueryResult) {
+    setQuery(result);
+    if (result.query_id) {
+      const loadedTrace = await api.trace(cfg, result.query_id);
+      setTrace(loadedTrace);
+    }
+    const firstFact = result.facts[0];
     if (firstFact) setFactDetail(await api.fact(cfg, forestVersion, firstFact.fact_id));
   }
 
@@ -54,8 +69,11 @@ function App() {
         const cfg = await getApiConfig();
         if (cancelled) return;
         setConfig(cfg);
-        const latest = await refresh(cfg);
-        if (!cancelled) await loadQuery(cfg, latest.forest_version);
+        try {
+          await refresh(cfg);
+        } catch (err) {
+          if (!cancelled && !_isForestNotFound(err)) setError(err instanceof Error ? err.message : String(err));
+        }
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : String(err));
       }
@@ -64,56 +82,76 @@ function App() {
     return () => { cancelled = true; };
   }, []);
 
+  async function handleChatResult(result: ChatResult) {
+    const queryResult: QueryResult = {
+      query_id: result.query_id ?? '',
+      answer: result.reply,
+      reason: result.reason ?? _memoryStatusCopy(result.memory_status),
+      facts: result.facts
+    };
+    setQuery(queryResult);
+    if (config && manifest && result.query_id) {
+      try {
+        await loadQuery(config, manifest.forest_version, queryResult);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    }
+  }
+
   return (
-    <main className="shell">
-      <section className="hero">
-        <motion.p initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} className="eyebrow">
-          Azure-MemForest UI
-        </motion.p>
-        <motion.h1 initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.08 }}>
-          Watch memory become a forest.
-        </motion.h1>
-        <motion.p initial={{ opacity: 0, y: 18 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.16 }} className="lede">
-          A workspace for conversations, committed MemTrees, query traces, and grounded answers.
-        </motion.p>
-      </section>
-      <section className="workspace" aria-label="UI scaffold">
-        <nav>
-          <span>Sessions</span>
-          <span>Forest</span>
-          <span>Trace</span>
-          <span>Facts</span>
-          <span>Ops</span>
-        </nav>
-        <div className="canvas">
-          <SessionBrowser sessions={sessions} turns={turns} />
-          <MemoryForestViz manifest={manifest} nodes={nodes} />
-          <aside aria-label="Trace and fact inspector">
-            <strong>{visibleQuery.answer}</strong>
-            <p>{visibleQuery.reason}</p>
-            <p className="tiny">Trace events: {trace?.event_count ?? 0} · {trace?.forest_version ?? 'no trace'}</p>
-            <p className="tiny">Fact: {visibleQuery.facts[0]?.text ?? 'No fact selected'}</p>
-            {error ? <p className="error">Live API: {error}</p> : null}
-          </aside>
+    <main className="appShell">
+      <header className="topbar">
+        <div>
+          <strong>MemForest</strong>
+          <span>Persistent memory for ongoing conversations</span>
         </div>
+        <div className="statusPills">
+          <span>{config?.devMode ? 'Dev auth' : 'Entra'}</span>
+          <span>{manifest ? `generation ${manifest.generation}` : emptyForest ? 'first run' : 'loading'}</span>
+        </div>
+      </header>
+      <section className="appLayout">
         <ChatWorkspace
           config={config}
-          onQuery={(result) => {
-            setQuery(result);
-            if (config && manifest) void loadQuery(config, manifest.forest_version, result);
-          }}
+          initialTurns={turns}
+          onChatResult={(result) => { void handleChatResult(result); }}
           onIngestComplete={async () => {
-            if (config) await refresh(config);
+            if (!config) return;
+            try {
+              await refresh(config);
+            } catch (err) {
+              if (!_isForestNotFound(err)) setError(err instanceof Error ? err.message : String(err));
+            }
           }}
         />
-        <div className="lower">
+        <aside className="memoryPanel" aria-label="Memory inspector">
+          <section className="memoryIntro">
+            <p className="kicker">Memory layer</p>
+            <h2>{emptyForest ? 'Ready to extract first memories.' : 'Memory updates behind the chat.'}</h2>
+            <p>{emptyForest ? 'Send a message. MemForest will extract useful details and commit the first forest in the background.' : 'Facts, trees, and trace events appear here when a reply uses committed memory.'}</p>
+            {error ? <p className="error">{error}</p> : null}
+          </section>
+          <MemoryForestViz manifest={manifest} nodes={nodes} />
           <FactInspector result={visibleQuery} detail={factDetail} />
-          <OpsStatus manifest={manifest} authMode={config?.devMode ? 'Dev headers' : 'Entra'} error={error} />
           <QueryTraceViz trace={trace} />
-        </div>
+          <SessionBrowser sessions={sessions} turns={turns} />
+          <OpsStatus manifest={manifest} authMode={config?.devMode ? 'Dev headers' : 'Entra'} error={error} />
+        </aside>
       </section>
     </main>
   );
 }
 
 createRoot(document.getElementById('root')!).render(<App />);
+
+function _isForestNotFound(err: unknown): boolean {
+  return err instanceof ApiError ? err.code === 'forest_not_found' : err instanceof Error && err.message.includes('forest_not_found');
+}
+
+function _memoryStatusCopy(status: ChatResult['memory_status']): string {
+  if (status === 'grounded') return 'Reply used recalled MemForest facts.';
+  if (status === 'no_forest') return 'No committed forest existed before this turn.';
+  if (status === 'no_facts') return 'The forest was queried, but no relevant facts were found.';
+  return 'Memory recall was unavailable for this turn.';
+}

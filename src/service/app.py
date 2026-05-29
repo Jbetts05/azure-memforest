@@ -72,6 +72,7 @@ def create_app(
     )
     app.state.job_status_service = CosmosJobStatusService(job_store) if job_store is not None else None
     app.state.memory_query_service = _cloud_query_service_from_env(os.environ)
+    app.state.memory_chat_service = _cloud_chat_service_from_env(os.environ, query_service=app.state.memory_query_service)
     trace_recorder = _trace_recorder_from_env(os.environ)
     app.state.query_trace_service = CosmosQueryTraceService(trace_recorder) if trace_recorder is not None else None
     app.state.ui_read_service = _ui_read_service_from_env(os.environ)
@@ -161,6 +162,12 @@ def _trace_recorder_from_env(environ):
     credential = ManagedIdentityCredential(client_id=client_id)
     client = CosmosClient(endpoint, credential=credential)
     return trace_recorder_from_database(client.get_database_client(database_name))
+
+
+def _cloud_chat_service_from_env(environ, *, query_service=None):
+    from src.cloud.chat_service import cloud_chat_service_from_env
+
+    return cloud_chat_service_from_env(environ, query_service=query_service)
 
 
 def _ui_read_service_from_env(environ):

@@ -55,6 +55,22 @@ class QueryResponse(BaseModel):
     facts: list[MemoryFactResponse] = Field(default_factory=list)
 
 
+class ChatRequest(BaseModel):
+    message: str = Field(min_length=1)
+    turns: list[TurnInput] = Field(default_factory=list)
+    max_facts: int | None = Field(default=8, ge=0)
+    trace_requested: bool = False
+
+
+class ChatResponse(BaseModel):
+    status: Literal["succeeded"] = "succeeded"
+    reply: str
+    query_id: str | None = None
+    reason: str | None = None
+    memory_status: Literal["grounded", "no_forest", "no_facts", "unavailable"] = "unavailable"
+    facts: list[MemoryFactResponse] = Field(default_factory=list)
+
+
 class DeleteSessionResponse(BaseModel):
     job_id: str
     status: JobStatus = "accepted"

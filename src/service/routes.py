@@ -14,6 +14,8 @@ from src.cloud.query_prerequisites import CloudQueryNotReady
 from src.cloud.ui_read_service import UiReadNotFound
 from src.service.middleware import REQUEST_ID_HEADER
 from src.service.schemas import (
+    ChatRequest,
+    ChatResponse,
     DeleteSessionResponse,
     IngestSessionRequest,
     IngestSessionResponse,
@@ -79,6 +81,18 @@ async def query_memory(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             error=f"cloud_query_not_ready:{exc.reason}",
         )
+
+
+@router.post("/users/{user_id}/chat", response_model=ChatResponse)
+async def chat_memory(
+    user_id: str,
+    payload: ChatRequest,
+    request: Request,
+    actor: ActorContext = Depends(get_actor_context),
+):
+    _enforce_user_access(actor, user_id)
+    service = _required_service(request, "memory_chat_service")
+    return await service.chat(actor, user_id=user_id, request=payload)
 
 
 @router.post(

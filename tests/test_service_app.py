@@ -547,6 +547,23 @@ def test_query_route_returns_service_not_configured_when_auth_succeeds() -> None
     }
 
 
+def test_chat_route_returns_service_not_configured_when_auth_succeeds() -> None:
+    client = TestClient(create_app(auth_provider=DevHeaderAuthProvider(environment="test")))
+
+    response = client.post(
+        "/v1/users/user-1/chat",
+        headers={TENANT_ID_HEADER: "tenant-1", ACTOR_ID_HEADER: "user-1", "x-request-id": "api-chat-1"},
+        json={"message": "What do you remember?"},
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "status": "error",
+        "error": "service_not_configured",
+        "request_id": "api-chat-1",
+    }
+
+
 def test_memory_routes_call_injected_services_with_actor_context() -> None:
     class FakeCommandService:
         async def submit_ingest_session(self, actor, *, user_id, session_id, request, idempotency_key):
@@ -580,6 +597,17 @@ def test_memory_routes_call_injected_services_with_actor_context() -> None:
                         "text": "Bob moved to Davis.",
                     }
                 ],
+            }
+
+    class FakeChatService:
+        async def chat(self, actor, *, user_id, request):
+            self.actor = actor
+            self.message = request.message
+            return {
+                "reply": "I remember Bob moved to Davis.",
+                "query_id": "query-chat-1",
+                "memory_status": "grounded",
+                "facts": [{"fact_id": "fact-1", "text": "Bob moved to Davis."}],
             }
 
     class FakeJobService:
@@ -628,9 +656,11 @@ def test_memory_routes_call_injected_services_with_actor_context() -> None:
             return {"fact_id": fact_id, "text": "fact", "locations": []}
 
     command_service = FakeCommandService()
+    chat_service = FakeChatService()
     app = create_app(auth_provider=DevHeaderAuthProvider(environment="test"))
     app.state.memory_command_service = command_service
     app.state.memory_query_service = FakeQueryService()
+    app.state.memory_chat_service = chat_service
     app.state.job_status_service = FakeJobService()
     app.state.query_trace_service = FakeTraceService()
     app.state.ui_read_service = FakeUiReadService()
@@ -651,6 +681,11 @@ def test_memory_routes_call_injected_services_with_actor_context() -> None:
         "/v1/users/other-user/query",
         headers=headers,
         json={"question": "Where is Bob?"},
+    )
+    chat_response = client.post(
+        "/v1/users/other-user/chat",
+        headers=headers,
+        json={"message": "Where did Bob move?", "turns": [{"role": "user", "content": "Where did Bob move?"}]},
     )
     job_response = client.get(
         "/v1/users/other-user/jobs/job-1",
@@ -678,6 +713,10 @@ def test_memory_routes_call_injected_services_with_actor_context() -> None:
     assert command_service.idempotency_key == "idem-1"
     assert query_response.status_code == 200
     assert query_response.json()["facts"][0]["fact_id"] == "fact-1"
+    assert chat_response.status_code == 200
+    assert chat_response.json()["reply"] == "I remember Bob moved to Davis."
+    assert chat_service.actor.actor_id == "user-1"
+    assert chat_service.message == "Where did Bob move?"
     assert job_response.status_code == 200
     assert job_response.json()["job_id"] == "job-1"
     assert job_events_response.status_code == 200
