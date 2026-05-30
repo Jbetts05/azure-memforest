@@ -1,0 +1,305 @@
+{
+  "run_id": "2026-05-29-claim-replay",
+  "user_id_hash": "22222222...",
+  "api_version": "eec2e9fac3ae",
+  "events": [
+    {
+      "step": "clear_memory",
+      "data": {
+        "job_id": "job_8608e0ad79aae06af6a774db2bef7c9e121ca1041b42dceb9a644eb557558f58",
+        "status": "accepted",
+        "tenant_id": "11111111-1111-4111-8111-111111111111",
+        "user_id": "22222222-2222-4222-8222-222222222222",
+        "submitted_at": 1780093613.4038692,
+        "completed_at": null,
+        "error": null
+      }
+    },
+    {
+      "step": "ingest_session_1",
+      "data": {
+        "job_id": "job_cbdececffa5eabbf2160f72a838932fdb815e25a878138a507cd1423f94a31a6",
+        "status": "succeeded",
+        "tenant_id": "11111111-1111-4111-8111-111111111111",
+        "user_id": "22222222-2222-4222-8222-222222222222",
+        "submitted_at": 1780094092.4080706,
+        "completed_at": 1780094100.9292417,
+        "error": null
+      }
+    },
+    {
+      "step": "query_role_after_session_1",
+      "data": {
+        "query_id": "6c8fa8eb-7c42-4e0d-b51d-4bcdd9086be7",
+        "status": "succeeded",
+        "answer": "Alex is a data scientist at Example Corp in the Example Research organization.",
+        "reason": "The context explicitly mentions Alex's role as a data scientist at Example Corp in the Example Research organization.",
+        "facts": [
+          {
+            "fact_id": "fact_89592c03366a0119",
+            "text": "The user's name is Alex.",
+            "time_start": 1767222891.0,
+            "time_end": 1767222891.0,
+            "metadata": {
+              "forest_version": "g1-1423f94a31a6"
+            }
+          },
+          {
+            "fact_id": "fact_4c4581f70366ffce",
+            "text": "Alex works at Example Corp in the Example Research organization as a data scientist.",
+            "time_start": 1767222891.0,
+            "time_end": 1767225932.0,
+            "metadata": {
+              "forest_version": "g1-1423f94a31a6"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "step": "ingest_session_2",
+      "data": {
+        "job_id": "job_77b46847bca9904b3c05c14e5802112f3a80762b457224f1c26c93c58ce6c606",
+        "status": "succeeded",
+        "tenant_id": "11111111-1111-4111-8111-111111111111",
+        "user_id": "22222222-2222-4222-8222-222222222222",
+        "submitted_at": 1780094105.997679,
+        "completed_at": 1780094113.964563,
+        "error": null
+      }
+    },
+    {
+      "step": "query_current_role_after_session_2",
+      "data": {
+        "query_id": "815af90f-c557-4a64-adc6-e8c755a938ef",
+        "status": "succeeded",
+        "answer": "Alex works at Example Labs as an FDE.",
+        "reason": "The user named Alex is stated to work at Example Labs as an FDE, which is the role code he gave.",
+        "facts": [
+          {
+            "fact_id": "fact_4c4581f70366ffce",
+            "text": "Alex works at Example Corp in the Example Research organization as a data scientist.",
+            "time_start": 1767222891.0,
+            "time_end": 1767225932.0,
+            "metadata": {
+              "forest_version": "g2-93c58ce6c606"
+            }
+          },
+          {
+            "fact_id": "fact_89592c03366a0119",
+            "text": "The user's name is Alex.",
+            "time_start": 1767222891.0,
+            "time_end": 1767222891.0,
+            "metadata": {
+              "forest_version": "g2-93c58ce6c606"
+            }
+          },
+          {
+            "fact_id": "fact_3ddd359ab191419b",
+            "text": "The user works at Example Labs as an FDE.",
+            "time_start": 1767222951.0,
+            "time_end": 1767222951.0,
+            "metadata": {
+              "forest_version": "g2-93c58ce6c606"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "step": "latest_manifest",
+      "data": {
+        "manifest_id": "manifest_7678d7a502f26f7c151c66636c374ed7df3ae6f0bf9337e93d856a2d9adc0ecc",
+        "forest_version": "g2-93c58ce6c606",
+        "generation": 2,
+        "status": "committed",
+        "created_at_unix": 1780094112.995108,
+        "committed_at_unix": 1780094113.9033606,
+        "metadata": {
+          "job_id": "job_77b46847bca9904b3c05c14e5802112f3a80762b457224f1c26c93c58ce6c606",
+          "job_type": "ingest_session",
+          "session_id": "replay-session-2",
+          "idempotency_key": "497232df-3a3a-4084-bd01-3b9b102c8466",
+          "embedding_model_version": "1",
+          "code_version": "eec2e9fac3ae",
+          "prompt_config_hash": "8f27b3363cf38f515a99068ed3896d045c626f2807cccfe141ea4603fdec45b8",
+          "fencing_token": "14",
+          "materialization_fingerprint": "ee13a5a99ecd347e46f4b34c64d4c431adf237d45637d3a0cace331fdff591dc",
+          "materialization_schema_version": 1,
+          "fact_set_hash": "26a1d5f9d0cbc18fee0561f81856329e06e451efedcf951a14ebace32e104af9",
+          "tree_node_payload_hash": "ff306c667be2dc9daef8305cbae815de144b1af15a0f288030b7eaa6e1126e0c",
+          "fact_location_hash": "a8d4856df09da1cba0d00728a9f82a821f5c50af079d75c7745f0755cfa99fb6",
+          "recall_document_hash": "f6024c4381d40486fed31c12c095b7a90a05d489298c1f4d4c1565981d0ffd7f",
+          "browse_embedding_hash": "3b478dbb49762b0d6a9ddbe47f9ea1b57975dd22136487a46d287aff9fee7ec7",
+          "summary_cache_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+          "snapshot_id": "11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222/g2-93c58ce6c606.json",
+          "snapshot_content_sha256": "a941de5ec506b10b4a593a7513beca3789f140ff457405250673b3ae3cef8ee0",
+          "snapshot_size_bytes": 208491,
+          "fingerprint_inputs_id": "11111111-1111-4111-8111-111111111111/22222222-2222-4222-8222-222222222222/g2-93c58ce6c606.fingerprint.json"
+        }
+      }
+    },
+    {
+      "step": "tree_roots",
+      "data": {
+        "count": 7,
+        "roots": [
+          {
+            "tree_id": "tree:scene:employment_bba054d5",
+            "node_id": "tree:scene:employment_bba054d5:L0:0",
+            "level": "L0",
+            "summary": "Alex works at Example Corp in the Example Research organization as a data scientist.",
+            "child_ids": [
+              "fact_4c4581f70366ffce"
+            ],
+            "fact_ids": [
+              "fact_4c4581f70366ffce"
+            ],
+            "metadata": {
+              "tree_type": "scene",
+              "tree_label": "employment_job",
+              "tree_key": "scene:employment_bba054d5",
+              "time_start": 1767222891,
+              "time_end": 1767225932,
+              "item_count": 1,
+              "parent_id": null,
+              "generation": 2
+            }
+          },
+          {
+            "tree_id": "tree:scene:employment_fb95fddb",
+            "node_id": "tree:scene:employment_fb95fddb:L0:0",
+            "level": "L0",
+            "summary": "Alex works at Example Corp in the Example Research organization as a data scientist.",
+            "child_ids": [
+              "fact_4c4581f70366ffce"
+            ],
+            "fact_ids": [
+              "fact_4c4581f70366ffce"
+            ],
+            "metadata": {
+              "tree_type": "scene",
+              "tree_label": "employment_job",
+              "tree_key": "scene:employment_fb95fddb",
+              "time_start": 1767225932,
+              "time_end": 1767225932,
+              "item_count": 1,
+              "parent_id": null,
+              "generation": 2
+            }
+          },
+          {
+            "tree_id": "tree:scene:personal_identity_1b5255de",
+            "node_id": "tree:scene:personal_identity_1b5255de:L0:0",
+            "level": "L0",
+            "summary": "The user's name is Alex.",
+            "child_ids": [
+              "fact_89592c03366a0119"
+            ],
+            "fact_ids": [
+              "fact_89592c03366a0119"
+            ],
+            "metadata": {
+              "tree_type": "scene",
+              "tree_label": "personal_identity",
+              "tree_key": "scene:personal_identity_1b5255de",
+              "time_start": 1767222891,
+              "time_end": 1767222891,
+              "item_count": 1,
+              "parent_id": null,
+              "generation": 2
+            }
+          },
+          {
+            "tree_id": "entity:user",
+            "node_id": "entity:user:L2:0",
+            "level": "L2",
+            "summary": "[Dec 2025 \u2013 Jan 2026 | User profile] Alex works at Example Corp in the Example Research organization as a data scientist and also works at Example Labs as an FDE. His latest known role remains as an FDE.",
+            "child_ids": [
+              "entity:user:L1:0",
+              "entity:user:L1:1"
+            ],
+            "fact_ids": [],
+            "metadata": {
+              "tree_type": "entity",
+              "tree_label": "User profile",
+              "tree_key": "entity:user",
+              "time_start": 1767222891,
+              "time_end": 1767225932,
+              "item_count": 3,
+              "parent_id": null,
+              "generation": 2
+            }
+          },
+          {
+            "tree_id": "session:sess_0001",
+            "node_id": "session:sess_0001:L0:0",
+            "level": "L0",
+            "summary": "[2026-05-29T22:34:51.396062+00:00] user: My name is Alex. I work at Example Corp in the Example Research organization as a data scientist.",
+            "child_ids": [
+              "replay-session-1#cell_0000_90860ebf8a89"
+            ],
+            "fact_ids": [
+              "fact_89592c03366a0119",
+              "fact_4c4581f70366ffce"
+            ],
+            "metadata": {
+              "tree_type": "session",
+              "tree_label": "sess_0001",
+              "tree_key": "sess_0001",
+              "time_start": 1780094091.396062,
+              "time_end": 1780094091.396062,
+              "item_count": 1,
+              "parent_id": null,
+              "generation": 2
+            }
+          },
+          {
+            "tree_id": "tree:scene:technology_employment_26bb7b15",
+            "node_id": "tree:scene:technology_employment_26bb7b15:L0:0",
+            "level": "L0",
+            "summary": "The user works at Example Labs as an FDE.",
+            "child_ids": [
+              "fact_3ddd359ab191419b"
+            ],
+            "fact_ids": [
+              "fact_3ddd359ab191419b"
+            ],
+            "metadata": {
+              "tree_type": "scene",
+              "tree_label": "technology_employment",
+              "tree_key": "scene:technology_employment_26bb7b15",
+              "time_start": 1767222951,
+              "time_end": 1767222951,
+              "item_count": 1,
+              "parent_id": null,
+              "generation": 2
+            }
+          },
+          {
+            "tree_id": "session:sess_0002",
+            "node_id": "session:sess_0002:L0:0",
+            "level": "L0",
+            "summary": "[2026-05-29T22:35:51.396062+00:00] user: Update: I now work at Example Labs as an FDE.",
+            "child_ids": [
+              "replay-session-2#cell_0000_1c790c628200"
+            ],
+            "fact_ids": [
+              "fact_3ddd359ab191419b"
+            ],
+            "metadata": {
+              "tree_type": "session",
+              "tree_label": "sess_0002",
+              "tree_key": "sess_0002",
+              "time_start": 1780094151.396062,
+              "time_end": 1780094151.396062,
+              "item_count": 1,
+              "parent_id": null,
+              "generation": 2
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

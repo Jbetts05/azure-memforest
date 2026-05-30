@@ -1,0 +1,190 @@
+{
+  "source": "paper PDFs plus in-repo evidence",
+  "claims": [
+    {
+      "id": "EX-01",
+      "category": "extraction",
+      "claim": "Conversations are chunked into MemCells before extraction; each MemCell is a contiguous local memory unit within one session.",
+      "evidence": [
+        "src/utils/types.py:41-58",
+        "src/extraction/chunker.py:49-55"
+      ],
+      "confidence": "high",
+      "verifiability": "code-testable"
+    },
+    {
+      "id": "EX-02",
+      "category": "extraction",
+      "claim": "Single-pass extraction produces MemoryItems with fact text, origin, semantic role, entities, topics, time anchors, and key metadata.",
+      "evidence": [
+        "src/utils/types.py:62-85",
+        "src/extraction/pipeline.py:170-230"
+      ],
+      "confidence": "high",
+      "verifiability": "code-testable"
+    },
+    {
+      "id": "FM-01",
+      "category": "facts",
+      "claim": "MemForest maintains a canonical fact store backed by exact match plus FAISS vector deduplication.",
+      "evidence": [
+        "src/extraction/fact_manager.py:36",
+        "src/extraction/fact_manager.py:76"
+      ],
+      "confidence": "high",
+      "verifiability": "code-testable"
+    },
+    {
+      "id": "FM-02",
+      "category": "facts",
+      "claim": "Deduplication proceeds through exact match, vector candidate retrieval, and LLM equivalence judging.",
+      "evidence": [
+        "src/extraction/fact_manager.py:180-250"
+      ],
+      "confidence": "high",
+      "verifiability": "code-testable"
+    },
+    {
+      "id": "TS-01",
+      "category": "trees",
+      "claim": "MemForest stores extracted facts through three complementary tree views: Session, Entity, and Scene.",
+      "evidence": [
+        "README.md:27-33",
+        "src/build/tree_types.py:41-58"
+      ],
+      "confidence": "high",
+      "verifiability": "code-testable"
+    },
+    {
+      "id": "TS-02",
+      "category": "trees",
+      "claim": "Session trees preserve source order and provide fallback access to original interaction context.",
+      "evidence": [
+        "src/build/tree_types.py:26-37",
+        "paper extracted text lines around 910-918"
+      ],
+      "confidence": "high",
+      "verifiability": "code-testable"
+    },
+    {
+      "id": "TS-03",
+      "category": "trees",
+      "claim": "Entity trees group evidence about recurring subjects; the user-origin tree covers user-origin facts.",
+      "evidence": [
+        "src/build/entity_router.py:37-52",
+        "src/config/default.yaml:60-61"
+      ],
+      "confidence": "high",
+      "verifiability": "code-testable"
+    },
+    {
+      "id": "TS-04",
+      "category": "trees",
+      "claim": "Scene trees group semantically coherent situations/topics via online clustering.",
+      "evidence": [
+        "src/build/scene_router.py:36-80",
+        "src/build/tree_types.py:64-79"
+      ],
+      "confidence": "high",
+      "verifiability": "code-testable"
+    },
+    {
+      "id": "TP-01",
+      "category": "temporal",
+      "claim": "Tree nodes carry time_start/time_end spanning descendants for temporal organization.",
+      "evidence": [
+        "src/build/tree_types.py:15-16"
+      ],
+      "confidence": "high",
+      "verifiability": "code-testable"
+    },
+    {
+      "id": "UP-01",
+      "category": "updates",
+      "claim": "Incremental ingest inserts new evidence and marks affected nodes dirty instead of rebuilding all memory conceptually.",
+      "evidence": [
+        "src/build/tree_builder.py:1-10",
+        "src/build/tree_types.py:59-61"
+      ],
+      "confidence": "high",
+      "verifiability": "code-testable"
+    },
+    {
+      "id": "UP-02",
+      "category": "updates",
+      "claim": "Summary reuse via content-hash cache avoids re-summarizing unchanged nodes.",
+      "evidence": [
+        "src/forest/memforest.py:170-202",
+        "src/forest/memforest.py:164-167"
+      ],
+      "confidence": "high",
+      "verifiability": "code-testable"
+    },
+    {
+      "id": "RE-01",
+      "category": "retrieval",
+      "claim": "Query pipeline follows Recall, Plan, Browse, Rerank, and Answer stages.",
+      "evidence": [
+        "src/query/pipeline.py:7-9",
+        "src/config/query_config.py:89-95"
+      ],
+      "confidence": "high",
+      "verifiability": "code-testable"
+    },
+    {
+      "id": "RE-02",
+      "category": "retrieval",
+      "claim": "Local recall supports top-down, bottom-up, and union directions.",
+      "evidence": [
+        "src/query/retriever.py:1-11",
+        "src/config/query_config.py:22-26"
+      ],
+      "confidence": "high",
+      "verifiability": "code-testable"
+    },
+    {
+      "id": "RE-07",
+      "category": "retrieval",
+      "claim": "Browsing uses global beam search from root to L0 leaves.",
+      "evidence": [
+        "src/query/browser.py:1-18",
+        "src/query/browser.py:119-158"
+      ],
+      "confidence": "high",
+      "verifiability": "code-testable"
+    },
+    {
+      "id": "RE-10",
+      "category": "retrieval",
+      "claim": "Fact reranking is embedding cosine similarity over stored fact embeddings, with no LLM call in local reranker.",
+      "evidence": [
+        "src/query/reranker.py:1-8",
+        "src/query/reranker.py:62-97"
+      ],
+      "confidence": "high",
+      "verifiability": "code-testable"
+    },
+    {
+      "id": "EV-01",
+      "category": "evaluation",
+      "claim": "Evaluation artifacts cover LoCoMo and LongMemEval variants with frozen per-question CSVs and baseline summaries.",
+      "evidence": [
+        "benchmark/*.csv",
+        "benchmark/baseline_summary.json"
+      ],
+      "confidence": "medium",
+      "verifiability": "artifact-testable"
+    },
+    {
+      "id": "SY-01",
+      "category": "system",
+      "claim": "MemForest isolates users via per-user UserForest objects and supports parallel querying across users.",
+      "evidence": [
+        "src/forest/user_forest.py:83-90",
+        "src/forest/memforest.py:363-404"
+      ],
+      "confidence": "high",
+      "verifiability": "code-testable"
+    }
+  ]
+}
