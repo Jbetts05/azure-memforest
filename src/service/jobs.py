@@ -276,13 +276,6 @@ class JobRecordingCommandService(MemoryCommandService):
         request: IngestSessionRequest,
         idempotency_key: str,
     ) -> IngestSessionResponse:
-        response = await self._inner.submit_ingest_session(
-            actor,
-            user_id=user_id,
-            session_id=session_id,
-            request=request,
-            idempotency_key=idempotency_key,
-        )
         envelope = build_write_job_envelope(
             actor,
             user_id=user_id,
@@ -292,6 +285,21 @@ class JobRecordingCommandService(MemoryCommandService):
             payload=request.model_dump(mode="json"),
         )
         recorded = await self._job_store.create_accepted_job(envelope)
+        if recorded.status != "accepted":
+            return IngestSessionResponse(
+                job_id=recorded.job_id,
+                status=recorded.status,
+                tenant_id=recorded.tenant_id,
+                user_id=recorded.user_id,
+                session_id=session_id,
+            )
+        await self._inner.submit_ingest_session(
+            actor,
+            user_id=user_id,
+            session_id=session_id,
+            request=request,
+            idempotency_key=idempotency_key,
+        )
         return IngestSessionResponse(
             job_id=recorded.job_id,
             status=recorded.status,
@@ -308,12 +316,6 @@ class JobRecordingCommandService(MemoryCommandService):
         session_id: str,
         idempotency_key: str,
     ) -> DeleteSessionResponse:
-        response = await self._inner.submit_delete_session(
-            actor,
-            user_id=user_id,
-            session_id=session_id,
-            idempotency_key=idempotency_key,
-        )
         envelope = build_write_job_envelope(
             actor,
             user_id=user_id,
@@ -323,6 +325,20 @@ class JobRecordingCommandService(MemoryCommandService):
             payload={},
         )
         recorded = await self._job_store.create_accepted_job(envelope)
+        if recorded.status != "accepted":
+            return DeleteSessionResponse(
+                job_id=recorded.job_id,
+                status=recorded.status,
+                tenant_id=recorded.tenant_id,
+                user_id=recorded.user_id,
+                session_id=session_id,
+            )
+        await self._inner.submit_delete_session(
+            actor,
+            user_id=user_id,
+            session_id=session_id,
+            idempotency_key=idempotency_key,
+        )
         return DeleteSessionResponse(
             job_id=recorded.job_id,
             status=recorded.status,
@@ -338,11 +354,6 @@ class JobRecordingCommandService(MemoryCommandService):
         user_id: str,
         idempotency_key: str,
     ) -> ClearMemoryResponse:
-        response = await self._inner.submit_clear_memory(
-            actor,
-            user_id=user_id,
-            idempotency_key=idempotency_key,
-        )
         envelope = build_write_job_envelope(
             actor,
             user_id=user_id,
@@ -352,6 +363,18 @@ class JobRecordingCommandService(MemoryCommandService):
             payload={},
         )
         recorded = await self._job_store.create_accepted_job(envelope)
+        if recorded.status != "accepted":
+            return ClearMemoryResponse(
+                job_id=recorded.job_id,
+                status=recorded.status,
+                tenant_id=recorded.tenant_id,
+                user_id=recorded.user_id,
+            )
+        await self._inner.submit_clear_memory(
+            actor,
+            user_id=user_id,
+            idempotency_key=idempotency_key,
+        )
         return ClearMemoryResponse(
             job_id=recorded.job_id,
             status=recorded.status,
