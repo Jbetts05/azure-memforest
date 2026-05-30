@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+import asyncio
 
 from src.build.tree_types import MemTree, MemTreeNode, SessionLeaf
 from src.cloud.cosmos_leases import LeaseConflict
@@ -287,6 +288,18 @@ class PurgeStore:
         self.container = PurgeContainer(docs)
 
 
+class SlowPurgeContainer(PurgeContainer):
+    async def query_items(self, *, query, parameters, partition_key):
+        await asyncio.sleep(1)
+        for item in []:
+            yield item
+
+
+class SlowPurgeStore:
+    def __init__(self):
+        self.container = SlowPurgeContainer([])
+
+
 class RecordingRecall:
     def __init__(self):
         self.deleted = None
@@ -296,6 +309,12 @@ class RecordingRecall:
 
     def upsert_documents(self, documents):
         pass
+
+
+class HangingRecall:
+    def delete_by_user(self, *, tenant_id, user_id):
+        import time
+        time.sleep(5)
 
 
 class FakeIngestCore:
@@ -515,6 +534,55 @@ async def test_materialization_handler_clear_memory_purges_user_docs() -> None:
     assert handler._stores.source_session_store.container.docs == {}
     assert handler._stores.manifest_store.container.docs == {}
     assert recall.deleted == (tenant, user)
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_clear_memory_bounds_optional_cleanup() -> None:
+    tenant = "tenant-1"
+    user = "user-1"
+    pk = f"{tenant}:{user}"
+    handler = MemForestMaterializationHandler(
+        stores=MaterializationStores(
+            lease_store=FakeLeaseStore(),
+            source_session_store=PurgeStore([{"id": "session", "tenant_user_key": pk}]),
+            source_turn_store=PurgeStore([]),
+            fact_store=PurgeStore([]),
+            tree_node_store=PurgeStore([]),
+            fact_location_index=PurgeStore([]),
+            browse_embedding_store=PurgeStore([]),
+            manifest_store=PurgeStore([]),
+            recall_index=HangingRecall(),
+        ),
+        ingest_core=FakeIngestCore(_factless_snapshot()),
+        config=MaterializationHandlerConfig(owner_id="worker-1", embedding_model_version="embed-v1", code_version="test-sha", prompt_config_hash="prompt-hash", lease_renewal_seconds=9999, clear_optional_timeout_seconds=0.01),
+    )
+
+    await handler.handle(_envelope(job_type="clear_memory"), {"fencing_token": 1})
+
+    assert handler._stores.source_session_store.container.docs == {}
+    assert handler._stores.fact_store.container.docs == {}
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_clear_memory_times_out_critical_phase() -> None:
+    handler = MemForestMaterializationHandler(
+        stores=MaterializationStores(
+            lease_store=FakeLeaseStore(),
+            source_session_store=SlowPurgeStore(),
+            source_turn_store=PurgeStore([]),
+            fact_store=PurgeStore([]),
+            tree_node_store=PurgeStore([]),
+            fact_location_index=PurgeStore([]),
+            browse_embedding_store=PurgeStore([]),
+            manifest_store=PurgeStore([]),
+            recall_index=RecordingRecall(),
+        ),
+        ingest_core=FakeIngestCore(_factless_snapshot()),
+        config=MaterializationHandlerConfig(owner_id="worker-1", embedding_model_version="embed-v1", code_version="test-sha", prompt_config_hash="prompt-hash", lease_renewal_seconds=9999, clear_phase_timeout_seconds=0.01),
+    )
+
+    with pytest.raises(TransientHandlerError, match="clear_memory phase timed out"):
+        await handler.handle(_envelope(job_type="clear_memory"), {"fencing_token": 1})
 
 
 @pytest.mark.asyncio

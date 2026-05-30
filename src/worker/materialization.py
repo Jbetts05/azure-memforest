@@ -85,6 +85,8 @@ class MaterializationHandlerConfig:
     prompt_config_hash: str = "unknown"
     lease_ttl_seconds: int = 300
     lease_renewal_seconds: float = 60.0
+    clear_phase_timeout_seconds: float = 180.0
+    clear_optional_timeout_seconds: float = 30.0
 
 
 class MemForestMaterializationHandler:
@@ -306,23 +308,23 @@ class MemForestMaterializationHandler:
         stop_renewal = asyncio.Event()
         renewal_task = asyncio.create_task(self._renew_lease_until_stopped(lease, stop_renewal))
         try:
-            await _purge_container_by_tenant_user_key(self._stores.source_session_store, envelope)
-            await _purge_container_by_tenant_user_key(self._stores.source_turn_store, envelope)
-            await _purge_container_by_tenant_user_key(self._stores.fact_store, envelope)
-            await _purge_container_by_tenant_user_key(self._stores.tree_node_store, envelope)
-            await _purge_container_by_tenant_user_key(self._stores.fact_location_index, envelope)
-            await _purge_container_by_tenant_user_key(self._stores.browse_embedding_store, envelope)
-            await _purge_container_by_tenant_user_key(self._stores.summary_cache, envelope)
-            await _purge_factory_container(self._stores.tree_node_store_factory, envelope)
-            await _purge_factory_container(self._stores.fact_location_index_factory, envelope)
-            await _purge_factory_container(self._stores.browse_embedding_store_factory, envelope)
-            await _purge_container_by_tenant_user(self._stores.manifest_store, envelope)
+            await self._run_clear_phase("source_sessions", _purge_container_by_tenant_user_key(self._stores.source_session_store, envelope))
+            await self._run_clear_phase("source_turns", _purge_container_by_tenant_user_key(self._stores.source_turn_store, envelope))
+            await self._run_clear_phase("facts", _purge_container_by_tenant_user_key(self._stores.fact_store, envelope))
+            await self._run_clear_phase("tree_nodes", _purge_container_by_tenant_user_key(self._stores.tree_node_store, envelope))
+            await self._run_clear_phase("fact_locations", _purge_container_by_tenant_user_key(self._stores.fact_location_index, envelope))
+            await self._run_clear_phase("browse_embeddings", _purge_container_by_tenant_user_key(self._stores.browse_embedding_store, envelope))
+            await self._run_clear_phase("summary_cache", _purge_container_by_tenant_user_key(self._stores.summary_cache, envelope))
+            await self._run_clear_phase("tree_node_factory", _purge_factory_container(self._stores.tree_node_store_factory, envelope))
+            await self._run_clear_phase("fact_location_factory", _purge_factory_container(self._stores.fact_location_index_factory, envelope))
+            await self._run_clear_phase("browse_embedding_factory", _purge_factory_container(self._stores.browse_embedding_store_factory, envelope))
+            await self._run_clear_phase("manifests", _purge_container_by_tenant_user(self._stores.manifest_store, envelope))
             if self._stores.deletion_log is not None:
-                await _purge_container_by_tenant_user(self._stores.deletion_log, envelope)
+                await self._run_clear_phase("deletion_log", _purge_container_by_tenant_user(self._stores.deletion_log, envelope))
             if hasattr(self._stores.recall_index, "delete_by_user"):
-                await asyncio.to_thread(self._stores.recall_index.delete_by_user, tenant_id=envelope.tenant_id, user_id=envelope.user_id)
+                await self._run_optional_clear_phase("recall_index", asyncio.to_thread(self._stores.recall_index.delete_by_user, tenant_id=envelope.tenant_id, user_id=envelope.user_id))
             if hasattr(self._stores.snapshot_store, "delete_prefix"):
-                await asyncio.to_thread(self._stores.snapshot_store.delete_prefix, f"{envelope.tenant_id}/{envelope.user_id}/")
+                await self._run_optional_clear_phase("snapshot_store", asyncio.to_thread(self._stores.snapshot_store.delete_prefix, f"{envelope.tenant_id}/{envelope.user_id}/"))
             await self._stores.lease_store.assert_current(lease)
         except LeaseConflict as exc:
             raise TransientHandlerError("tenant/user write lease expired during clear_memory") from exc
@@ -335,6 +337,25 @@ class MemForestMaterializationHandler:
                 await _maybe_await(self._stores.lease_store.release(lease))
             except Exception:
                 log.exception("failed to release materialization lease")
+
+    async def _run_clear_phase(self, name: str, awaitable: Any) -> Any:
+        log.info("clear_memory phase started: %s", name)
+        try:
+            result = await asyncio.wait_for(awaitable, timeout=self._config.clear_phase_timeout_seconds)
+        except asyncio.TimeoutError as exc:
+            raise TransientHandlerError(f"clear_memory phase timed out: {name}") from exc
+        log.info("clear_memory phase completed: %s", name)
+        return result
+
+    async def _run_optional_clear_phase(self, name: str, awaitable: Any) -> Any:
+        log.info("clear_memory optional phase started: %s", name)
+        try:
+            result = await asyncio.wait_for(awaitable, timeout=self._config.clear_optional_timeout_seconds)
+        except Exception:
+            log.warning("clear_memory optional phase failed or timed out: %s", name, exc_info=True)
+            return None
+        log.info("clear_memory optional phase completed: %s", name)
+        return result
 
     async def _write_projection(
         self,
@@ -896,9 +917,17 @@ async def _purge_container_query(container: Any, *, query: str, params: list[dic
     ids = []
     async for item in _aiter(container.query_items(query=query, parameters=params, partition_key=partition_key)):
         ids.append(item["id"])
-    for item_id in ids:
-        await _maybe_await(container.delete_item(item=item_id, partition_key=partition_key))
+    for chunk in _chunks(ids, 50):
+        await asyncio.gather(*[
+            _maybe_await(container.delete_item(item=item_id, partition_key=partition_key))
+            for item_id in chunk
+        ])
     return len(ids)
+
+
+def _chunks(values: list[Any], size: int):
+    for index in range(0, len(values), size):
+        yield values[index:index + size]
 
 
 async def _aiter(value):
