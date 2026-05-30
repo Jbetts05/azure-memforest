@@ -16,8 +16,9 @@ from tests.test_cosmos_jobs import FakeJobsContainer
 
 
 class FakeMessage:
-    def __init__(self, body: bytes):
+    def __init__(self, body: bytes, *, delivery_count: int = 1):
         self.body = body
+        self.delivery_count = delivery_count
         self.completed = False
         self.abandoned = False
         self.dead_lettered = False
@@ -242,6 +243,48 @@ async def test_worker_abandons_transient_handler_error() -> None:
 
 
 @pytest.mark.asyncio
+async def test_worker_fails_and_dead_letters_final_transient_error() -> None:
+    envelope = _envelope()
+    store = await _store_with_job(envelope)
+    worker = ServiceBusWriteWorker(
+        job_store=store,
+        handler=RecordingHandler(TransientHandlerError("try again")),
+        owner_id="worker-1",
+    )
+    message = FakeMessage(envelope.to_json().encode("utf-8"), delivery_count=4)
+
+    outcome = await worker.process_message(message)
+
+    assert outcome.action == "dead_letter"
+    assert outcome.reason == "transient_handler_error"
+    assert message.dead_lettered is True
+    status = await store.get_job_by_ids(tenant_id="tenant-1", user_id="user-1", job_id=envelope.job_id)
+    assert status.status == "failed"
+    assert status.error == "try again"
+
+
+@pytest.mark.asyncio
+async def test_worker_fails_and_dead_letters_final_unhandled_error() -> None:
+    envelope = _envelope()
+    store = await _store_with_job(envelope)
+    worker = ServiceBusWriteWorker(
+        job_store=store,
+        handler=RecordingHandler(RuntimeError("boom")),
+        owner_id="worker-1",
+    )
+    message = FakeMessage(envelope.to_json().encode("utf-8"), delivery_count=4)
+
+    outcome = await worker.process_message(message)
+
+    assert outcome.action == "dead_letter"
+    assert outcome.reason == "unhandled_handler_error"
+    assert message.dead_lettered is True
+    status = await store.get_job_by_ids(tenant_id="tenant-1", user_id="user-1", job_id=envelope.job_id)
+    assert status.status == "failed"
+    assert "RuntimeError: boom" in status.error
+
+
+@pytest.mark.asyncio
 async def test_worker_marks_failed_and_dead_letters_permanent_error() -> None:
     envelope = _envelope()
     store = await _store_with_job(envelope)
@@ -322,6 +365,23 @@ async def test_worker_abandons_when_complete_transition_fails() -> None:
 
 
 @pytest.mark.asyncio
+async def test_worker_dead_letters_final_complete_transition_failure_without_marking_failed() -> None:
+    envelope = _envelope()
+    store = BrokenTransitionStore(FakeJobsContainer(), fail_complete=True)
+    await store.create_accepted_job(envelope)
+    worker = ServiceBusWriteWorker(job_store=store, handler=RecordingHandler(), owner_id="worker-1")
+    message = FakeMessage(envelope.to_json().encode("utf-8"), delivery_count=4)
+
+    outcome = await worker.process_message(message)
+
+    assert outcome.action == "dead_letter"
+    assert outcome.reason == "complete_job_failed"
+    assert message.dead_lettered is True
+    status = await store.get_job_by_ids(tenant_id="tenant-1", user_id="user-1", job_id=envelope.job_id)
+    assert status.status == "running"
+
+
+@pytest.mark.asyncio
 async def test_worker_abandons_when_failed_transition_fails() -> None:
     envelope = _envelope()
     store = BrokenTransitionStore(FakeJobsContainer(), fail_fail=True)
@@ -338,6 +398,25 @@ async def test_worker_abandons_when_failed_transition_fails() -> None:
     assert outcome.action == "abandon"
     assert outcome.reason == "fail_job_failed"
     assert message.abandoned is True
+
+
+@pytest.mark.asyncio
+async def test_worker_dead_letters_final_failed_transition_failure() -> None:
+    envelope = _envelope()
+    store = BrokenTransitionStore(FakeJobsContainer(), fail_fail=True)
+    await store.create_accepted_job(envelope)
+    worker = ServiceBusWriteWorker(
+        job_store=store,
+        handler=RecordingHandler(PermanentHandlerError("bad")),
+        owner_id="worker-1",
+    )
+    message = FakeMessage(envelope.to_json().encode("utf-8"), delivery_count=4)
+
+    outcome = await worker.process_message(message)
+
+    assert outcome.action == "dead_letter"
+    assert outcome.reason == "fail_job_failed"
+    assert message.dead_lettered is True
 
 
 @pytest.mark.asyncio

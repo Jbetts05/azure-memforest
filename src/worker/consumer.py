@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 from dataclasses import dataclass
 from typing import Any, Protocol
 
 from src.cloud.cosmos_jobs import CosmosJobStore, JobClaimError, JobNotFound
 from src.cloud.schema import SCHEMA_VERSION
 from src.service.jobs import WriteJobEnvelope
+
+log = logging.getLogger(__name__)
+FINAL_DELIVERY_COUNT = int(os.getenv("AZURE_MEMFOREST_FINAL_DELIVERY_COUNT", "4"))
 
 
 class PermanentHandlerError(Exception):
@@ -95,13 +100,35 @@ class ServiceBusWriteWorker:
                 )
                 await _dead_letter(message, reason="permanent_handler_error", description=str(exc))
                 return WorkerOutcome(action="dead_letter", reason="permanent_handler_error")
-            except Exception:
+            except Exception as exc:
+                log.exception(
+                    "worker_fail_job_failed",
+                    extra={"job_id": envelope.job_id, "delivery_count": getattr(message, "delivery_count", None)},
+                )
+                if _is_final_delivery(message):
+                    await _dead_letter(message, reason="fail_job_failed", description=f"{type(exc).__name__}: {exc}")
+                    return WorkerOutcome(action="dead_letter", reason="fail_job_failed")
                 await _abandon(message)
                 return WorkerOutcome(action="abandon", reason="fail_job_failed")
-        except TransientHandlerError:
+        except TransientHandlerError as exc:
+            log.warning(
+                "worker_transient_handler_error",
+                exc_info=True,
+                extra={"job_id": envelope.job_id, "delivery_count": getattr(message, "delivery_count", None)},
+            )
+            if _is_final_delivery(message):
+                await self._fail_and_dead_letter_final(message, envelope, claimed, reason="transient_handler_error", error=str(exc))
+                return WorkerOutcome(action="dead_letter", reason="transient_handler_error")
             await _abandon(message)
             return WorkerOutcome(action="abandon", reason="transient_handler_error")
-        except Exception:
+        except Exception as exc:
+            log.exception(
+                "worker_unhandled_handler_error",
+                extra={"job_id": envelope.job_id, "delivery_count": getattr(message, "delivery_count", None)},
+            )
+            if _is_final_delivery(message):
+                await self._fail_and_dead_letter_final(message, envelope, claimed, reason="unhandled_handler_error", error=f"{type(exc).__name__}: {exc}")
+                return WorkerOutcome(action="dead_letter", reason="unhandled_handler_error")
             await _abandon(message)
             return WorkerOutcome(action="abandon", reason="unhandled_handler_error")
 
@@ -115,9 +142,41 @@ class ServiceBusWriteWorker:
             )
             await _complete(message)
             return WorkerOutcome(action="complete", reason="succeeded")
-        except Exception:
+        except Exception as exc:
+            log.exception(
+                "worker_complete_job_failed",
+                extra={"job_id": envelope.job_id, "delivery_count": getattr(message, "delivery_count", None)},
+            )
+            if _is_final_delivery(message):
+                await _dead_letter(message, reason="complete_job_failed", description=f"{type(exc).__name__}: {exc}")
+                return WorkerOutcome(action="dead_letter", reason="complete_job_failed")
             await _abandon(message)
             return WorkerOutcome(action="abandon", reason="complete_job_failed")
+
+    async def _fail_and_dead_letter_final(
+        self,
+        message: Any,
+        envelope: WriteJobEnvelope,
+        claimed: dict[str, Any],
+        *,
+        reason: str,
+        error: str,
+    ) -> None:
+        try:
+            await self._job_store.fail_job(
+                tenant_id=envelope.tenant_id,
+                user_id=envelope.user_id,
+                job_id=envelope.job_id,
+                owner_id=self._owner_id,
+                fencing_token=int(claimed["fencing_token"]),
+                error=error or reason,
+            )
+        except Exception:
+            log.exception(
+                "worker_fail_job_failed_on_final_delivery",
+                extra={"job_id": envelope.job_id, "delivery_count": getattr(message, "delivery_count", None)},
+            )
+        await _dead_letter(message, reason=reason, description=error or reason)
 
 
 def parse_write_job_envelope(body: bytes | str) -> WriteJobEnvelope:
@@ -167,6 +226,13 @@ def _message_body(message: Any) -> bytes:
         except TypeError:
             pass
     return bytes(message)
+
+
+def _is_final_delivery(message: Any) -> bool:
+    try:
+        return int(getattr(message, "delivery_count", 0)) >= FINAL_DELIVERY_COUNT
+    except (TypeError, ValueError):
+        return False
 
 
 async def _complete(message: Any) -> None:
