@@ -91,6 +91,36 @@ The failure should not be interpreted as LongMemEval answer-quality failure. The
    - longer but bounded job timeout
    - strict abort if clear does not complete
 
+## Follow-up rerun after write-reliability fixes
+
+After the worker job-recording race, final-delivery failure handling, and dev Storage network blocker were fixed, the same bounded case was rerun against API image `81e9e956fc1e`.
+
+Additional artifacts:
+
+- `azure_smoke_case_001_token_expired_partial.json`: documents the first rerun harness failure where the bearer token expired during long polling.
+- `azure_smoke_case_001_token_refresh.json`: final refreshed-token rerun result.
+- `queue_counts_after_token_refresh.json`: Service Bus queue counts after the final rerun.
+- `deadletter_peek_after_token_refresh.json`: DLQ provenance after the final rerun.
+- `worker_logs_after_token_refresh.txt`: worker log tail after the final rerun.
+
+Final refreshed-token rerun result:
+
+| Step | Status | Notes |
+| --- | --- | --- |
+| clear memory | `succeeded` | Completed in about 36 seconds. |
+| ingest sessions | `9/9 succeeded` | 76 selected turns were ingested. Per-session times ranged from about 12 to 128 seconds. |
+| query | `succeeded` | Answer: `Business Administration`; `contains_gold=true`. |
+
+The query used the expected supporting fact: `The user graduated with a degree in Business Administration, which has helped them in their new role.`
+
+## Operational findings from rerun
+
+- The deployed pipeline can now execute one bounded LongMemEval-S case end-to-end through clear, ingest, query, and answer generation.
+- The harness must refresh Entra bearer tokens during long-running multi-session evaluations.
+- The dev Storage account had to be restored to public network access because the current Container Apps dev environment has no private endpoint/VNet path to Blob. This is a dev-only unblocker, not a production posture.
+- Worker logs still show Azure OpenAI `429` retries and Service Bus timeout noise. The one-case run completed despite this, but larger runs need throttle-aware pacing and latency/error telemetry.
+- Service Bus had `active=0` after the final run. The `deadletter=8` messages were peeked and recorded; they came from earlier failed runs, including one post-image/pre-storage-fix message with `AuthorizationFailure`.
+
 ## Current conclusion
 
-Do **not** run the full LongMemEval suite yet. The data path is feasible, but the live job/worker reliability must be fixed first.
+The one-case LongMemEval smoke is now **passed**, but this is still only a pipeline sanity check. Do **not** treat it as benchmark quality evidence or run the full suite yet. The next gate should be a small multi-case batch across question types with explicit pacing, token refresh, DLQ provenance, and 429/timeout telemetry.
