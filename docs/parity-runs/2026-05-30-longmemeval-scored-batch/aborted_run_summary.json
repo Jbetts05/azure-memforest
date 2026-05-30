@@ -1,0 +1,61 @@
+{
+  "planned_cases": 10,
+  "case_files_present": 2,
+  "completed_cases": 1,
+  "incomplete_cases": 1,
+  "client_abort_reason": "Stopped after throughput became infeasible in-session: case 2 had 7/10 sessions ingested and late-session ingest latencies of 735s and 711s; one Service Bus message remained active after >13 minutes drain wait.",
+  "completed_proxy_contains_gold": 0,
+  "completed_support_fact_contains_gold": 1,
+  "completed_avg_token_f1": 0.0,
+  "latency_sec_observed": {
+    "clear_count": 2,
+    "clear_avg": 53.05446970462799,
+    "ingest_count": 16,
+    "ingest_avg": 187.49720065295696,
+    "ingest_p50": 82.27433395385742,
+    "ingest_max": 735.303633928299,
+    "query_count": 1,
+    "query_avg": 6.533480167388916
+  },
+  "cases": [
+    {
+      "case_id": "4b24c848",
+      "question_type": "knowledge-update",
+      "status": "succeeded",
+      "gold_answer": "five",
+      "answer": "5 tops.",
+      "scores": {
+        "normalized_exact": false,
+        "contains_gold": false,
+        "gold_contains_answer": false,
+        "token_f1": 0.0,
+        "support_fact_contains_gold": true
+      },
+      "ingests_completed": 9,
+      "selected_session_count": 9
+    },
+    {
+      "case_id": "8e91e7d9",
+      "question_type": "multi-session",
+      "status": "running",
+      "gold_answer": "4",
+      "answer": null,
+      "scores": null,
+      "ingests_completed": 7,
+      "selected_session_count": 10
+    }
+  ],
+  "dlq_delta_during_run": {
+    "before_or_after_partial_stop": 10,
+    "final": 11,
+    "delta": 1,
+    "new_attributable_message": "job_b014f52c9825127c631c3652ae7ffd8f76511a7f0ace70b21240011bdaf8845d"
+  },
+  "manual_quality_judgment": {
+    "case_id": "4b24c848",
+    "proxy_scored_contains_gold": false,
+    "manual_semantic_correct": true,
+    "reason": "Gold answer was \"five\" and Azure-MemForest answered \"5 tops.\" with a supporting fact stating the user already had five tops from H&M."
+  },
+  "causality_caveat": "Latency is observed on the GPT-5.4 + embedding-large stack, but this run does not isolate the cause to any specific model or service component."
+}
