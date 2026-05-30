@@ -32,9 +32,11 @@ class _EmbeddingResponse:
 class _FakeCompletions:
     def __init__(self):
         self.last_model = ""
+        self.last_kwargs = {}
 
     def create(self, **kwargs):
         self.last_model = kwargs["model"]
+        self.last_kwargs = kwargs
         return _ChatResponse()
 
 
@@ -104,6 +106,54 @@ def test_azure_model_client_routes_role_to_deployment_and_parses_json() -> None:
 
     assert result == {"ok": True}
     assert fake_client.chat.completions.last_model == "planner-deployment"
+    assert fake_client.chat.completions.last_kwargs["max_tokens"] == 1024
+    assert "max_completion_tokens" not in fake_client.chat.completions.last_kwargs
+
+
+def test_azure_model_client_uses_max_completion_tokens_for_gpt5_deployments() -> None:
+    fake_client = _FakeClient()
+    config = AzureOpenAIConfig(
+        endpoint="https://example.cognitiveservices.azure.com",
+        api_version="2024-10-21",
+        chat_deployments={
+            "planner": AzureModelDeployment(role="planner", deployment_name="gpt-5.4"),
+        },
+        use_managed_identity=True,
+    )
+    client = AzureOpenAIModelClient(config, openai_client=fake_client)
+
+    result = client.generate_json(
+        system_prompt="system",
+        user_prompt="user",
+        model_name="planner",
+        max_tokens=256,
+    )
+
+    assert result == {"ok": True}
+    assert fake_client.chat.completions.last_model == "gpt-5.4"
+    assert fake_client.chat.completions.last_kwargs["max_completion_tokens"] == 256
+    assert "max_tokens" not in fake_client.chat.completions.last_kwargs
+
+
+def test_azure_model_client_uses_larger_default_token_limit_for_gpt5_deployments() -> None:
+    fake_client = _FakeClient()
+    config = AzureOpenAIConfig(
+        endpoint="https://example.cognitiveservices.azure.com",
+        api_version="2024-10-21",
+        chat_deployments={
+            "planner": AzureModelDeployment(role="planner", deployment_name="gpt-5.4"),
+        },
+        use_managed_identity=True,
+    )
+    client = AzureOpenAIModelClient(config, openai_client=fake_client)
+
+    client.generate_json(
+        system_prompt="system",
+        user_prompt="user",
+        model_name="planner",
+    )
+
+    assert fake_client.chat.completions.last_kwargs["max_completion_tokens"] == 4096
 
 
 def test_azure_model_client_embeddings_validate_dimension() -> None:

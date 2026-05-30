@@ -44,18 +44,24 @@ class AzureOpenAIModelClient:
         trace: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         deployment = self._chat_deployment_for(model_name)
-        response = self.client.chat.completions.create(
-            model=deployment,
-            messages=[
+        kwargs: dict[str, Any] = {
+            "model": deployment,
+            "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            temperature=0.0 if temperature is None else temperature,
-            max_tokens=1024 if max_tokens is None else max_tokens,
-            top_p=1.0 if top_p is None else top_p,
-            response_format={"type": "json_object"},
-            timeout=timeout,
-        )
+            "temperature": 0.0 if temperature is None else temperature,
+            "top_p": 1.0 if top_p is None else top_p,
+            "response_format": {"type": "json_object"},
+            "timeout": timeout,
+        }
+        if _uses_max_completion_tokens(deployment):
+            token_limit = 4096 if max_tokens is None else max_tokens
+            kwargs["max_completion_tokens"] = token_limit
+        else:
+            token_limit = 1024 if max_tokens is None else max_tokens
+            kwargs["max_tokens"] = token_limit
+        response = self.client.chat.completions.create(**kwargs)
         content = response.choices[0].message.content or "{}"
         return parse_json_object(content)
 
@@ -111,3 +117,7 @@ class AzureOpenAIModelClient:
             api_version=self.config.api_version,
             api_key=api_key,
         )
+
+
+def _uses_max_completion_tokens(deployment_name: str) -> bool:
+    return deployment_name.lower().replace("_", "-").startswith("gpt-5")
