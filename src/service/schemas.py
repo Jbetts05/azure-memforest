@@ -94,6 +94,10 @@ class JobStatusResponse(BaseModel):
     submitted_at: float | None = None
     completed_at: float | None = None
     error: str | None = None
+    stage: str | None = None
+    stage_started_at: float | None = None
+    stage_history: list[dict[str, Any]] = Field(default_factory=list)
+    telemetry: dict[str, Any] = Field(default_factory=dict)
 
 
 class JobEventResponse(BaseModel):

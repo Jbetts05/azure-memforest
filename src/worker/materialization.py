@@ -19,6 +19,7 @@ from src.forest.user_forest import ForestMaterializationSnapshot
 from src.service.jobs import WriteJobEnvelope
 from src.service.schemas import IngestSessionRequest
 from src.worker.consumer import PermanentHandlerError, TransientHandlerError
+from src.observability.model_telemetry import collect_model_telemetry
 
 log = logging.getLogger(__name__)
 
@@ -55,6 +56,7 @@ class MaterializationStores:
     summary_cache: Any | None = None
     snapshot_store: Any | None = None
     deletion_log: Any | None = None
+    job_store: Any | None = None
     tree_node_store_factory: Any | None = None
     fact_location_index_factory: Any | None = None
     browse_embedding_store_factory: Any | None = None
@@ -112,12 +114,14 @@ class MemForestMaterializationHandler:
             return
         if envelope.job_type != "ingest_session":
             raise PermanentHandlerError(f"unsupported job_type {envelope.job_type!r}")
-        await self._handle_ingest(envelope)
+        await self._handle_ingest(envelope, claimed_job)
 
-    async def _handle_ingest(self, envelope: WriteJobEnvelope) -> None:
+    async def _handle_ingest(self, envelope: WriteJobEnvelope, claimed_job: dict[str, Any]) -> None:
         request = _parse_ingest_request(envelope)
         if await self._latest_committed_matches_job(envelope):
             return
+        telemetry: dict[str, Any] | None = None
+        fencing_token = int(claimed_job["fencing_token"])
 
         try:
             lease = await self._stores.lease_store.acquire(
@@ -130,6 +134,7 @@ class MemForestMaterializationHandler:
         stop_renewal = asyncio.Event()
         renewal_task = asyncio.create_task(self._renew_lease_until_stopped(lease, stop_renewal))
         try:
+            await self._update_job_stage(envelope, fencing_token=fencing_token, stage="hydrate", detail="Loading latest committed forest.", telemetry=telemetry)
             if await self._latest_committed_matches_job(envelope):
                 return
             latest = await _maybe_await(self._stores.manifest_store.latest_committed())
@@ -149,14 +154,18 @@ class MemForestMaterializationHandler:
             )
             await _maybe_await(self._stores.source_turn_store.upsert_turns(envelope.session_id, turns))
 
-            snapshot = await asyncio.to_thread(
-                self._ingest_core.ingest_session,
-                session_id=envelope.session_id,
-                turns=_extractable_turns(turns),
-                metadata=request.metadata,
-            )
+            await self._update_job_stage(envelope, fencing_token=fencing_token, stage="extract_build", detail="Extracting facts, deduping, and rebuilding MemTrees.", telemetry=telemetry)
+            with collect_model_telemetry() as telemetry:
+                snapshot = await asyncio.to_thread(
+                    self._ingest_core.ingest_session,
+                    session_id=envelope.session_id,
+                    turns=_extractable_turns(turns),
+                    metadata=request.metadata,
+                )
             if _is_factless_snapshot(snapshot):
+                await self._update_job_stage(envelope, fencing_token=fencing_token, stage="factless_noop", detail="No extractable facts found.", telemetry=telemetry)
                 return
+            await self._update_job_stage(envelope, fencing_token=fencing_token, stage="manifest_pending", detail="Creating pending forest manifest.", telemetry=telemetry)
             manifest = await _maybe_await(
                 self._stores.manifest_store.create_pending(
                     forest_version=forest_version,
@@ -173,6 +182,7 @@ class MemForestMaterializationHandler:
                     },
                 )
             )
+            await self._update_job_stage(envelope, fencing_token=fencing_token, stage="project", detail="Projecting forest snapshot to durable stores.", telemetry=telemetry)
             projection = project_forest_snapshot(
                 snapshot,
                 tenant_id=envelope.tenant_id,
@@ -181,6 +191,7 @@ class MemForestMaterializationHandler:
                 generation=generation,
                 embedding_model_version=self._config.embedding_model_version,
             )
+            await self._update_job_stage(envelope, fencing_token=fencing_token, stage="write_projection", detail="Writing facts, trees, embeddings, recall documents, and snapshot.", telemetry=telemetry)
             projection_metadata = await self._write_projection(
                 envelope=envelope,
                 manifest_id=manifest.manifest_id,
@@ -193,6 +204,7 @@ class MemForestMaterializationHandler:
                 await self._stores.lease_store.assert_current(lease)
             except LeaseConflict as exc:
                 raise TransientHandlerError("tenant/user write lease expired before manifest commit") from exc
+            await self._update_job_stage(envelope, fencing_token=fencing_token, stage="commit", detail="Committing latest forest manifest.", telemetry=telemetry)
             await _maybe_await(
                 self._stores.manifest_store.commit_manifest(
                     manifest.manifest_id,
@@ -208,6 +220,31 @@ class MemForestMaterializationHandler:
                 await _maybe_await(self._stores.lease_store.release(lease))
             except Exception:
                 log.exception("failed to release materialization lease")
+
+    async def _update_job_stage(
+        self,
+        envelope: WriteJobEnvelope,
+        *,
+        fencing_token: int,
+        stage: str,
+        detail: str = "",
+        telemetry: dict[str, Any] | None = None,
+    ) -> None:
+        if self._stores.job_store is None:
+            return
+        try:
+            await self._stores.job_store.update_stage(
+                tenant_id=envelope.tenant_id,
+                user_id=envelope.user_id,
+                job_id=envelope.job_id,
+                owner_id=self._config.owner_id,
+                fencing_token=fencing_token,
+                stage=stage,
+                detail=detail,
+                telemetry=telemetry,
+            )
+        except Exception:
+            log.exception("failed to update materialization job stage", extra={"job_id": envelope.job_id, "stage": stage})
 
     async def _handle_delete(self, envelope: WriteJobEnvelope) -> None:
         if not envelope.session_id:

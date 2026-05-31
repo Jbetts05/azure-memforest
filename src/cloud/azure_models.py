@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import os
+import time
 from typing import Any
 
 from openai import AzureOpenAI
 
 from src.api.json_parse import parse_json_object
 from src.cloud.config import AzureOpenAIConfig
+from src.observability.model_telemetry import record_model_call
 
 
 class AzureOpenAIModelClient:
@@ -43,6 +45,7 @@ class AzureOpenAIModelClient:
         step_label: str = "llm",
         trace: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        role = model_name or "default"
         deployment = self._chat_deployment_for(model_name)
         kwargs: dict[str, Any] = {
             "model": deployment,
@@ -61,7 +64,14 @@ class AzureOpenAIModelClient:
         else:
             token_limit = 1024 if max_tokens is None else max_tokens
             kwargs["max_tokens"] = token_limit
+        start = time.perf_counter()
         response = self.client.chat.completions.create(**kwargs)
+        record_model_call(
+            role=role,
+            deployment=deployment,
+            operation="chat",
+            elapsed_seconds=time.perf_counter() - start,
+        )
         content = response.choices[0].message.content or "{}"
         return parse_json_object(content)
 
@@ -73,9 +83,17 @@ class AzureOpenAIModelClient:
         embeddings: list[list[float]] = []
         for index in range(0, len(texts), batch_size):
             batch = texts[index : index + batch_size]
+            start = time.perf_counter()
             response = self.client.embeddings.create(
                 model=self.config.embedding_deployment,
                 input=batch,
+            )
+            record_model_call(
+                role="embedding",
+                deployment=self.config.embedding_deployment,
+                operation="embedding",
+                elapsed_seconds=time.perf_counter() - start,
+                item_count=len(batch),
             )
             embeddings.extend(list(item.embedding) for item in response.data)
         if self.config.embedding_dimension is not None:

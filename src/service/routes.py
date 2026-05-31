@@ -178,6 +178,25 @@ async def get_job_events(
     ]
     if status_value in {"running", "succeeded", "failed", "cancelled"}:
         events.append(JobEventResponse(event_type="running", timestamp_unix=None, status="running", detail="Job has been claimed by a worker."))
+    for stage_event in _field(job, "stage_history") or []:
+        events.append(
+            JobEventResponse(
+                event_type=f"stage:{stage_event.get('stage', '')}",
+                timestamp_unix=stage_event.get("started_at"),
+                status="completed",
+                detail=stage_event.get("detail") or None,
+            )
+        )
+    current_stage = _field(job, "stage")
+    if current_stage and status_value == "running":
+        events.append(
+            JobEventResponse(
+                event_type=f"stage:{current_stage}",
+                timestamp_unix=_field(job, "stage_started_at"),
+                status="running",
+                detail="Current job stage.",
+            )
+        )
     if status_value in {"succeeded", "failed", "cancelled"}:
         events.append(JobEventResponse(event_type=status_value, timestamp_unix=_field(job, "completed_at"), status=status_value, detail=_field(job, "error")))
     return events

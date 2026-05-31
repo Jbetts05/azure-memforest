@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+
 import pytest
 
 from src.api.json_parse import parse_json_object
 from src.cloud.azure_models import AzureOpenAIModelClient
 from src.cloud.config import AzureModelDeployment, AzureOpenAIConfig, load_cloud_config
+from src.observability.model_telemetry import collect_model_telemetry, record_model_call
 
 
 class _Message:
@@ -170,6 +173,47 @@ def test_azure_model_client_embeddings_validate_dimension() -> None:
 
     assert embeddings == [[1.0, 2.0], [3.0, 4.0]]
     assert fake_client.embeddings.last_model == "embedding-deployment"
+
+
+def test_azure_model_client_records_model_call_telemetry() -> None:
+    fake_client = _FakeClient(embeddings=[[1.0, 2.0]])
+    config = AzureOpenAIConfig(
+        endpoint="https://example.openai.azure.com",
+        api_version="2024-10-21",
+        chat_deployments={
+            "extraction": AzureModelDeployment(role="extraction", deployment_name="fast-memory"),
+        },
+        embedding_deployment="embedding-deployment",
+        embedding_dimension=2,
+    )
+    client = AzureOpenAIModelClient(config, openai_client=fake_client)
+
+    with collect_model_telemetry() as telemetry:
+        client.generate_json(system_prompt="system", user_prompt="user", model_name="extraction")
+        client.embed_texts(["a"])
+
+    assert telemetry["total_calls"] == 2
+    assert telemetry["calls"]["chat:extraction:fast-memory"]["count"] == 1
+    assert telemetry["calls"]["embedding:embedding:embedding-deployment"]["item_count"] == 1
+
+
+def test_model_telemetry_records_calls_from_child_threads() -> None:
+    with collect_model_telemetry() as telemetry:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            list(
+                pool.map(
+                    lambda _: record_model_call(
+                        role="dedupe",
+                        deployment="fast-memory",
+                        operation="chat",
+                        elapsed_seconds=0.01,
+                    ),
+                    range(5),
+                )
+            )
+
+    assert telemetry["total_calls"] == 5
+    assert telemetry["calls"]["chat:dedupe:fast-memory"]["count"] == 5
 
 
 def test_azure_model_client_rejects_embedding_dimension_mismatch() -> None:

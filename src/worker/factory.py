@@ -136,6 +136,7 @@ def cosmos_materialization_store_factory(
             summary_cache=summary_cache,
             snapshot_store=snapshot_store,
             deletion_log=CosmosDeletionLog(database_client.get_container_client("deletions"), tenant_id=tenant_id),
+            job_store=CosmosJobStore(database_client.get_container_client("jobs")),
             browse_embedding_store_factory=lambda forest_version: CosmosBrowseEmbeddingStore(
                 database_client.get_container_client("browse_embeddings"),
                 tenant_id=tenant_id,

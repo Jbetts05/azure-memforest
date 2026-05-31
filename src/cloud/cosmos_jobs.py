@@ -112,6 +112,44 @@ class CosmosJobStore:
         await _conditional_replace(self.container, item, partition_key=tenant_id, etag=item.get("_etag"))
         return _response_from_document(item)
 
+    async def update_stage(
+        self,
+        *,
+        tenant_id: str,
+        user_id: str,
+        job_id: str,
+        owner_id: str,
+        fencing_token: int,
+        stage: str,
+        detail: str = "",
+        telemetry: dict[str, Any] | None = None,
+    ) -> JobStatusResponse:
+        item = await self._read_job_item(tenant_id=tenant_id, user_id=user_id, job_id=job_id)
+        if item.get("status") != "running":
+            raise JobClaimError(f"Cannot update job stage in state {item.get('status')!r}.")
+        _assert_lease(item, owner_id=owner_id, fencing_token=fencing_token)
+        now = time.time()
+        previous_stage = item.get("stage")
+        if previous_stage and previous_stage != stage:
+            history = list(item.get("stage_history") or [])
+            history.append(
+                {
+                    "stage": previous_stage,
+                    "started_at": item.get("stage_started_at"),
+                    "completed_at": now,
+                    "detail": item.get("stage_detail") or "",
+                }
+            )
+            item["stage_history"] = history[-50:]
+        item["stage"] = stage
+        item["stage_started_at"] = item.get("stage_started_at") if previous_stage == stage else now
+        item["stage_detail"] = detail
+        if telemetry:
+            item["telemetry"] = telemetry
+        item["updated_at"] = now
+        await _conditional_replace(self.container, item, partition_key=tenant_id, etag=item.get("_etag"))
+        return _response_from_document(item)
+
     async def _read_job_item(self, *, tenant_id: str, user_id: str, job_id: str) -> dict[str, Any]:
         try:
             item = await _maybe_await(self.container.read_item(item=job_id, partition_key=tenant_id))
@@ -191,6 +229,10 @@ def _response_from_document(document: dict[str, Any]) -> JobStatusResponse:
         submitted_at=document.get("submitted_at"),
         completed_at=document.get("completed_at"),
         error=document.get("error"),
+        stage=document.get("stage"),
+        stage_started_at=document.get("stage_started_at"),
+        stage_history=list(document.get("stage_history") or []),
+        telemetry=dict(document.get("telemetry") or {}),
     )
 
 

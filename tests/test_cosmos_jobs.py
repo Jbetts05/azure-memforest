@@ -204,6 +204,46 @@ async def test_cosmos_job_store_claim_complete_and_fail_are_fenced() -> None:
 
 
 @pytest.mark.asyncio
+async def test_cosmos_job_store_updates_stage_with_history_and_telemetry() -> None:
+    store = CosmosJobStore(container=FakeJobsContainer())
+    envelope = _envelope()
+    await store.create_accepted_job(envelope)
+    claimed = await store.claim_job(
+        tenant_id="tenant-1",
+        user_id="user-1",
+        job_id=envelope.job_id,
+        owner_id="worker-1",
+        ttl_seconds=60,
+    )
+
+    first = await store.update_stage(
+        tenant_id="tenant-1",
+        user_id="user-1",
+        job_id=envelope.job_id,
+        owner_id="worker-1",
+        fencing_token=claimed["fencing_token"],
+        stage="extract_build",
+        detail="Extracting facts.",
+        telemetry={"total_calls": 2},
+    )
+    second = await store.update_stage(
+        tenant_id="tenant-1",
+        user_id="user-1",
+        job_id=envelope.job_id,
+        owner_id="worker-1",
+        fencing_token=claimed["fencing_token"],
+        stage="write_projection",
+        detail="Writing projection.",
+        telemetry={"total_calls": 3},
+    )
+
+    assert first.stage == "extract_build"
+    assert second.stage == "write_projection"
+    assert second.stage_history[0]["stage"] == "extract_build"
+    assert second.telemetry["total_calls"] == 3
+
+
+@pytest.mark.asyncio
 async def test_cosmos_job_store_claim_uses_etag_guard() -> None:
     container = FakeJobsContainer()
     store = CosmosJobStore(container=container)
