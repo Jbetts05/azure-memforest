@@ -1,0 +1,104 @@
+{
+  "schema_version": 1,
+  "run": {
+    "id": "2026-05-31-gpt54-mini-memory",
+    "date_utc": "2026-05-31T11:00:00Z",
+    "title": "GPT-5.4-mini memory-model validation",
+    "goal": "Validate GPT-5.4-mini as the modern fast memory-building model while keeping GPT-5.4 for answer paths.",
+    "status": "completed",
+    "owner": "local"
+  },
+  "code": {
+    "git_sha": "ba0e9ce3ecf2",
+    "image": "memforestexampleacr.azurecr.io/azure-memforest-api:ba0e9ce3ecf2",
+    "api_revision": "memforest-example-api--g54min",
+    "worker_revision": "memforest-example-worker--g54min",
+    "dirty": false
+  },
+  "model_stack": {
+    "endpoint": "https://memforest-example-foundry.cognitiveservices.azure.com/",
+    "chat_default": "gpt-5.4-mini-memory",
+    "extraction": "gpt-5.4-mini-memory",
+    "dedupe": "gpt-5.4-mini-memory",
+    "summarization": "gpt-5.4",
+    "planner": "gpt-5.4-mini-memory",
+    "browse": "gpt-5.4-mini-memory",
+    "answer": "gpt-5.4",
+    "embedding": "text-embedding-3-large",
+    "embedding_dimension": 3072,
+    "embedding_model_version": "text-embedding-3-large-1",
+    "search_index": "memforest-recall-large"
+  },
+  "dataset": {
+    "name": "LongMemEval-S targeted sessions",
+    "source_url": "https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/main/longmemeval_s_cleaned.json",
+    "source_sha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+    "case_ids": [
+      "8e91e7d9",
+      "4b24c848"
+    ],
+    "selection_strategy": "Rerun the same two targeted sessions used in the pipeline-improvement validation.",
+    "case_count": 2,
+    "turn_count": 24
+  },
+  "scoring": {
+    "method": "targeted operational validation plus one readback query",
+    "official_benchmark_score": false,
+    "judge_model": "",
+    "notes": "This is not an official LongMemEval score. It validates ingest success, latency, telemetry, and one fact-backed readback answer."
+  },
+  "metrics": {
+    "attempted_cases": 2,
+    "completed_cases": 2,
+    "successful_cases": 2,
+    "quality": {
+      "readback_queries": 1,
+      "readback_correct": 1,
+      "answer": "5 tops",
+      "supporting_fact": "The user has already bought five tops from H&M."
+    },
+    "latency_sec": {
+      "target_da71721f_ingest": 52.96,
+      "target_answer_2cec623b_2_ingest": 59.1,
+      "previous_gpt4o_mini_target_da71721f_ingest": 42.3,
+      "previous_gpt4o_mini_target_answer_2cec623b_2_ingest": 54.0
+    },
+    "model_calls": {
+      "target_da71721f_chat_calls": 45,
+      "target_da71721f_embedding_items": 134,
+      "target_answer_2cec623b_2_chat_calls": 52,
+      "target_answer_2cec623b_2_embedding_items": 142
+    },
+    "queue": {
+      "active": 0,
+      "deadletter": 12,
+      "scheduled": 0,
+      "new_deadletters_observed": 0
+    },
+    "cost": {}
+  },
+  "artifacts": {
+    "report": "report.md",
+    "inputs": [],
+    "outputs": [
+      "target_slow_session_ingest_gpt54mini.json",
+      "target_second_slow_session_ingest_gpt54mini.json",
+      "target_second_query.json"
+    ],
+    "logs": [
+      "deadletter_peek_final.json"
+    ],
+    "environment": [
+      "worker_model_env.json",
+      "model_deployments.json",
+      "queue_counts_final.json"
+    ]
+  },
+  "caveats": [
+    "Only two targeted sessions were run; this is not a full benchmark.",
+    "GPT-5.4-mini made more calls and produced more embedded items than GPT-4o-mini-memory on the same sessions.",
+    "More extracted memory may be richer or noisier; quality impact requires scored batch evaluation.",
+    "Summarization-specific routing remains partly unverified because internal worker paths often use the default model name."
+  ],
+  "next_gate": "Run a small 3-case LongMemEval batch with official or LLM-judge scoring and compare GPT-5.4-mini-memory against GPT-4o-mini-memory."
+}
