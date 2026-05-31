@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "run": {
+    "id": "2026-05-31-longmemeval-suite-preflight",
+    "date_utc": "2026-05-31T15:57:26Z",
+    "title": "LongMemEval full-suite preflight decisions",
+    "goal": "Lock scoring, thresholds, isolation, capacity, concurrency, and failure taxonomy before phased LongMemEval-S experimentation.",
+    "status": "completed",
+    "owner": "local"
+  },
+  "code": {
+    "git_sha": "ba0e9ce3ecf2",
+    "image": "memforestexampleacr.azurecr.io/azure-memforest-api:ba0e9ce3ecf2",
+    "api_revision": "memforest-example-api--g54min",
+    "worker_revision": "memforest-example-worker--g54min",
+    "dirty": false
+  },
+  "model_stack": {
+    "endpoint": "https://memforest-example-foundry.cognitiveservices.azure.com/",
+    "chat_default": "gpt-5.4-mini-memory",
+    "extraction": "gpt-5.4-mini-memory",
+    "dedupe": "gpt-5.4-mini-memory",
+    "summarization": "gpt-5.4",
+    "planner": "gpt-5.4-mini-memory",
+    "browse": "gpt-5.4-mini-memory",
+    "answer": "gpt-5.4",
+    "judge": "gpt-5.4",
+    "embedding": "text-embedding-3-large",
+    "embedding_dimension": 3072,
+    "embedding_model_version": "text-embedding-3-large-1",
+    "search_index": "memforest-recall-large"
+  },
+  "dataset": {
+    "name": "LongMemEval-S cleaned",
+    "source_url": "https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/main/longmemeval_s_cleaned.json",
+    "source_sha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+    "case_ids": [],
+    "selection_strategy": "Phase-gated deterministic selection: 3 known-hard calibration cases, 10-case stratified pilot, 50-case subset, then full 500-case LongMemEval-S.",
+    "case_count": 500,
+    "turn_count": null
+  },
+  "scoring": {
+    "method": "LongMemEval evaluate_qa rubric adapted to Azure GPT-5-family judges; primary judge gpt-5.4, calibration cross-check with gpt-5.4-mini-memory.",
+    "official_benchmark_score": false,
+    "judge_model": "gpt-5.4",
+    "notes": "Not comparable to published LongMemEval scores because GPT-4o is disallowed and answer/judge may both use GPT-5.4. Treat as a GPT-5-family judge/self-consistency score. Judge prompt source hash: ECCE9C4C79DC89D99534AC17B383A5CBB5B9F0C69EE98ADAF0684742E3D95251."
+  },
+  "metrics": {
+    "attempted_cases": 0,
+    "completed_cases": 0,
+    "successful_cases": 0,
+    "quality": {},
+    "latency_sec": {},
+    "model_calls": {},
+    "queue": {
+      "baseline_active": 0,
+      "baseline_deadletter": 12,
+      "baseline_scheduled": 0
+    },
+    "cost": {
+      "cap": null,
+      "note": "User approved no cost cap; still estimate cost and token usage for planning."
+    }
+  },
+  "artifacts": {
+    "report": "report.md",
+    "inputs": [
+      "phase0_decisions.json",
+      "longmemeval_evaluate_qa.py",
+      "judge_prompt_source_hash.json"
+    ],
+    "outputs": [],
+    "logs": [
+      "queue_baseline.json",
+      "dlq_baseline_messages.json"
+    ],
+    "environment": [
+      "api_model_env.json",
+      "worker_model_env.json",
+      "model_deployments.json",
+      "eastus_cognitive_usage.json",
+      "search_index_schema.json"
+    ]
+  },
+  "caveats": [
+    "GPT-4o and GPT-4o-mini are disallowed by user decision.",
+    "Preflight does not run benchmark cases; it only locks decisions and captures baseline state.",
+    "Dev environment uses public-network allowances for calibration/pilot; production should use private networking.",
+    "Summarization-specific routing remains partly unverified because some worker paths still resolve through default deployment.",
+    "Judge is GPT-5-family, not the upstream GPT-4o judge; scores are not directly comparable to published LongMemEval numbers.",
+    "Worker uses the same shared container image as the API with a worker command override; this is expected in current deployment."
+  ],
+  "next_gate": "Implement Phase 1: 3-case calibration with GPT-5.4 judge scoring and fresh synthetic user IDs per case."
+}

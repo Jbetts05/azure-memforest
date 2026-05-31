@@ -1,0 +1,55 @@
+{
+  "decisions": {
+    "no_gpt4o": "Do not use GPT-4o or GPT-4o-mini for any role.",
+    "judge": {
+      "deployment": "gpt-5.4",
+      "temperature": 0,
+      "rubric": "LongMemEval evaluate_qa task-specific yes/no prompts",
+      "comparability": "GPT-5-family judge/self-consistency score; not published LongMemEval comparable.",
+      "calibration_cross_check": "Also score 3-case calibration with gpt-5.4-mini-memory and flag judge disagreements."
+    },
+    "memory_model": "gpt-5.4-mini-memory",
+    "answer_model": "gpt-5.4",
+    "embedding_model": "text-embedding-3-large",
+    "dataset_scope": "LongMemEval-S cleaned first",
+    "case_isolation": "Fresh synthetic user ID per case where possible; terminal cleanup after scoring.",
+    "concurrency": "Serial through 10-case pilot; controlled parallelism only after 50-case tier proves separate-user isolation.",
+    "timeouts": {
+      "case_minutes": 20,
+      "session_ingest_minutes": 5
+    },
+    "stop_rules": [
+      "any new DLQ",
+      ">5% case failures",
+      "repeated 429s",
+      "timeout over budget",
+      "residue contamination"
+    ],
+    "cost": "No cap; still estimate and record cost/tokens.",
+    "environment": "Dev environment acceptable for calibration/pilot with public-network caveat.",
+    "artifacts": [
+      "manifest",
+      "raw answers",
+      "judge outputs",
+      "telemetry",
+      "queue/DLQ snapshots",
+      "report"
+    ],
+    "dlq_baseline": {
+      "count": 12,
+      "comparison": "compare message IDs against dlq_baseline_messages.json; halt on any new message ID"
+    },
+    "search_index": {
+      "name": "memforest-recall-large",
+      "embedding_dimensions_verified": 3072,
+      "artifact": "search_index_schema.json"
+    }
+  },
+  "gate_sequence": [
+    "preflight",
+    "3-case calibration",
+    "10-case stratified pilot",
+    "50-case subset",
+    "full 500-case LongMemEval-S"
+  ]
+}
