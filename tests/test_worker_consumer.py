@@ -8,6 +8,7 @@ from src.service.jobs import build_write_job_envelope
 from src.worker.consumer import (
     PermanentHandlerError,
     ServiceBusWriteWorker,
+    TerminalHandlerError,
     TransientHandlerError,
     parse_write_job_envelope,
 )
@@ -301,6 +302,28 @@ async def test_worker_marks_failed_and_dead_letters_permanent_error() -> None:
     assert message.dead_lettered is True
     status = await store.get_job_by_ids(tenant_id="tenant-1", user_id="user-1", job_id=envelope.job_id)
     assert status.status == "failed"
+
+
+@pytest.mark.asyncio
+async def test_worker_marks_terminal_error_failed_without_dead_lettering() -> None:
+    envelope = _envelope()
+    store = await _store_with_job(envelope)
+    worker = ServiceBusWriteWorker(
+        job_store=store,
+        handler=RecordingHandler(TerminalHandlerError("filtered", reason="content_filter")),
+        owner_id="worker-1",
+    )
+    message = FakeMessage(envelope.to_json().encode("utf-8"))
+
+    outcome = await worker.process_message(message)
+
+    assert outcome.action == "complete"
+    assert outcome.reason == "content_filter"
+    assert message.completed is True
+    assert message.dead_lettered is False
+    status = await store.get_job_by_ids(tenant_id="tenant-1", user_id="user-1", job_id=envelope.job_id)
+    assert status.status == "failed"
+    assert status.error == "content_filter: filtered"
 
 
 @pytest.mark.asyncio

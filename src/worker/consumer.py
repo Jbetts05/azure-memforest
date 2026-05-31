@@ -24,6 +24,12 @@ class TransientHandlerError(Exception):
     pass
 
 
+class TerminalHandlerError(Exception):
+    def __init__(self, message: str, *, reason: str = "terminal_handler_error") -> None:
+        super().__init__(message)
+        self.reason = reason
+
+
 class WriteJobHandler(Protocol):
     async def handle(self, envelope: WriteJobEnvelope, claimed_job: dict[str, Any]) -> None:
         ...
@@ -88,6 +94,25 @@ class ServiceBusWriteWorker:
 
         try:
             await self._handler.handle(envelope, claimed)
+        except TerminalHandlerError as exc:
+            log.warning(
+                "worker_terminal_handler_error",
+                extra={"job_id": envelope.job_id, "reason": exc.reason, "delivery_count": getattr(message, "delivery_count", None)},
+            )
+            try:
+                await self._job_store.fail_job(
+                    tenant_id=envelope.tenant_id,
+                    user_id=envelope.user_id,
+                    job_id=envelope.job_id,
+                    owner_id=self._owner_id,
+                    fencing_token=int(claimed["fencing_token"]),
+                    error=f"{exc.reason}: {exc}",
+                )
+                await _complete(message)
+                return WorkerOutcome(action="complete", reason=exc.reason)
+            except Exception:
+                await _abandon(message)
+                return WorkerOutcome(action="abandon", reason="fail_terminal_job_failed")
         except PermanentHandlerError as exc:
             try:
                 await self._job_store.fail_job(

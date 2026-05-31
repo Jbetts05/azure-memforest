@@ -18,7 +18,7 @@ from src.forest.memforest import _content_key
 from src.forest.user_forest import ForestMaterializationSnapshot
 from src.service.jobs import WriteJobEnvelope
 from src.service.schemas import IngestSessionRequest
-from src.worker.consumer import PermanentHandlerError, TransientHandlerError
+from src.worker.consumer import PermanentHandlerError, TerminalHandlerError, TransientHandlerError
 from src.observability.model_telemetry import collect_model_telemetry
 
 log = logging.getLogger(__name__)
@@ -155,13 +155,18 @@ class MemForestMaterializationHandler:
             await _maybe_await(self._stores.source_turn_store.upsert_turns(envelope.session_id, turns))
 
             await self._update_job_stage(envelope, fencing_token=fencing_token, stage="extract_build", detail="Extracting facts, deduping, and rebuilding MemTrees.", telemetry=telemetry)
-            with collect_model_telemetry() as telemetry:
-                snapshot = await asyncio.to_thread(
-                    self._ingest_core.ingest_session,
-                    session_id=envelope.session_id,
-                    turns=_extractable_turns(turns),
-                    metadata=request.metadata,
-                )
+            try:
+                with collect_model_telemetry() as telemetry:
+                    snapshot = await asyncio.to_thread(
+                        self._ingest_core.ingest_session,
+                        session_id=envelope.session_id,
+                        turns=_extractable_turns(turns),
+                        metadata=request.metadata,
+                    )
+            except Exception as exc:
+                if _is_content_filter_error(exc):
+                    raise TerminalHandlerError(str(exc), reason="content_filter") from exc
+                raise
             if _is_factless_snapshot(snapshot):
                 await self._update_job_stage(envelope, fencing_token=fencing_token, stage="factless_noop", detail="No extractable facts found.", telemetry=telemetry)
                 return
@@ -916,6 +921,11 @@ def _extractable_turns(turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
     this same filter to avoid extracting assistant copy as durable user memory.
     """
     return [turn for turn in turns if not ((turn.get("metadata") or {}).get("skip_extraction"))]
+
+
+def _is_content_filter_error(exc: Exception) -> bool:
+    text = str(exc)
+    return "content_filter" in text or "ResponsibleAIPolicyViolation" in text
 
 
 async def _purge_factory_container(factory: Any, envelope: WriteJobEnvelope) -> int:

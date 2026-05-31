@@ -88,6 +88,11 @@ def norm(text: object) -> str:
     return re.sub(r"\s+", " ", value).strip()
 
 
+def is_content_filter_failure(status: dict) -> bool:
+    text = str(status.get("error") or "")
+    return "content_filter" in text or "ResponsibleAIPolicyViolation" in text
+
+
 def get_anscheck_prompt(task: str, question: str, answer: str, response: str, abstention: bool = False) -> str:
     if not abstention:
         if task in ["single-session-user", "single-session-assistant", "multi-session"]:
@@ -167,6 +172,8 @@ def run_case(case: dict, index: int, previous_probe: str | None) -> dict:
         "selected_turn_count": case["selected_turn_count"],
         "events": [],
         "status": "running",
+        "filtered_skips": [],
+        "modified_input": False,
     }
     out = RESULTS / f"{index:02d}_{case_id}.json"
     save(out, result)
@@ -210,6 +217,24 @@ def run_case(case: dict, index: int, previous_probe: str | None) -> dict:
         save(out, result)
         print(json.dumps({"case": case_id, "ingest": session_index, "status": ingest_status["status"], "elapsed": round(ingest_elapsed, 1)}), flush=True)
         if ingest_status["status"] != "succeeded":
+            if is_content_filter_failure(ingest_status):
+                skip = {
+                    "source_session_id": session["source_session_id"],
+                    "answer_bearing": bool((session.get("metadata") or {}).get("is_answer_session")),
+                    "turn_count": len(session.get("turns") or []),
+                    "reason": "content_filter",
+                    "error": ingest_status.get("error"),
+                }
+                if skip["answer_bearing"]:
+                    result["status"] = "blocked_by_content_filter"
+                    result["filtered_block"] = skip
+                    save(out, result)
+                    return result
+                result["filtered_skips"].append(skip)
+                result["modified_input"] = True
+                save(out, result)
+                print(json.dumps({"case": case_id, "ingest": session_index, "status": "filtered_skipped", "source_session_id": session["source_session_id"]}), flush=True)
+                continue
             result["status"] = "failed_ingest"
             save(out, result)
             return result
@@ -245,6 +270,10 @@ def aggregate(results: list[dict], before: dict, after: dict) -> dict:
         "status": "succeeded" if len(completed) == len(results) and new_dlq == 0 and all(r["judges"]["primary"]["label"] for r in completed) else "gate_failed",
         "attempted_cases": len(results),
         "completed_cases": len(completed),
+        "strict_unmodified_completed_cases": sum(1 for r in completed if not r.get("modified_input")),
+        "best_effort_completed_cases": len(completed),
+        "filtered_skip_count": sum(len(r.get("filtered_skips") or []) for r in results),
+        "blocked_by_content_filter": sum(1 for r in results if r.get("status") == "blocked_by_content_filter"),
         "primary_judge_correct": sum(1 for r in completed if r["judges"]["primary"]["label"]),
         "judge_agreements": sum(1 for r in completed if r["judges"]["agreement"]),
         "new_dlq_count_delta": new_dlq,
@@ -269,7 +298,7 @@ def main() -> None:
         results.append(result)
         previous_probe = case["question"]
         save(RUN / "results_partial.json", results)
-        if result["status"] != "succeeded":
+        if result["status"] in {"failed_clear", "timeout_case"}:
             break
     queue_after = queue_state()
     save(RUN / "queue_after.json", queue_after)
