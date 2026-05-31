@@ -238,12 +238,16 @@ def build_worker_runtime_from_env(environ: dict[str, str] | None = None) -> Work
             embedding_model_version=values["AZURE_OPENAI_EMBEDDING_MODEL_VERSION"],
             code_version=values.get("AZURE_MEMFOREST_GIT_SHA", "unknown"),
             prompt_config_hash=_prompt_config_hash(values),
+            lease_ttl_seconds=int(values.get("AZURE_MEMFOREST_USER_LEASE_TTL_SECONDS", "300")),
+            lease_renewal_seconds=float(values.get("AZURE_MEMFOREST_USER_LEASE_RENEWAL_SECONDS", "60")),
         ),
     )
     worker = ServiceBusWriteWorker(
         job_store=CosmosJobStore(database.get_container_client("jobs")),
         handler=handler,
         owner_id=owner_id,
+        lease_ttl_seconds=int(values.get("AZURE_MEMFOREST_JOB_LEASE_TTL_SECONDS", "300")),
+        settle_before_handle=str(values.get("AZURE_MEMFOREST_WORKER_SETTLE_BEFORE_HANDLE", "")).strip().lower() in {"1", "true", "yes", "on"},
     )
     servicebus_client = ServiceBusClient(
         fully_qualified_namespace=values["AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE"],

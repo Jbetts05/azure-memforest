@@ -331,6 +331,58 @@ async def test_worker_marks_terminal_error_failed_without_dead_lettering() -> No
 
 
 @pytest.mark.asyncio
+async def test_worker_can_settle_message_before_long_handler() -> None:
+    envelope = _envelope()
+    store = await _store_with_job(envelope)
+    worker = ServiceBusWriteWorker(
+        job_store=store,
+        handler=RecordingHandler(),
+        owner_id="worker-1",
+        settle_before_handle=True,
+    )
+    message = FakeMessage(envelope.to_json().encode("utf-8"))
+
+    outcome = await worker.process_message(message)
+
+    assert outcome.action == "complete"
+    assert message.completed is True
+    assert message.abandoned is False
+    assert message.dead_lettered is False
+    status = await store.get_job_by_ids(tenant_id="tenant-1", user_id="user-1", job_id=envelope.job_id)
+    assert status.status == "succeeded"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "expected_status"),
+    [
+        (TerminalHandlerError("filtered", reason="content_filter"), "failed"),
+        (PermanentHandlerError("bad"), "failed"),
+        (TransientHandlerError("try again"), "running"),
+        (RuntimeError("boom"), "running"),
+    ],
+)
+async def test_worker_early_settle_does_not_resettle_on_handler_errors(error, expected_status) -> None:
+    envelope = _envelope()
+    store = await _store_with_job(envelope)
+    worker = ServiceBusWriteWorker(
+        job_store=store,
+        handler=RecordingHandler(error),
+        owner_id="worker-1",
+        settle_before_handle=True,
+    )
+    message = FakeMessage(envelope.to_json().encode("utf-8"))
+
+    await worker.process_message(message)
+
+    assert message.completed is True
+    assert message.abandoned is False
+    assert message.dead_lettered is False
+    status = await store.get_job_by_ids(tenant_id="tenant-1", user_id="user-1", job_id=envelope.job_id)
+    assert status.status == expected_status
+
+
+@pytest.mark.asyncio
 async def test_worker_completes_terminal_job_without_handler() -> None:
     envelope = _envelope()
     store = await _store_with_job(envelope)

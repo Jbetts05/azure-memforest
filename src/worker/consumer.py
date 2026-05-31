@@ -61,11 +61,13 @@ class ServiceBusWriteWorker:
         handler: WriteJobHandler,
         owner_id: str,
         lease_ttl_seconds: int = 300,
+        settle_before_handle: bool = False,
     ) -> None:
         self._job_store = job_store
         self._handler = handler
         self._owner_id = owner_id
         self._lease_ttl_seconds = lease_ttl_seconds
+        self._settle_before_handle = settle_before_handle
 
     async def process_message(self, message: Any) -> WorkerOutcome:
         try:
@@ -92,6 +94,11 @@ class ServiceBusWriteWorker:
             await _abandon(message)
             return WorkerOutcome(action="abandon", reason="claim_failed")
 
+        message_settled = False
+        if self._settle_before_handle:
+            await _complete(message)
+            message_settled = True
+
         try:
             await self._handler.handle(envelope, claimed)
         except TerminalHandlerError as exc:
@@ -108,10 +115,12 @@ class ServiceBusWriteWorker:
                     fencing_token=int(claimed["fencing_token"]),
                     error=f"{exc.reason}: {exc}",
                 )
-                await _complete(message)
+                if not message_settled:
+                    await _complete(message)
                 return WorkerOutcome(action="complete", reason=exc.reason)
             except Exception:
-                await _abandon(message)
+                if not message_settled:
+                    await _abandon(message)
                 return WorkerOutcome(action="abandon", reason="fail_terminal_job_failed")
         except PermanentHandlerError as exc:
             try:
@@ -123,7 +132,8 @@ class ServiceBusWriteWorker:
                     fencing_token=int(claimed["fencing_token"]),
                     error=str(exc),
                 )
-                await _dead_letter(message, reason="permanent_handler_error", description=str(exc))
+                if not message_settled:
+                    await _dead_letter(message, reason="permanent_handler_error", description=str(exc))
                 return WorkerOutcome(action="dead_letter", reason="permanent_handler_error")
             except Exception as exc:
                 log.exception(
@@ -131,9 +141,11 @@ class ServiceBusWriteWorker:
                     extra={"job_id": envelope.job_id, "delivery_count": getattr(message, "delivery_count", None)},
                 )
                 if _is_final_delivery(message):
-                    await _dead_letter(message, reason="fail_job_failed", description=f"{type(exc).__name__}: {exc}")
+                    if not message_settled:
+                        await _dead_letter(message, reason="fail_job_failed", description=f"{type(exc).__name__}: {exc}")
                     return WorkerOutcome(action="dead_letter", reason="fail_job_failed")
-                await _abandon(message)
+                if not message_settled:
+                    await _abandon(message)
                 return WorkerOutcome(action="abandon", reason="fail_job_failed")
         except TransientHandlerError as exc:
             log.warning(
@@ -142,9 +154,11 @@ class ServiceBusWriteWorker:
                 extra={"job_id": envelope.job_id, "delivery_count": getattr(message, "delivery_count", None)},
             )
             if _is_final_delivery(message):
-                await self._fail_and_dead_letter_final(message, envelope, claimed, reason="transient_handler_error", error=str(exc))
+                if not message_settled:
+                    await self._fail_and_dead_letter_final(message, envelope, claimed, reason="transient_handler_error", error=str(exc))
                 return WorkerOutcome(action="dead_letter", reason="transient_handler_error")
-            await _abandon(message)
+            if not message_settled:
+                await _abandon(message)
             return WorkerOutcome(action="abandon", reason="transient_handler_error")
         except Exception as exc:
             log.exception(
@@ -152,9 +166,11 @@ class ServiceBusWriteWorker:
                 extra={"job_id": envelope.job_id, "delivery_count": getattr(message, "delivery_count", None)},
             )
             if _is_final_delivery(message):
-                await self._fail_and_dead_letter_final(message, envelope, claimed, reason="unhandled_handler_error", error=f"{type(exc).__name__}: {exc}")
+                if not message_settled:
+                    await self._fail_and_dead_letter_final(message, envelope, claimed, reason="unhandled_handler_error", error=f"{type(exc).__name__}: {exc}")
                 return WorkerOutcome(action="dead_letter", reason="unhandled_handler_error")
-            await _abandon(message)
+            if not message_settled:
+                await _abandon(message)
             return WorkerOutcome(action="abandon", reason="unhandled_handler_error")
 
         try:
@@ -165,7 +181,8 @@ class ServiceBusWriteWorker:
                 owner_id=self._owner_id,
                 fencing_token=int(claimed["fencing_token"]),
             )
-            await _complete(message)
+            if not message_settled:
+                await _complete(message)
             return WorkerOutcome(action="complete", reason="succeeded")
         except Exception as exc:
             log.exception(
@@ -173,9 +190,11 @@ class ServiceBusWriteWorker:
                 extra={"job_id": envelope.job_id, "delivery_count": getattr(message, "delivery_count", None)},
             )
             if _is_final_delivery(message):
-                await _dead_letter(message, reason="complete_job_failed", description=f"{type(exc).__name__}: {exc}")
+                if not message_settled:
+                    await _dead_letter(message, reason="complete_job_failed", description=f"{type(exc).__name__}: {exc}")
                 return WorkerOutcome(action="dead_letter", reason="complete_job_failed")
-            await _abandon(message)
+            if not message_settled:
+                await _abandon(message)
             return WorkerOutcome(action="abandon", reason="complete_job_failed")
 
     async def _fail_and_dead_letter_final(
