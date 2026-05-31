@@ -47,19 +47,20 @@ Azure-MemForest is the path from a research artifact to a usable cloud memory se
 
 ## Current status
 
-The dev Azure environment has been built and smoke-tested end to end.
+The dev Azure environment has been built, deployed, and smoke-tested end to end.
 
 - API and worker run on Azure Container Apps.
 - Entra bearer-token auth is configured and verified.
-- The worker ingests Service Bus session messages and materializes committed memory generations.
-- Two same-user live ingests successfully committed generation 1 and generation 2.
-- Snapshot hydration preserved generation 1 while writing generation 2.
+- The worker ingests Service Bus session messages and materializes committed memory generations with staged progress and model-call telemetry.
+- The chat-first UI persists user and assistant turns; assistant turns are retained for transcript history but marked to skip memory extraction.
+- Clear-memory is a real asynchronous job, not a UI-only reset.
+- Mixed model routing is deployed: a smaller GPT-5-family model builds memory, GPT-5.4 handles final answer paths, and `text-embedding-3-large` provides embeddings.
 - Cloud query returns grounded answers from latest committed memory.
 - Query trace readback is implemented.
 - Build provenance and dirty-tree image guards are in place.
-- Benchmark and parity tooling is present, including judge variance study support.
+- Benchmark/parity run folders now include lightweight experiment manifests.
 
-The project has completed more than 190 tracked implementation tasks using a goal-driven, dynamically revised backlog.
+The project has completed more than 350 tracked implementation tasks using a goal-driven, dynamically revised backlog.
 
 ## Architecture
 
@@ -90,19 +91,66 @@ Service Bus session queue  ----->  Worker Container App
 
 ### Write path
 
-The write worker is intentionally strict:
+The write worker is intentionally strict and observable:
 
 1. Accept a Service Bus message scoped by `tenant_id:user_id`.
 2. Claim the job in Cosmos DB.
 3. Acquire a fenced per-user write lease.
-4. Read the latest committed manifest.
-5. Hydrate the previous UserForest snapshot from Blob Storage.
-6. Apply ingest or delete through the synchronous MemForest core.
-7. Project facts, trees, locations, embeddings, Search documents, summaries, snapshots, and fingerprints.
-8. Assert the lease is still current.
-9. Commit the new manifest.
+4. Report job stage `hydrate`.
+5. Read the latest committed manifest and hydrate the previous UserForest snapshot from Blob Storage.
+6. Report job stage `extract_build`.
+7. Apply ingest or delete through the synchronous MemForest core: extract facts, dedupe, route to session/entity/scene trees, summarize, and embed.
+8. Report job stage `manifest_pending`.
+9. Create a pending forest manifest.
+10. Report job stage `project`.
+11. Project facts, trees, locations, embeddings, Search documents, summaries, snapshots, and fingerprints.
+12. Report job stage `write_projection`.
+13. Write the projected records to Cosmos DB, Azure AI Search, and Blob Storage.
+14. Assert the lease is still current.
+15. Report job stage `commit`.
+16. Commit the new manifest.
 
 Only committed manifests are visible to query readers.
+
+Job status now includes:
+
+- `stage`: current worker stage.
+- `stage_started_at`: current stage start time.
+- `stage_history`: capped history of completed stages.
+- `telemetry`: model-call counts and latency by operation/deployment.
+
+`GET /v1/users/{user_id}/jobs/{job_id}/events` exposes the same staged progress as timeline events.
+
+### Clear memory
+
+`POST /v1/users/{user_id}/memory:clear` creates a Service Bus `clear_memory` job. The worker clears user-scoped source turns, facts, trees, manifests, browse embeddings, fact locations, recall documents, snapshots, traces, and deletion metadata where configured.
+
+Clear has two important reliability properties:
+
+- It records a job row before publishing the Service Bus message, avoiding `job_not_found` races.
+- Optional cleanup such as Search/Blob deletion is bounded and best-effort, while critical Cosmos phases remain terminal and visible through job status.
+
+The UI danger-zone clear button submits this job and waits for terminal status before resetting the local view.
+
+### Model routing
+
+Azure-MemForest uses role-based Azure OpenAI deployment names:
+
+| Role | Current purpose |
+| --- | --- |
+| `chat` / `default` / `extraction` / `dedupe` / `planner` / `browse` | High-volume memory-building and planning work. |
+| `answer` | Final grounded answer generation. |
+| `summarization` | Configured for strong summaries, though some worker core paths still use the default model name. |
+| `embedding` | Fact, query, and browse embeddings. |
+
+The current dev deployment uses:
+
+- `gpt-5.4-mini-memory` for high-volume memory-building roles.
+- `gpt-5.4` for answer paths.
+- `text-embedding-3-large` with 3072-dimensional vectors.
+- `memforest-recall-large` as the 3072-dimensional Azure AI Search recall index.
+
+This mixed strategy avoids routing every internal memory-building call through full GPT-5.4, which caused very long benchmark-session tail latencies.
 
 ### Query path
 
@@ -207,6 +255,21 @@ Current policy:
 - New cloud parity must compare local and cloud candidates under the same approved judge prompt/deployment.
 - Candidate-only methods fail under strict parity.
 - Manifest fingerprints record model/config/code inputs for each committed generation.
+
+Cloud experiment outputs live under `docs/parity-runs/`. Each new run should include:
+
+- `manifest.json`: structured run metadata, model stack, dataset/cases, scoring method, metrics, artifacts, caveats, and next gate.
+- `report.md`: human-readable analysis and conclusion.
+- raw artifacts: case outputs, queue/DLQ snapshots, logs, model environment, query traces, and scoring outputs.
+
+This lightweight tracking is intentional. Azure ML or Foundry eval orchestration should be introduced later, when benchmark runs become scheduled, large, or team-operated.
+
+Recent findings:
+
+- One-case LongMemEval smoke passed end to end.
+- A 10-case proxy-scored LongMemEval batch attempt exposed ingest tail-latency problems when all memory work used full GPT-5.4.
+- The staged mixed-model pipeline reduced targeted slow-session ingests from hundreds of seconds/dead-letter risk to roughly one minute or less.
+- GPT-5.4-mini is now the modern memory-building candidate, but it still needs a scored small-batch comparison before being treated as benchmark-proven.
 
 ## Applications
 
