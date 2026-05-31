@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from src import __version__
 from src.service.auth import AuthError, AuthProvider
-from src.service.auth import DevHeaderAuthProvider
+from src.service.auth import BenchmarkAuthWrapper, BenchmarkHeaderAuthProvider, DevHeaderAuthProvider
 from src.service.azure_readiness import build_azure_readiness_checks
 from src.cloud.cosmos_jobs import CosmosJobStatusService, job_store_from_env
 from src.cloud.cosmos_traces import CosmosQueryTraceService, trace_recorder_from_database
@@ -60,9 +60,9 @@ def create_app(
             CORSMiddleware,
             allow_origins=list(settings.ui_allowed_origins),
             allow_methods=["GET", "POST", "OPTIONS"],
-            allow_headers=["Authorization", "Content-Type", "Idempotency-Key", "x-tenant-id", "x-actor-id", "x-auth-scopes", "x-auth-roles"],
+            allow_headers=["Authorization", "Content-Type", "Idempotency-Key", "x-tenant-id", "x-actor-id", "x-auth-scopes", "x-auth-roles", "x-benchmark-auth"],
         )
-    app.state.auth_provider = auth_provider or _dev_auth_provider_from_env(os.environ) or entra_auth_provider_from_env(os.environ)
+    app.state.auth_provider = auth_provider or _auth_provider_from_env(os.environ)
     job_store = job_store_from_env(os.environ)
     command_service = service_bus_command_service_from_env(os.environ)
     app.state.memory_command_service = (
@@ -193,3 +193,18 @@ def _dev_auth_provider_from_env(environ):
     if not environment:
         raise ValueError("AZURE_MEMFOREST_ENV must be set when AZURE_MEMFOREST_DEV_AUTH is enabled.")
     return DevHeaderAuthProvider(environment=environment)
+
+
+def _auth_provider_from_env(environ):
+    provider = _dev_auth_provider_from_env(environ) or entra_auth_provider_from_env(environ)
+    benchmark_enabled = str(environ.get("AZURE_MEMFOREST_BENCHMARK_AUTH", "")).strip().lower() in {"1", "true", "yes", "on"}
+    if provider is None:
+        if benchmark_enabled:
+            raise ValueError("Benchmark auth requires a configured delegate auth provider.")
+        return None
+    if not benchmark_enabled:
+        return provider
+    environment = str(environ.get("AZURE_MEMFOREST_ENV", "")).strip()
+    secret = str(environ.get("AZURE_MEMFOREST_BENCHMARK_SECRET", "")).strip()
+    benchmark = BenchmarkHeaderAuthProvider(secret=secret, environment=environment)
+    return BenchmarkAuthWrapper(benchmark=benchmark, delegate=provider)

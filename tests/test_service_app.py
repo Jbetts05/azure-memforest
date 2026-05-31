@@ -14,10 +14,13 @@ from src.service.app import create_app
 from src.cloud.cosmos_jobs import JobNotFound
 from src.service.auth import (
     ACTOR_ID_HEADER,
+    BENCHMARK_AUTH_HEADER,
     ROLES_HEADER,
     SCOPES_HEADER,
     TENANT_ID_HEADER,
     AuthNotConfigured,
+    BenchmarkAuthWrapper,
+    BenchmarkHeaderAuthProvider,
     DevHeaderAuthProvider,
     get_actor_context,
 )
@@ -393,6 +396,52 @@ def test_dev_header_auth_requires_explicit_environment() -> None:
 
     with pytest.raises(ValueError, match="AZURE_MEMFOREST_ENV"):
         _dev_auth_provider_from_env({"AZURE_MEMFOREST_DEV_AUTH": "true"})
+
+
+def test_benchmark_header_auth_requires_secret_and_dev_environment() -> None:
+    with pytest.raises(ValueError, match="at least 32"):
+        BenchmarkHeaderAuthProvider(secret="short", environment="test")
+    with pytest.raises(ValueError, match="only allowed"):
+        BenchmarkHeaderAuthProvider(secret="x" * 32, environment="production")
+
+
+def test_benchmark_auth_wrapper_overrides_actor_only_with_secret() -> None:
+    delegate = DevHeaderAuthProvider(environment="test")
+    provider = BenchmarkAuthWrapper(
+        benchmark=BenchmarkHeaderAuthProvider(secret="s" * 32, environment="test"),
+        delegate=delegate,
+    )
+    app = create_app(auth_provider=provider)
+
+    @app.get("/__actor")
+    async def actor(ctx=Depends(get_actor_context)):
+        return {"actor_id": ctx.actor_id, "roles": list(ctx.roles), "auth_scheme": ctx.auth_scheme}
+
+    client = TestClient(app)
+    response = client.get(
+        "/__actor",
+        headers={
+            BENCHMARK_AUTH_HEADER: "s" * 32,
+            TENANT_ID_HEADER: "tenant-1",
+            ACTOR_ID_HEADER: "benchmark-case-1",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["actor_id"] == "benchmark-case-1"
+    assert response.json()["auth_scheme"] == "benchmark-header"
+    assert "memory.benchmark" in response.json()["roles"]
+    assert "memory.admin" not in response.json()["roles"]
+
+    unauthorized = client.get(
+        "/__actor",
+        headers={
+            BENCHMARK_AUTH_HEADER: "wrong",
+            TENANT_ID_HEADER: "tenant-1",
+            ACTOR_ID_HEADER: "benchmark-case-1",
+        },
+    )
+    assert unauthorized.status_code == 401
 
 
 def test_auth_dependency_fails_closed_when_not_configured() -> None:

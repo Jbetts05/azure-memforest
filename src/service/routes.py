@@ -296,7 +296,7 @@ async def get_fact_detail(user_id: str, forest_version: str, fact_id: str, reque
 
 
 def _enforce_user_access(actor: ActorContext, user_id: str) -> None:
-    if actor.actor_id == user_id or "memory.admin" in actor.roles:
+    if actor.actor_id == user_id or "memory.admin" in actor.roles or "memory.benchmark" in actor.roles:
         return
     raise Forbidden()
 
