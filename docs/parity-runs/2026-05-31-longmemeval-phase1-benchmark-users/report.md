@@ -93,11 +93,11 @@ Phase 2 remains blocked until we either:
 
 ## Recommended next action
 
-Update the Phase 1 timeout policy from a fixed 5 minutes per session to a stage-aware/progress-aware timeout:
+The harness has been updated for the next rerun to use progress-aware waiting instead of a fixed 5-minute timeout:
 
-- keep a hard cap to avoid runaway jobs;
-- allow longer for sessions with many generated facts/model calls;
-- continue polling while the job changes stage or otherwise updates progress;
-- fail only when the job is both over budget and not making progress.
+- hard cap: 30 minutes per session ingest;
+- idle cap: 10 minutes without real progress;
+- progress signals: status/stage transitions, stage-history length, telemetry total calls, telemetry total latency;
+- `updated_at` is intentionally not used as a progress signal.
 
 Then rerun Phase 1 benchmark-user calibration.

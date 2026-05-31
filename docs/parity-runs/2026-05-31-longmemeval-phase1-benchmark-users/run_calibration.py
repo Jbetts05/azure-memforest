@@ -82,13 +82,37 @@ def api_post(path: str, body: dict | None = None, *, user_id: str = USER, idem: 
     return response.json()
 
 
-def wait_job(job_id: str, timeout_seconds: int, *, user_id: str) -> tuple[dict, float]:
+def progress_fingerprint(status: dict) -> tuple:
+    telemetry = status.get("telemetry") or {}
+    return (
+        status.get("status"),
+        status.get("stage"),
+        len(status.get("stage_history") or []),
+        telemetry.get("total_calls"),
+        telemetry.get("total_latency_ms"),
+    )
+
+
+def wait_job_progress(job_id: str, *, user_id: str, hard_timeout_seconds: int, idle_timeout_seconds: int) -> tuple[dict, float, dict]:
     start = time.time()
     status = api_get(f"/v1/users/{user_id}/jobs/{job_id}", user_id=user_id)
-    while time.time() - start < timeout_seconds and status["status"] not in {"succeeded", "failed", "cancelled"}:
-        time.sleep(5)
+    last_fingerprint = progress_fingerprint(status)
+    last_progress_at = start
+    progress_events = [{"elapsed_sec": 0.0, "fingerprint": list(last_fingerprint)}]
+    while status["status"] not in {"succeeded", "failed", "cancelled"}:
+        now = time.time()
+        if now - start >= hard_timeout_seconds:
+            return status, now - start, {"timeout_reason": "hard_timeout", "progress_events": progress_events}
+        if now - last_progress_at >= idle_timeout_seconds:
+            return status, now - start, {"timeout_reason": "idle_timeout", "progress_events": progress_events}
+        time.sleep(10)
         status = api_get(f"/v1/users/{user_id}/jobs/{job_id}", user_id=user_id)
-    return status, time.time() - start
+        fingerprint = progress_fingerprint(status)
+        if fingerprint != last_fingerprint:
+            last_fingerprint = fingerprint
+            last_progress_at = time.time()
+            progress_events.append({"elapsed_sec": last_progress_at - start, "fingerprint": list(fingerprint)})
+    return status, time.time() - start, {"timeout_reason": None, "progress_events": progress_events}
 
 
 def norm(text: object) -> str:
@@ -205,7 +229,12 @@ def run_case(case: dict, index: int, previous_probe: str | None) -> dict:
             user_id=user_id,
             idem=f"phase1-ingest-{case_id}-{session_index}-{uuid.uuid4().hex}",
         )
-        ingest_status, ingest_elapsed = wait_job(ingest["job_id"], 5 * 60, user_id=user_id)
+        ingest_status, ingest_elapsed, wait_info = wait_job_progress(
+            ingest["job_id"],
+            user_id=user_id,
+            hard_timeout_seconds=30 * 60,
+            idle_timeout_seconds=10 * 60,
+        )
         job_events = api_get(f"/v1/users/{user_id}/jobs/{ingest['job_id']}/events", user_id=user_id)
         result["events"].append(
             {
@@ -216,6 +245,7 @@ def run_case(case: dict, index: int, previous_probe: str | None) -> dict:
                 "status": ingest_status,
                 "elapsed_sec": ingest_elapsed,
                 "job_events": job_events,
+                "wait_info": wait_info,
             }
         )
         save(out, result)
@@ -239,7 +269,7 @@ def run_case(case: dict, index: int, previous_probe: str | None) -> dict:
                 save(out, result)
                 print(json.dumps({"case": case_id, "ingest": session_index, "status": "filtered_skipped", "source_session_id": session["source_session_id"]}), flush=True)
                 continue
-            result["status"] = "failed_ingest"
+            result["status"] = "timeout_ingest" if wait_info.get("timeout_reason") else "failed_ingest"
             save(out, result)
             return result
 
