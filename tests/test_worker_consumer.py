@@ -16,6 +16,10 @@ from src.worker.receiver import ServiceBusSessionReceiverLoop, WorkerReceiverCon
 from tests.test_cosmos_jobs import FakeJobsContainer
 
 
+def test_worker_factory_imports() -> None:
+    import src.worker.factory  # noqa: F401
+
+
 class FakeMessage:
     def __init__(self, body: bytes, *, delivery_count: int = 1):
         self.body = body

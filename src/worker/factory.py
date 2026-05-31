@@ -249,6 +249,7 @@ def build_worker_runtime_from_env(environ: dict[str, str] | None = None) -> Work
         fully_qualified_namespace=values["AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE"],
         credential=async_credential,
     )
+    lock_renewer = create_azure_lock_renewer()
     receiver_loop = ServiceBusSessionReceiverLoop(
         servicebus_client=servicebus_client,
         worker=worker,
@@ -257,7 +258,7 @@ def build_worker_runtime_from_env(environ: dict[str, str] | None = None) -> Work
             message_wait_seconds=float(values.get("AZURE_MEMFOREST_WORKER_MESSAGE_WAIT_SECONDS", "5")),
             session_lock_renewal_seconds=float(values.get("AZURE_MEMFOREST_WORKER_SESSION_LOCK_RENEWAL_SECONDS", "300")),
         ),
-        lock_renewer=None,
+        lock_renewer=lock_renewer,
     )
     return WorkerRuntime(receiver_loop=receiver_loop, closeables=[cosmos_client, servicebus_client, async_credential, sync_credential])
 

@@ -186,7 +186,7 @@ class ServiceBusSessionReceiverLoop:
         return outcome
 
 
-async def create_azure_lock_renewer() -> Any:
+def create_azure_lock_renewer() -> Any:
     from azure.servicebus.aio import AutoLockRenewer
 
     return AutoLockRenewer()
