@@ -5286,19 +5286,195 @@
             }
           ]
         }
+      },
+      {
+        "step": "resume",
+        "completed_indices": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
+        ],
+        "skipped_source_session_ids": [],
+        "timestamp_unix": 1780269643.1359253
+      },
+      {
+        "step": "ingest",
+        "index": 7,
+        "source_session_id": "44fc2b1e",
+        "job_id": "job_21d3df33a2990607cd7bc4f53176ceb02b8f983e8c57fe7a74715193424fb66e",
+        "status": {
+          "job_id": "job_21d3df33a2990607cd7bc4f53176ceb02b8f983e8c57fe7a74715193424fb66e",
+          "status": "running",
+          "tenant_id": "11111111-1111-4111-8111-111111111111",
+          "user_id": "benchmark-phase1-03-8e91e7d9",
+          "submitted_at": 1780269644.0909529,
+          "completed_at": null,
+          "error": null,
+          "stage": "hydrate",
+          "stage_started_at": 1780269645.632925,
+          "stage_history": [],
+          "telemetry": {}
+        },
+        "elapsed_sec": 603.7066609859467,
+        "job_events": [
+          {
+            "event_type": "accepted",
+            "timestamp_unix": 1780269644.0909529,
+            "status": "accepted",
+            "detail": null
+          },
+          {
+            "event_type": "running",
+            "timestamp_unix": null,
+            "status": "running",
+            "detail": "Job has been claimed by a worker."
+          },
+          {
+            "event_type": "stage:hydrate",
+            "timestamp_unix": 1780269645.632925,
+            "status": "running",
+            "detail": "Current job stage."
+          }
+        ],
+        "wait_info": {
+          "timeout_reason": "idle_timeout",
+          "progress_events": [
+            {
+              "elapsed_sec": 0.0,
+              "fingerprint": [
+                "running",
+                "hydrate",
+                0,
+                null,
+                null
+              ]
+            }
+          ]
+        }
+      },
+      {
+        "step": "resume",
+        "completed_indices": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6
+        ],
+        "skipped_source_session_ids": [
+          "44fc2b1e"
+        ],
+        "timestamp_unix": 1780270356.263161
+      },
+      {
+        "step": "ingest",
+        "index": 8,
+        "source_session_id": "da71721f",
+        "job_id": "job_f5dc003c69102a0db46332a66c9417bab8e01676db41e0cf1b7438370eefeb89",
+        "status": {
+          "job_id": "job_f5dc003c69102a0db46332a66c9417bab8e01676db41e0cf1b7438370eefeb89",
+          "status": "running",
+          "tenant_id": "11111111-1111-4111-8111-111111111111",
+          "user_id": "benchmark-phase1-03-8e91e7d9",
+          "submitted_at": 1780270357.2824965,
+          "completed_at": null,
+          "error": null,
+          "stage": "extract_build",
+          "stage_started_at": 1780270376.096139,
+          "stage_history": [
+            {
+              "stage": "hydrate",
+              "started_at": 1780270367.1543572,
+              "completed_at": 1780270376.096139,
+              "detail": "Loading latest committed forest."
+            }
+          ],
+          "telemetry": {}
+        },
+        "elapsed_sec": 614.053876876831,
+        "job_events": [
+          {
+            "event_type": "accepted",
+            "timestamp_unix": 1780270357.2824965,
+            "status": "accepted",
+            "detail": null
+          },
+          {
+            "event_type": "running",
+            "timestamp_unix": null,
+            "status": "running",
+            "detail": "Job has been claimed by a worker."
+          },
+          {
+            "event_type": "stage:hydrate",
+            "timestamp_unix": 1780270367.1543572,
+            "status": "completed",
+            "detail": "Loading latest committed forest."
+          },
+          {
+            "event_type": "stage:extract_build",
+            "timestamp_unix": 1780270376.096139,
+            "status": "running",
+            "detail": "Current job stage."
+          }
+        ],
+        "wait_info": {
+          "timeout_reason": "idle_timeout",
+          "progress_events": [
+            {
+              "elapsed_sec": 0.0,
+              "fingerprint": [
+                "accepted",
+                null,
+                0,
+                null,
+                null
+              ]
+            },
+            {
+              "elapsed_sec": 11.765143394470215,
+              "fingerprint": [
+                "running",
+                "extract_build",
+                1,
+                null,
+                null
+              ]
+            }
+          ]
+        }
       }
     ],
     "status": "timeout_ingest",
     "benchmark_user_id": "benchmark-phase1-03-8e91e7d9",
-    "filtered_skips": [],
-    "modified_input": false,
+    "filtered_skips": [
+      {
+        "source_session_id": "44fc2b1e",
+        "answer_bearing": false,
+        "turn_count": 12,
+        "reason": "long_job_transport_pathological",
+        "detail": "Repeated 30-minute/high-fanout ingests for this non-answer session caused stale running jobs and Service Bus DLQ despite lock renewal/early-settle attempts.",
+        "timestamp_unix": 1780270338.4836092,
+        "related_job_ids": [
+          "job_8e216781519ac470cf8a9cf35d7cca5f55b094c17f5df86e2a41443d3ae35ee1",
+          "job_2b94b153c0e6ea446d74363a36a1173e599305b761b73bd78ffdb6895c1adac7",
+          "job_c220591e457d098abb13e4ef3ba2d53b29a59bf956e0c2119370df65fb56b5eb",
+          "job_21d3df33a2990607cd7bc4f53176ceb02b8f983e8c57fe7a74715193424fb66e"
+        ]
+      }
+    ],
+    "modified_input": true,
     "residue_probe": {
       "question": "How many tops have I bought from H&M so far?",
       "response": {
-        "query_id": "a1175581-0164-4d81-87f3-2da4e92da8df",
+        "query_id": "cab3482d-abd1-4ec4-ac8d-5d8cc92d8e81",
         "status": "succeeded",
         "answer": "I don't know",
-        "reason": "The provided memory contains no information about any tops bought from H&M.",
+        "reason": "The provided memory contains no information about any tops purchased from H&M.",
         "facts": [
           {
             "fact_id": "fact_928f7ff471e8162d",
@@ -5330,6 +5506,6 @@
         ]
       }
     },
-    "checkpoint_resume_count": 2
+    "checkpoint_resume_count": 4
   }
 ]
