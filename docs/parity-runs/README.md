@@ -51,6 +51,8 @@ For benchmark or model-routing comparisons, always fill:
 - `caveats`
 - `next_gate`
 
+When model routing is part of the experiment, include both configured routing and observed telemetry in either `model_stack` or the run artifacts. This matters because some code paths may still resolve through the default deployment even when a more specific role environment variable exists.
+
 ## Interpreting proxy scores
 
 Proxy metrics such as normalized exact match, substring contains-gold, and token F1 are useful for quick debugging, but they are not official LongMemEval scores. They can mark a semantically correct answer as wrong, for example `5 tops` versus gold `five`.

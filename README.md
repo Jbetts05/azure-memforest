@@ -60,7 +60,7 @@ The dev Azure environment has been built, deployed, and smoke-tested end to end.
 - Build provenance and dirty-tree image guards are in place.
 - Benchmark/parity run folders now include lightweight experiment manifests.
 
-The project has completed more than 350 tracked implementation tasks using a goal-driven, dynamically revised backlog.
+The project has shipped a large goal-driven backlog covering ingest, query, routing, clear-memory, UI observability, and experiment tracking.
 
 ## Architecture
 
@@ -123,7 +123,9 @@ Job status now includes:
 
 ### Clear memory
 
-`POST /v1/users/{user_id}/memory:clear` creates a Service Bus `clear_memory` job. The worker clears user-scoped source turns, facts, trees, manifests, browse embeddings, fact locations, recall documents, snapshots, traces, and deletion metadata where configured.
+`POST /v1/users/{user_id}/memory:clear` creates a Service Bus `clear_memory` job. The worker clears user-scoped source turns, facts, trees, manifests, browse embeddings, fact locations, recall documents, snapshots, and deletion metadata where configured.
+
+Query traces are not purged by clear-memory; they expire through the Cosmos DB trace container TTL.
 
 Clear has two important reliability properties:
 
@@ -140,7 +142,7 @@ Azure-MemForest uses role-based Azure OpenAI deployment names:
 | --- | --- |
 | `chat` / `default` / `extraction` / `dedupe` / `planner` / `browse` | High-volume memory-building and planning work. |
 | `answer` | Final grounded answer generation. |
-| `summarization` | Configured for strong summaries, though some worker core paths still use the default model name. |
+| `summarization` | Env is set to `gpt-5.4`, but most worker summarization paths currently still resolve through the default deployment and appear as `chat`/`default` in telemetry. Full role wiring is pending. |
 | `embedding` | Fact, query, and browse embeddings. |
 
 The current dev deployment uses:
@@ -268,7 +270,7 @@ Recent findings:
 
 - One-case LongMemEval smoke passed end to end.
 - A 10-case proxy-scored LongMemEval batch attempt exposed ingest tail-latency problems when all memory work used full GPT-5.4.
-- The staged mixed-model pipeline reduced targeted slow-session ingests from hundreds of seconds/dead-letter risk to roughly one minute or less.
+- On the two previously slow target sessions used for validation, the staged mixed-model pipeline reduced ingest from hundreds of seconds/dead-letter risk to roughly one minute or less. This is not yet confirmed on a full benchmark batch.
 - GPT-5.4-mini is now the modern memory-building candidate, but it still needs a scored small-batch comparison before being treated as benchmark-proven.
 
 ## Applications
