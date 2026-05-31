@@ -1,0 +1,62 @@
+{
+  "api_version": {
+    "name": "azure-memforest-api",
+    "version": "0.1.0",
+    "git_sha": "5043bc7a117a",
+    "image_dirty": "false"
+  },
+  "queue_before": {
+    "active": 0,
+    "deadletter": 13,
+    "scheduled": 0
+  },
+  "decisions": {
+    "case_count": 3,
+    "case_ids": [
+      "e47becba",
+      "4b24c848",
+      "8e91e7d9"
+    ],
+    "question_types": {
+      "e47becba": "single-session-user",
+      "4b24c848": "knowledge-update",
+      "8e91e7d9": "multi-session"
+    },
+    "selection_strategy": "Known calibration cases from prior smoke/batch: one single-session-user, one knowledge-update, one multi-session; each has prior expected answer and selected bounded sessions.",
+    "isolation": "Live dev API has AZURE_MEMFOREST_DEV_AUTH=False, so Phase 1 uses same Entra user with terminal clear before each case and residue checks against previous case probes.",
+    "judge": "LongMemEval evaluate_qa prompt logic, primary gpt-5.4, cross-check gpt-5.4-mini-memory.",
+    "hand_labels": {
+      "e47becba": {
+        "question": "What degree did I graduate with?",
+        "gold_answer": "Business Administration",
+        "acceptable_answers": [
+          "Business Administration",
+          "degree in Business Administration"
+        ],
+        "expected_verdict": true
+      },
+      "4b24c848": {
+        "question": "How many tops have I bought from H&M so far?",
+        "gold_answer": "five",
+        "acceptable_answers": [
+          "five",
+          "5",
+          "5 tops",
+          "five tops"
+        ],
+        "expected_verdict": true
+      },
+      "8e91e7d9": {
+        "question": "What is the total number of siblings I have?",
+        "gold_answer": "4",
+        "acceptable_answers": [
+          "4",
+          "4 siblings",
+          "four",
+          "four siblings"
+        ],
+        "expected_verdict": true
+      }
+    }
+  }
+}
