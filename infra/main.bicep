@@ -1004,6 +1004,14 @@ resource durableFunctionApp 'Microsoft.Web/sites@2023-12-01' = if (deployDurable
           value: 'EnableWorkerIndexing'
         }
         {
+          name: 'SCM_DO_BUILD_DURING_DEPLOYMENT'
+          value: 'true'
+        }
+        {
+          name: 'ENABLE_ORYX_BUILD'
+          value: 'true'
+        }
+        {
           name: 'AzureWebJobsStorage__accountName'
           value: storageAccount.name
         }

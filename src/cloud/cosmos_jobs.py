@@ -6,14 +6,16 @@ import hashlib
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from src.cloud.schema import SCHEMA_VERSION, partition_key
-from src.service.auth import ActorContext
 from src.service.jobs import WriteJobEnvelope
 from src.service.ports import JobStatusService
 from src.service.schemas import JobStatusResponse
 from src.worker.progress import budget_for_envelope, classify_job_progress
+
+if TYPE_CHECKING:
+    from src.service.auth import ActorContext
 
 log = logging.getLogger(__name__)
 

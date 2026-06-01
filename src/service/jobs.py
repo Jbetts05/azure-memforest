@@ -10,7 +10,6 @@ from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
 from src.cloud.schema import SCHEMA_VERSION, partition_key
-from src.service.auth import ActorContext
 from src.service.ports import MemoryCommandService
 from src.service.schemas import (
     ClearMemoryResponse,

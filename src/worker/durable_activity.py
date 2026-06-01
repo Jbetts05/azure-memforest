@@ -5,10 +5,9 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from src.cloud.cosmos_jobs import CosmosJobStore, JobClaimError, JobNotFound
-from src.service.jobs import WriteJobEnvelope
 from src.worker.consumer import (
     PermanentHandlerError,
     TerminalHandlerError,
@@ -16,7 +15,9 @@ from src.worker.consumer import (
     WriteJobHandler,
     parse_write_job_envelope,
 )
-from src.worker.factory import MaterializationRuntime, build_scoped_materialization_handler_from_env
+
+if TYPE_CHECKING:
+    from src.service.jobs import WriteJobEnvelope
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,6 +142,8 @@ class DurableWriteActivityRunner:
 
 
 async def materialize_write_job_from_env(activity_input: dict[str, Any]) -> dict[str, Any]:
+    from src.worker.factory import build_scoped_materialization_handler_from_env
+
     envelope_payload = activity_input.get("envelope", activity_input)
     owner_id = _owner_id(activity_input)
     runtime = build_scoped_materialization_handler_from_env(os.environ, owner_id=owner_id)
@@ -157,6 +160,8 @@ async def materialize_write_job_from_env(activity_input: dict[str, Any]) -> dict
 
 
 async def fail_write_job_from_env(activity_input: dict[str, Any]) -> dict[str, Any]:
+    from src.worker.factory import build_scoped_materialization_handler_from_env
+
     envelope_payload = activity_input.get("envelope", activity_input)
     owner_id = _owner_id(activity_input)
     reason = str(activity_input.get("reason") or "durable_activity_failed")
@@ -204,7 +209,7 @@ def _job_value(job: Any, key: str) -> Any:
     return getattr(job, key, None)
 
 
-async def _close_runtime(runtime: MaterializationRuntime) -> None:
+async def _close_runtime(runtime: Any) -> None:
     for closeable in runtime.closeables:
         close = getattr(closeable, "close", None)
         if close is not None:

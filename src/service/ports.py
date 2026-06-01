@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
-from src.service.auth import ActorContext
 from src.service.schemas import (
     ChatRequest,
     ChatResponse,
@@ -17,6 +16,9 @@ from src.service.schemas import (
     QueryResponse,
     QueryTraceResponse,
 )
+
+if TYPE_CHECKING:
+    from src.service.auth import ActorContext
 
 
 class MemoryCommandService(Protocol):
