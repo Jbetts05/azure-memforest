@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import re
 import subprocess
@@ -23,6 +24,11 @@ BENCHMARK_SECRET_PATH = Path.home() / "AppData" / "Local" / "Temp" / "azure_memf
 
 RUN = Path(__file__).resolve().parent
 CASES = json.loads((RUN / "calibration_cases.json").read_text(encoding="utf-8"))
+OVERRIDES = json.loads((RUN / "phase1_overrides.json").read_text(encoding="utf-8")) if (RUN / "phase1_overrides.json").exists() else {"overrides": []}
+OVERRIDE_BY_SESSION = {
+    (item["case_id"], item["source_session_id"]): item
+    for item in OVERRIDES.get("overrides", [])
+}
 RESULTS = RUN / "case_results"
 RESULTS.mkdir(exist_ok=True)
 
@@ -189,12 +195,22 @@ def queue_state() -> dict:
     return json.loads(raw)
 
 
-def turns_for_ingest(session: dict) -> tuple[list[dict], dict]:
+def turns_for_ingest(session: dict, *, case_id: str = "") -> tuple[list[dict], dict]:
     """Store assistant transcript turns, but exclude them from extraction for Phase 1."""
+    override = OVERRIDE_BY_SESSION.get((case_id, session.get("source_session_id")))
+    retained_ids = set(override.get("retained_content_ids") or []) if override else set()
     shaped: list[dict] = []
     assistant_skip_count = 0
     user_extract_count = 0
-    for turn in session.get("turns") or []:
+    original_turns = list(session.get("turns") or [])
+    source_turns = [
+        turn for turn in original_turns
+        if not retained_ids or turn.get("content_id") in retained_ids
+    ]
+    retained_hash = hashlib.sha256(
+        json.dumps(source_turns, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    for turn in source_turns:
         copied = dict(turn)
         metadata = dict(copied.get("metadata") or {})
         if copied.get("role") == "assistant":
@@ -207,6 +223,13 @@ def turns_for_ingest(session: dict) -> tuple[list[dict], dict]:
     return shaped, {
         "assistant_turns_marked_skip_extraction": assistant_skip_count,
         "user_turns_extractable": user_extract_count,
+        "original_turn_count": len(original_turns),
+        "retained_turn_count": len(source_turns),
+        "evidence_minimized": bool(override),
+        "override_type": override.get("override_type") if override else None,
+        "retained_content_ids": sorted(retained_ids),
+        "retained_turns_sha256": retained_hash,
+        "exclude_from_pipeline_accuracy": bool(override and override.get("exclude_from_pipeline_accuracy")),
     }
 
 
@@ -280,7 +303,7 @@ def run_case(case: dict, index: int, previous_probe: str | None) -> dict:
             save(out, result)
             return result
         attempt = sum(1 for event in result.get("events", []) if event.get("step") == "ingest" and event.get("index") == session_index) + 1
-        ingest_turns, input_shaping = turns_for_ingest(session)
+        ingest_turns, input_shaping = turns_for_ingest(session, case_id=case_id)
         ingest = api_post(
             f"/v1/users/{user_id}/sessions/{session['session_id']}-{uuid.uuid4().hex}:ingest",
             {

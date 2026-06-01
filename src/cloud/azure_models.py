@@ -48,6 +48,15 @@ class AzureOpenAIModelClient:
         step_label: str = "llm",
         trace: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        if _chat_calls_disabled():
+            return {
+                "summary": "",
+                "items": [],
+                "memory_items": [],
+                "facts": [],
+                "equivalent": False,
+                "label": "",
+            }
         role = model_name or "default"
         deployment = self._chat_deployment_for(model_name)
         kwargs: dict[str, Any] = {
@@ -191,3 +200,7 @@ def _request_max_retries() -> int:
     if value:
         return int(value)
     return DEFAULT_MODEL_MAX_RETRIES
+
+
+def _chat_calls_disabled() -> bool:
+    return os.getenv("AZURE_MEMFOREST_DISABLE_CHAT_CALLS", "").strip().lower() in {"1", "true", "yes", "on"}

@@ -131,6 +131,26 @@ def test_azure_model_client_preserves_explicit_timeout() -> None:
     assert fake_client.chat.completions.last_kwargs["timeout"] == 7.5
 
 
+def test_azure_model_client_can_disable_chat_calls(monkeypatch) -> None:
+    fake_client = _FakeClient()
+    monkeypatch.setenv("AZURE_MEMFOREST_DISABLE_CHAT_CALLS", "true")
+    config = AzureOpenAIConfig(
+        endpoint="https://example.openai.azure.com",
+        api_version="2024-10-21",
+        chat_deployments={
+            "default": AzureModelDeployment(role="default", deployment_name="gpt-5.4-mini-memory"),
+        },
+        use_managed_identity=True,
+    )
+    client = AzureOpenAIModelClient(config, openai_client=fake_client)
+
+    response = client.generate_json(system_prompt="system", user_prompt="user", model_name="default")
+
+    assert response["equivalent"] is False
+    assert response["memory_items"] == []
+    assert fake_client.chat.completions.last_kwargs == {}
+
+
 def test_azure_model_client_uses_max_completion_tokens_for_gpt5_deployments() -> None:
     fake_client = _FakeClient()
     config = AzureOpenAIConfig(
