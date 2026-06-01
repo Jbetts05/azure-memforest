@@ -10,6 +10,7 @@ def test_load_default_config_applies_worker_concurrency_env_overrides(monkeypatc
     monkeypatch.setenv("AZURE_MEMFOREST_SUMMARY_MAX_RETRIES", "0")
     monkeypatch.setenv("AZURE_MEMFOREST_SUMMARY_TIMEOUT_SECONDS", "45")
     monkeypatch.setenv("AZURE_MEMFOREST_SUMMARY_MAX_REQUESTS_PER_FLUSH", "0")
+    monkeypatch.setenv("AZURE_MEMFOREST_USE_LLM_EXTRACTION", "false")
 
     config = load_default_config()
 
@@ -19,3 +20,4 @@ def test_load_default_config_applies_worker_concurrency_env_overrides(monkeypatc
     assert config.tree.summary_manager.max_retries == 0
     assert config.tree.summary_manager.timeout_sec == 45.0
     assert config.tree.summary_manager.max_requests_per_flush == 0
+    assert config.extraction.use_llm_extraction is False

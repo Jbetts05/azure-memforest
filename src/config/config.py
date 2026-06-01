@@ -74,7 +74,7 @@ def load_default_config(default_yaml_path: str | Path = "src/config/default.yaml
                 if str(x).strip()
             ),
         ),
-        use_llm_extraction=True,
+        use_llm_extraction=_env_bool("AZURE_MEMFOREST_USE_LLM_EXTRACTION", True),
         max_tokens=int(llm_step.get("max_token", 4096)),
         temperature=float(llm_step.get("temperature", 0.0)),
         top_p=float(llm_global.get("top_p", 0.8)),
@@ -237,6 +237,13 @@ def _env_optional_int(name: str) -> int | None:
     if not value:
         return None
     return int(value)
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name, "").strip().lower()
+    if not value:
+        return default
+    return value in {"1", "true", "yes", "on"}
 
 
 def _env_float(name: str, default: float) -> float:
