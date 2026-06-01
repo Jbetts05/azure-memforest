@@ -153,6 +153,7 @@ def load_default_config(default_yaml_path: str | Path = "src/config/default.yaml
             top_p=float(sm_raw.get("top_p", 0.8)),
             max_retries=_env_int("AZURE_MEMFOREST_SUMMARY_MAX_RETRIES", int(sm_raw.get("max_retries", 2))),
             timeout_sec=_env_float("AZURE_MEMFOREST_SUMMARY_TIMEOUT_SECONDS", float(sm_raw.get("timeout_sec", 60.0))),
+            max_requests_per_flush=_env_optional_int("AZURE_MEMFOREST_SUMMARY_MAX_REQUESTS_PER_FLUSH"),
         ),
     )
 
@@ -228,6 +229,13 @@ def _env_int(name: str, default: int) -> int:
     value = os.getenv(name, "").strip()
     if not value:
         return default
+    return int(value)
+
+
+def _env_optional_int(name: str) -> int | None:
+    value = os.getenv(name, "").strip()
+    if not value:
+        return None
     return int(value)
 
 

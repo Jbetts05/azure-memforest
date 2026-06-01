@@ -61,6 +61,11 @@ class SummaryManager:
         """
         if not requests:
             return []
+        if self._config.max_requests_per_flush is not None:
+            limit = max(0, int(self._config.max_requests_per_flush))
+            requests = requests[:limit]
+            if not requests:
+                return []
 
         results: list[SummaryResult | None] = [None] * len(requests)
         worker_count = min(self._config.max_inflight, len(requests))

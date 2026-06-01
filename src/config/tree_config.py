@@ -55,6 +55,7 @@ class SummaryManagerConfig:
     top_p: float = 0.8
     max_retries: int = 2          # retries on silent empty (error=None, summary="")
     timeout_sec: float = 60.0     # per-call HTTP timeout in seconds
+    max_requests_per_flush: int | None = None
 
 
 @dataclass(frozen=True)
