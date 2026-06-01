@@ -261,5 +261,32 @@ def test_azure_model_client_managed_identity_requires_provider_or_client() -> No
         AzureOpenAIModelClient(config)
 
 
+def test_azure_model_client_builds_client_with_timeout_and_retry_env(monkeypatch) -> None:
+    created = {}
+
+    class FakeAzureOpenAI:
+        def __init__(self, **kwargs):
+            created.update(kwargs)
+
+    monkeypatch.setattr("src.cloud.azure_models.AzureOpenAI", FakeAzureOpenAI)
+    monkeypatch.setenv("AZURE_MEMFOREST_MODEL_TIMEOUT_SECONDS", "33")
+    monkeypatch.setenv("AZURE_MEMFOREST_MODEL_MAX_RETRIES", "0")
+    monkeypatch.setenv("AZURE_OPENAI_API_KEY", "secret")
+    config = AzureOpenAIConfig(
+        endpoint="https://example.openai.azure.com",
+        api_version="2024-10-21",
+        chat_deployments={
+            "default": AzureModelDeployment(role="default", deployment_name="gpt-5.4-mini-memory"),
+        },
+        api_key_env="AZURE_OPENAI_API_KEY",
+        use_managed_identity=False,
+    )
+
+    AzureOpenAIModelClient(config)
+
+    assert created["timeout"] == 33.0
+    assert created["max_retries"] == 0
+
+
 def test_parse_json_object_is_shared_and_handles_fenced_json() -> None:
     assert parse_json_object('```json\n{"ok": true}\n```') == {"ok": True}

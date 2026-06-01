@@ -78,13 +78,21 @@ def load_default_config(default_yaml_path: str | Path = "src/config/default.yaml
         max_tokens=int(llm_step.get("max_token", 4096)),
         temperature=float(llm_step.get("temperature", 0.0)),
         top_p=float(llm_global.get("top_p", 0.8)),
-        max_workers=int(extraction_raw.get("max_workers", min(32, max(1, os.cpu_count() or 8))) or min(32, max(1, os.cpu_count() or 8))),
+        max_workers=_env_int(
+            "AZURE_MEMFOREST_EXTRACTION_MAX_WORKERS",
+            int(extraction_raw.get("max_workers", min(32, max(1, os.cpu_count() or 8))) or min(32, max(1, os.cpu_count() or 8))),
+        ),
         max_inflight_requests=int(
-            extraction_raw.get(
-                "max_inflight_requests",
-                extraction_raw.get("max_cell_workers_per_session", 8),
+            _env_int(
+                "AZURE_MEMFOREST_EXTRACTION_MAX_INFLIGHT",
+                int(
+                    extraction_raw.get(
+                        "max_inflight_requests",
+                        extraction_raw.get("max_cell_workers_per_session", 8),
+                    )
+                    or 8
+                ),
             )
-            or 8
         ),
         max_items_per_cell=int(extraction_raw.get("max_items_per_cell", 15) or 15),
         max_assistant_items_per_cell=int(extraction_raw.get("max_assistant_items_per_cell", 2) or 2),
@@ -139,12 +147,12 @@ def load_default_config(default_yaml_path: str | Path = "src/config/default.yaml
             summary_max_words=int(scene_raw_t.get("summary_max_words", 200)),
         ),
         summary_manager=SummaryManagerConfig(
-            max_inflight=int(sm_raw.get("max_inflight", 16)),
+            max_inflight=_env_int("AZURE_MEMFOREST_SUMMARY_MAX_INFLIGHT", int(sm_raw.get("max_inflight", 16))),
             temperature=float(sm_raw.get("temperature", 0.0)),
             max_tokens=int(sm_raw.get("max_tokens", 4096)),
             top_p=float(sm_raw.get("top_p", 0.8)),
-            max_retries=int(sm_raw.get("max_retries", 2)),
-            timeout_sec=float(sm_raw.get("timeout_sec", 60.0)),
+            max_retries=_env_int("AZURE_MEMFOREST_SUMMARY_MAX_RETRIES", int(sm_raw.get("max_retries", 2))),
+            timeout_sec=_env_float("AZURE_MEMFOREST_SUMMARY_TIMEOUT_SECONDS", float(sm_raw.get("timeout_sec", 60.0))),
         ),
     )
 
@@ -214,3 +222,17 @@ def _maybe_int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.getenv(name, "").strip()
+    if not value:
+        return default
+    return int(value)
+
+
+def _env_float(name: str, default: float) -> float:
+    value = os.getenv(name, "").strip()
+    if not value:
+        return default
+    return float(value)

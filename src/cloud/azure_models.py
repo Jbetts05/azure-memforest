@@ -13,6 +13,7 @@ from src.cloud.config import AzureOpenAIConfig
 from src.observability.model_telemetry import record_model_call, record_model_call_failed, record_model_call_started
 
 DEFAULT_MODEL_TIMEOUT_SECONDS = 120.0
+DEFAULT_MODEL_MAX_RETRIES = 0
 
 
 class AzureOpenAIModelClient:
@@ -157,6 +158,8 @@ class AzureOpenAIModelClient:
                 azure_endpoint=self.config.endpoint,
                 api_version=self.config.api_version,
                 azure_ad_token_provider=azure_ad_token_provider,
+                timeout=_request_timeout(None),
+                max_retries=_request_max_retries(),
             )
         api_key = os.getenv(self.config.api_key_env, "")
         if not api_key:
@@ -165,6 +168,8 @@ class AzureOpenAIModelClient:
             azure_endpoint=self.config.endpoint,
             api_version=self.config.api_version,
             api_key=api_key,
+            timeout=_request_timeout(None),
+            max_retries=_request_max_retries(),
         )
 
 
@@ -179,3 +184,10 @@ def _request_timeout(timeout: float | None) -> float:
     if value:
         return float(value)
     return DEFAULT_MODEL_TIMEOUT_SECONDS
+
+
+def _request_max_retries() -> int:
+    value = os.getenv("AZURE_MEMFOREST_MODEL_MAX_RETRIES", "").strip()
+    if value:
+        return int(value)
+    return DEFAULT_MODEL_MAX_RETRIES
