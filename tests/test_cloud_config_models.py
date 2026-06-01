@@ -7,7 +7,7 @@ import pytest
 from src.api.json_parse import parse_json_object
 from src.cloud.azure_models import AzureOpenAIModelClient
 from src.cloud.config import AzureModelDeployment, AzureOpenAIConfig, load_cloud_config
-from src.observability.model_telemetry import collect_model_telemetry, record_model_call
+from src.observability.model_telemetry import collect_model_telemetry, record_model_call, snapshot_model_telemetry
 
 
 class _Message:
@@ -254,6 +254,15 @@ def test_model_telemetry_records_calls_from_child_threads() -> None:
 
     assert telemetry["total_calls"] == 5
     assert telemetry["calls"]["chat:dedupe:fast-memory"]["count"] == 5
+
+
+def test_model_telemetry_snapshot_copies_nested_calls() -> None:
+    with collect_model_telemetry() as telemetry:
+        record_model_call(role="dedupe", deployment="fast-memory", operation="chat", elapsed_seconds=0.01)
+        snapshot = snapshot_model_telemetry(telemetry)
+        telemetry["calls"]["chat:dedupe:fast-memory"]["count"] = 99
+
+    assert snapshot["calls"]["chat:dedupe:fast-memory"]["count"] == 1
 
 
 def test_azure_model_client_rejects_embedding_dimension_mismatch() -> None:

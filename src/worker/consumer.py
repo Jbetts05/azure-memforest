@@ -216,6 +216,10 @@ class ServiceBusWriteWorker:
                 await _abandon(message)
             return WorkerOutcome(action="abandon", reason="complete_job_failed")
 
+    async def reap_stalled_jobs(self) -> int:
+        failed = await self._job_store.fail_stalled_jobs()
+        return len(failed)
+
     async def _fail_and_dead_letter_final(
         self,
         message: Any,

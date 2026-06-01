@@ -12,6 +12,8 @@ from src.forest.user_forest import ForestMaterializationSnapshot
 from src.service.auth import ActorContext, TenantContext
 from src.service.jobs import build_write_job_envelope
 from src.worker.consumer import TransientHandlerError
+from src.observability.model_telemetry import record_model_call
+from src.worker.progress import JobProgressBudget
 from src.worker.materialization import (
     MaterializationHandlerConfig,
     MaterializationStores,
@@ -327,7 +329,7 @@ class FakeJobStore:
 
 
 class FakeIngestCore:
-    def __init__(self, snapshot, *, delete_missing=False, ingest_delay=0.0):
+    def __init__(self, snapshot, *, delete_missing=False, ingest_delay=0.0, model_calls=0):
         self.snapshot = snapshot
         self.called = False
         self.deleted = False
@@ -335,10 +337,13 @@ class FakeIngestCore:
         self.hydrated_from = None
         self.ingested_turns = None
         self.ingest_delay = ingest_delay
+        self.model_calls = model_calls
 
     def ingest_session(self, *, session_id, turns, metadata):
         self.called = True
         self.ingested_turns = turns
+        for _ in range(self.model_calls):
+            record_model_call(role="extraction", deployment="test", operation="chat", elapsed_seconds=0.001)
         if self.ingest_delay:
             time.sleep(self.ingest_delay)
         return self.snapshot
@@ -584,6 +589,33 @@ async def test_materialization_handler_marks_timeout_as_fatal_when_configured() 
     with pytest.raises(TransientHandlerError, match="ingest_session timed out") as exc_info:
         await handler.handle(_envelope(), {"fencing_token": 1})
     assert exc_info.value.exit_code == 75
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_stops_when_model_call_budget_exceeded(monkeypatch) -> None:
+    def tiny_budget(envelope):
+        return JobProgressBudget(
+            job_type="ingest_session",
+            stall_timeout_seconds=999,
+            max_completed_model_calls=0,
+            max_retries=1,
+        )
+
+    monkeypatch.setattr("src.worker.materialization.budget_for_envelope", tiny_budget)
+    handler = _handler(
+        core=FakeIngestCore(_snapshot(), ingest_delay=0.2, model_calls=1),
+        config=MaterializationHandlerConfig(
+            owner_id="worker-1",
+            embedding_model_version="embed-v1",
+            code_version="test-sha",
+            prompt_config_hash="prompt-hash",
+            lease_renewal_seconds=9999,
+            extract_heartbeat_seconds=0.01,
+        ),
+    )
+
+    with pytest.raises(TransientHandlerError, match="model-call budget"):
+        await handler.handle(_envelope(), {"fencing_token": 1})
 
 
 @pytest.mark.asyncio

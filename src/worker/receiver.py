@@ -21,6 +21,7 @@ class WorkerReceiverConfig:
     max_messages_per_session: int = 100
     session_lock_renewal_seconds: float = 300.0
     idle_sleep_seconds: float = 1.0
+    stalled_job_reap_interval_seconds: float = 60.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,9 +88,11 @@ class ServiceBusSessionReceiverLoop:
         self._config = config
         self._lock_renewer = lock_renewer
         self._log = logger or log
+        self._last_reap_at = 0.0
 
     async def run_forever(self, *, stop_event: asyncio.Event | None = None) -> None:
         while stop_event is None or not stop_event.is_set():
+            await self._maybe_reap_stalled_jobs()
             outcome = await self.process_next_session(stop_event=stop_event)
             if outcome.action in {"idle", "accept_error"}:
                 await _sleep_or_stop(self._config.idle_sleep_seconds, stop_event)
@@ -184,6 +187,22 @@ class ServiceBusSessionReceiverLoop:
             },
         )
         return outcome
+
+    async def _maybe_reap_stalled_jobs(self) -> None:
+        interval = float(self._config.stalled_job_reap_interval_seconds)
+        if interval <= 0:
+            return
+        now = time.time()
+        if now - self._last_reap_at < interval:
+            return
+        self._last_reap_at = now
+        try:
+            count = await self._worker.reap_stalled_jobs()
+        except Exception:
+            self._log.exception("worker_stalled_job_reap_failed")
+            return
+        if count:
+            self._log.warning("worker_stalled_jobs_reaped", extra={"reaped_count": count})
 
 
 def create_azure_lock_renewer() -> Any:

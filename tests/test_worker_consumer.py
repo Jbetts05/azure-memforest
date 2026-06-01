@@ -21,6 +21,14 @@ def test_worker_factory_imports() -> None:
     import src.worker.factory  # noqa: F401
 
 
+def test_worker_factory_reap_interval_clamps_tiny_positive_values() -> None:
+    from src.worker.factory import _reap_interval_seconds
+
+    assert _reap_interval_seconds("0") == 0.0
+    assert _reap_interval_seconds("0.5") == 10.0
+    assert _reap_interval_seconds("30") == 30.0
+
+
 class FakeMessage:
     def __init__(self, body: bytes, *, delivery_count: int = 1):
         self.body = body
@@ -104,6 +112,18 @@ class FakeServiceBusClient:
 
     async def close(self):
         self.closed = True
+
+
+class ReapingWorker:
+    def __init__(self):
+        self.reap_calls = 0
+
+    async def reap_stalled_jobs(self):
+        self.reap_calls += 1
+        return 0
+
+    async def process_message(self, message):
+        return type("Outcome", (), {"action": "complete", "reason": "ok"})()
 
 
 class FakeRealSdkServiceBusClient:
@@ -457,6 +477,69 @@ async def test_worker_dead_letters_when_job_record_missing() -> None:
     assert outcome.action == "dead_letter"
     assert outcome.reason == "job_not_found"
     assert message.dead_lettered is True
+
+
+@pytest.mark.asyncio
+async def test_worker_reap_stalled_jobs_delegates_to_store() -> None:
+    class Store:
+        async def fail_stalled_jobs(self):
+            return [object(), object()]
+
+    worker = ServiceBusWriteWorker(
+        job_store=Store(),
+        handler=RecordingHandler(),
+        owner_id="worker-1",
+    )
+
+    assert await worker.reap_stalled_jobs() == 2
+
+
+@pytest.mark.asyncio
+async def test_receiver_loop_reaps_stalled_jobs_before_polling() -> None:
+    worker = ReapingWorker()
+    receiver = ServiceBusSessionReceiverLoop(
+        servicebus_client=FakeServiceBusClient(receiver=None),
+        worker=worker,
+        config=WorkerReceiverConfig(
+            queue_name="queue",
+            stalled_job_reap_interval_seconds=0.01,
+        ),
+    )
+
+    await receiver.process_next_session()
+    await receiver._maybe_reap_stalled_jobs()
+
+    assert worker.reap_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_receiver_loop_throttles_and_can_disable_reaper() -> None:
+    worker = ReapingWorker()
+    receiver = ServiceBusSessionReceiverLoop(
+        servicebus_client=FakeServiceBusClient(receiver=None),
+        worker=worker,
+        config=WorkerReceiverConfig(
+            queue_name="queue",
+            stalled_job_reap_interval_seconds=60,
+        ),
+    )
+
+    await receiver._maybe_reap_stalled_jobs()
+    await receiver._maybe_reap_stalled_jobs()
+
+    disabled_worker = ReapingWorker()
+    disabled = ServiceBusSessionReceiverLoop(
+        servicebus_client=FakeServiceBusClient(receiver=None),
+        worker=disabled_worker,
+        config=WorkerReceiverConfig(
+            queue_name="queue",
+            stalled_job_reap_interval_seconds=0,
+        ),
+    )
+    await disabled._maybe_reap_stalled_jobs()
+
+    assert worker.reap_calls == 1
+    assert disabled_worker.reap_calls == 0
 
 
 @pytest.mark.asyncio

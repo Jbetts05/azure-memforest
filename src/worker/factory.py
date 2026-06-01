@@ -273,6 +273,7 @@ def build_worker_runtime_from_env(environ: dict[str, str] | None = None) -> Work
             queue_name=values["AZURE_SERVICEBUS_WRITES_QUEUE_NAME"],
             message_wait_seconds=float(values.get("AZURE_MEMFOREST_WORKER_MESSAGE_WAIT_SECONDS", "5")),
             session_lock_renewal_seconds=float(values.get("AZURE_MEMFOREST_WORKER_SESSION_LOCK_RENEWAL_SECONDS", "300")),
+            stalled_job_reap_interval_seconds=_reap_interval_seconds(values.get("AZURE_MEMFOREST_STALLED_JOB_REAP_INTERVAL_SECONDS", "60")),
         ),
         lock_renewer=lock_renewer,
     )
@@ -305,6 +306,13 @@ def hydrating_user_forest_core_factory(
 
 def missing_worker_env(environ: dict[str, str]) -> list[str]:
     return [name for name in REQUIRED_WORKER_ENV if not str(environ.get(name, "")).strip()]
+
+
+def _reap_interval_seconds(value: str | float | int) -> float:
+    interval = float(value)
+    if interval <= 0:
+        return 0.0
+    return max(10.0, interval)
 
 
 def _worker_memforest_config(environ: dict[str, str]):

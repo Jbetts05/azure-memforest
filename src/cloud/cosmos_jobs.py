@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -12,6 +13,9 @@ from src.service.auth import ActorContext
 from src.service.jobs import WriteJobEnvelope
 from src.service.ports import JobStatusService
 from src.service.schemas import JobStatusResponse
+from src.worker.progress import budget_for_envelope, classify_job_progress
+
+log = logging.getLogger(__name__)
 
 
 class JobNotFound(Exception):
@@ -80,6 +84,7 @@ class CosmosJobStore:
         item["lease_owner_id"] = owner_id
         item["lease_expires_at_unix"] = now + ttl_seconds
         item["fencing_token"] = previous_token if same_owner_renewal else previous_token + 1
+        item.setdefault("last_progress_at", now)
         item["updated_at"] = now
         try:
             await _conditional_replace(self.container, item, partition_key=tenant_id, etag=item.get("_etag"))
@@ -146,9 +151,74 @@ class CosmosJobStore:
         item["stage_detail"] = detail
         if telemetry is not None:
             item["telemetry"] = telemetry
+        progress_signature = _merge_progress_signature(
+            previous=item.get("progress_signature") or {},
+            current=_progress_signature(stage=stage, telemetry=item.get("telemetry") or {}),
+        )
+        if progress_signature != item.get("progress_signature"):
+            item["progress_signature"] = progress_signature
+            item["last_progress_at"] = now
         item["updated_at"] = now
         await _conditional_replace(self.container, item, partition_key=tenant_id, etag=item.get("_etag"))
         return _response_from_document(item)
+
+    async def fail_stalled_jobs(
+        self,
+        *,
+        now: float | None = None,
+        limit: int = 25,
+        scan_limit: int = 200,
+    ) -> list[JobStatusResponse]:
+        now = time.time() if now is None else now
+        failed: list[JobStatusResponse] = []
+        scanned = 0
+        async for item in _aiter(
+            _query_items(
+                self.container,
+                query="SELECT * FROM c WHERE c.status = @status ORDER BY c.lease_expires_at_unix ASC",
+                parameters=[{"name": "@status", "value": "running"}],
+            )
+        ):
+            scanned += 1
+            if scanned > scan_limit:
+                break
+            if len(failed) >= limit:
+                break
+            classification = classify_job_progress(item, now=now)
+            if classification.state == "ok":
+                continue
+            lease_expires_at = float(item.get("lease_expires_at_unix") or 0.0)
+            if lease_expires_at > now:
+                continue
+            item["status"] = "failed"
+            item["error"] = (
+                f"{classification.state}: {classification.reason}; "
+                f"seconds_since_progress={classification.seconds_since_progress:.1f}"
+            )
+            item["completed_at"] = now
+            item["updated_at"] = now
+            item["reaped_at_unix"] = now
+            item["reap_reason"] = classification.state
+            item["lease_owner_id"] = ""
+            item["lease_expires_at_unix"] = 0.0
+            try:
+                await _conditional_replace(self.container, item, partition_key=str(item["tenant_id"]), etag=item.get("_etag"))
+            except Exception as exc:
+                if _is_precondition_failed(exc):
+                    continue
+                raise
+            log.warning(
+                "job_reaped_after_stall",
+                extra={
+                    "job_id": item.get("job_id"),
+                    "tenant_id": item.get("tenant_id"),
+                    "user_id": item.get("user_id"),
+                    "reap_reason": classification.state,
+                    "seconds_since_progress": classification.seconds_since_progress,
+                },
+            )
+            failed.append(_response_from_document(item))
+        return failed
 
     async def _read_job_item(self, *, tenant_id: str, user_id: str, job_id: str) -> dict[str, Any]:
         try:
@@ -201,6 +271,7 @@ def job_store_from_env(environ: dict[str, str]) -> CosmosJobStore | None:
 def _job_document(envelope: WriteJobEnvelope) -> dict[str, Any]:
     now = time.time()
     payload_json = envelope.to_json()
+    budget = budget_for_envelope(envelope)
     return {
         "id": envelope.job_id,
         "schema_version": SCHEMA_VERSION,
@@ -215,6 +286,12 @@ def _job_document(envelope: WriteJobEnvelope) -> dict[str, Any]:
         "idempotency_key_hash": _idempotency_hash(envelope.tenant_id, envelope.idempotency_key),
         "payload_digest": hashlib.sha256(payload_json.encode("utf-8")).hexdigest(),
         "payload_size_bytes": len(payload_json.encode("utf-8")),
+        "progress_budget": {
+            "job_type": budget.job_type,
+            "stall_timeout_seconds": budget.stall_timeout_seconds,
+            "max_completed_model_calls": budget.max_completed_model_calls,
+            "max_retries": budget.max_retries,
+        },
         "submitted_at": envelope.submitted_at_unix,
         "updated_at": now,
     }
@@ -233,11 +310,39 @@ def _response_from_document(document: dict[str, Any]) -> JobStatusResponse:
         stage_started_at=document.get("stage_started_at"),
         stage_history=list(document.get("stage_history") or []),
         telemetry=dict(document.get("telemetry") or {}),
+        progress_signature=dict(document.get("progress_signature") or {}),
+        last_progress_at=document.get("last_progress_at"),
     )
 
 
 def _idempotency_hash(tenant_id: str, idempotency_key: str) -> str:
     return hashlib.sha256(f"{tenant_id}:{idempotency_key}".encode("utf-8")).hexdigest()
+
+
+def _progress_signature(*, stage: str, telemetry: dict[str, Any]) -> dict[str, Any]:
+    calls = telemetry.get("calls") if isinstance(telemetry, dict) else {}
+    embedded_items = 0
+    if isinstance(calls, dict):
+        for entry in calls.values():
+            if isinstance(entry, dict) and entry.get("operation") == "embedding":
+                embedded_items += int(entry.get("item_count") or 0)
+    return {
+        "stage": stage,
+        "completed_model_calls": int((telemetry or {}).get("total_calls") or 0),
+        "embedded_items": embedded_items,
+        "durable_writes": int((telemetry or {}).get("durable_write_count") or 0),
+    }
+
+
+def _merge_progress_signature(*, previous: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]:
+    if not previous:
+        return current
+    return {
+        "stage": current.get("stage") or previous.get("stage"),
+        "completed_model_calls": max(int(previous.get("completed_model_calls") or 0), int(current.get("completed_model_calls") or 0)),
+        "embedded_items": max(int(previous.get("embedded_items") or 0), int(current.get("embedded_items") or 0)),
+        "durable_writes": max(int(previous.get("durable_writes") or 0), int(current.get("durable_writes") or 0)),
+    }
 
 
 async def _maybe_await(value):
@@ -246,11 +351,28 @@ async def _maybe_await(value):
     return value
 
 
+async def _aiter(value):
+    value = await _maybe_await(value)
+    if hasattr(value, "__aiter__"):
+        async for item in value:
+            yield item
+        return
+    for item in value:
+        yield item
+
+
 def _create_item(container: Any, document: dict[str, Any], *, partition_key: str):
     try:
         return container.create_item(document)
     except TypeError:
         return container.create_item(document, partition_key=partition_key)
+
+
+def _query_items(container: Any, *, query: str, parameters: list[dict[str, Any]]):
+    try:
+        return container.query_items(query=query, parameters=parameters, enable_cross_partition_query=True)
+    except TypeError:
+        return container.query_items(query=query, parameters=parameters)
 
 
 async def _conditional_replace(container: Any, item: dict[str, Any], *, partition_key: str, etag: str | None):

@@ -24,6 +24,7 @@ class FakeJobsContainer:
     def __init__(self) -> None:
         self.items: dict[tuple[str, str], dict] = {}
         self.fail_next_replace = False
+        self.query_count = 0
 
     def create_item(self, item, *, partition_key):
         key = (partition_key, item["id"])
@@ -52,6 +53,15 @@ class FakeJobsContainer:
         stored = dict(body)
         stored["_etag"] = "etag-2"
         self.items[key] = stored
+
+    def query_items(self, *, query, parameters, enable_cross_partition_query=False):
+        status = next((p["value"] for p in parameters if p["name"] == "@status"), None)
+        result = []
+        for item in self.items.values():
+            if item.get("status") == status:
+                self.query_count += 1
+                result.append(dict(item))
+        return result
 
 
 def _actor() -> ActorContext:
@@ -87,6 +97,8 @@ async def test_cosmos_job_store_creates_and_reads_accepted_job() -> None:
     stored = store.container.items[("tenant-1", envelope.job_id)]
     assert stored["payload_digest"]
     assert stored["payload_size_bytes"] > 0
+    assert stored["progress_budget"]["job_type"] == "ingest_session"
+    assert stored["progress_budget"]["max_completed_model_calls"] > 0
     assert "idem-1" not in str(stored)
 
 
@@ -192,6 +204,7 @@ async def test_cosmos_job_store_claim_complete_and_fail_are_fenced() -> None:
 
     assert claimed["status"] == "running"
     assert claimed["fencing_token"] == 1
+    assert claimed["last_progress_at"] is not None
     assert completed.status == "succeeded"
     with pytest.raises(JobClaimError):
         await store.claim_job(
@@ -241,6 +254,160 @@ async def test_cosmos_job_store_updates_stage_with_history_and_telemetry() -> No
     assert second.stage == "write_projection"
     assert second.stage_history[0]["stage"] == "extract_build"
     assert second.telemetry["total_calls"] == 3
+    assert second.progress_signature["stage"] == "write_projection"
+    assert second.progress_signature["completed_model_calls"] == 3
+    assert second.last_progress_at is not None
+
+
+@pytest.mark.asyncio
+async def test_cosmos_job_progress_signature_ignores_heartbeat_only_updates() -> None:
+    store = CosmosJobStore(container=FakeJobsContainer())
+    envelope = _envelope()
+    await store.create_accepted_job(envelope)
+    claimed = await store.claim_job(
+        tenant_id="tenant-1",
+        user_id="user-1",
+        job_id=envelope.job_id,
+        owner_id="worker-1",
+        ttl_seconds=60,
+    )
+
+    first = await store.update_stage(
+        tenant_id="tenant-1",
+        user_id="user-1",
+        job_id=envelope.job_id,
+        owner_id="worker-1",
+        fencing_token=claimed["fencing_token"],
+        stage="extract_build",
+        telemetry={"total_calls": 1, "extract_build_heartbeat_count": 1},
+    )
+    heartbeat = await store.update_stage(
+        tenant_id="tenant-1",
+        user_id="user-1",
+        job_id=envelope.job_id,
+        owner_id="worker-1",
+        fencing_token=claimed["fencing_token"],
+        stage="extract_build",
+        telemetry={"total_calls": 1, "extract_build_heartbeat_count": 2},
+    )
+    progressed = await store.update_stage(
+        tenant_id="tenant-1",
+        user_id="user-1",
+        job_id=envelope.job_id,
+        owner_id="worker-1",
+        fencing_token=claimed["fencing_token"],
+        stage="extract_build",
+        telemetry={"total_calls": 2, "extract_build_heartbeat_count": 3},
+    )
+
+    assert first.progress_signature == heartbeat.progress_signature
+    assert first.last_progress_at == heartbeat.last_progress_at
+    assert progressed.progress_signature["completed_model_calls"] == 2
+    assert progressed.last_progress_at is not None
+    assert progressed.last_progress_at != first.last_progress_at
+
+
+@pytest.mark.asyncio
+async def test_cosmos_job_progress_signature_ignores_counter_regression() -> None:
+    store = CosmosJobStore(container=FakeJobsContainer())
+    envelope = _envelope()
+    await store.create_accepted_job(envelope)
+    claimed = await store.claim_job(
+        tenant_id="tenant-1",
+        user_id="user-1",
+        job_id=envelope.job_id,
+        owner_id="worker-1",
+        ttl_seconds=60,
+    )
+
+    first = await store.update_stage(
+        tenant_id="tenant-1",
+        user_id="user-1",
+        job_id=envelope.job_id,
+        owner_id="worker-1",
+        fencing_token=claimed["fencing_token"],
+        stage="extract_build",
+        telemetry={"total_calls": 5},
+    )
+    regressed = await store.update_stage(
+        tenant_id="tenant-1",
+        user_id="user-1",
+        job_id=envelope.job_id,
+        owner_id="worker-1",
+        fencing_token=claimed["fencing_token"],
+        stage="extract_build",
+        telemetry={"total_calls": 2},
+    )
+
+    assert regressed.progress_signature["completed_model_calls"] == 5
+    assert regressed.last_progress_at == first.last_progress_at
+
+
+@pytest.mark.asyncio
+async def test_cosmos_job_store_reaper_fails_expired_stalled_jobs_only() -> None:
+    container = FakeJobsContainer()
+    store = CosmosJobStore(container=container)
+    stalled = _envelope()
+    active = build_write_job_envelope(
+        _actor(),
+        user_id="user-1",
+        session_id="session-2",
+        job_type="ingest_session",
+        idempotency_key="idem-2",
+        payload={"turns": [{"role": "user", "content": "hello"}]},
+    )
+    await store.create_accepted_job(stalled)
+    await store.create_accepted_job(active)
+    await store.claim_job(
+        tenant_id="tenant-1",
+        user_id="user-1",
+        job_id=stalled.job_id,
+        owner_id="worker-1",
+        ttl_seconds=60,
+    )
+    await store.claim_job(
+        tenant_id="tenant-1",
+        user_id="user-1",
+        job_id=active.job_id,
+        owner_id="worker-1",
+        ttl_seconds=60,
+    )
+    container.items[("tenant-1", stalled.job_id)]["last_progress_at"] = 100.0
+    container.items[("tenant-1", stalled.job_id)]["lease_expires_at_unix"] = 150.0
+    container.items[("tenant-1", stalled.job_id)]["progress_budget"]["stall_timeout_seconds"] = 60
+    container.items[("tenant-1", active.job_id)]["last_progress_at"] = 100.0
+    container.items[("tenant-1", active.job_id)]["lease_expires_at_unix"] = 1_000.0
+    container.items[("tenant-1", active.job_id)]["progress_budget"]["stall_timeout_seconds"] = 60
+
+    failed = await store.fail_stalled_jobs(now=200.0)
+
+    assert [job.job_id for job in failed] == [stalled.job_id]
+    assert container.items[("tenant-1", stalled.job_id)]["status"] == "failed"
+    assert container.items[("tenant-1", active.job_id)]["status"] == "running"
+
+
+@pytest.mark.asyncio
+async def test_cosmos_job_store_reaper_skips_etag_race() -> None:
+    container = FakeJobsContainer()
+    store = CosmosJobStore(container=container)
+    envelope = _envelope()
+    await store.create_accepted_job(envelope)
+    await store.claim_job(
+        tenant_id="tenant-1",
+        user_id="user-1",
+        job_id=envelope.job_id,
+        owner_id="worker-1",
+        ttl_seconds=60,
+    )
+    container.items[("tenant-1", envelope.job_id)]["last_progress_at"] = 100.0
+    container.items[("tenant-1", envelope.job_id)]["lease_expires_at_unix"] = 150.0
+    container.items[("tenant-1", envelope.job_id)]["progress_budget"]["stall_timeout_seconds"] = 60
+    container.fail_next_replace = True
+
+    failed = await store.fail_stalled_jobs(now=200.0)
+
+    assert failed == []
+    assert container.items[("tenant-1", envelope.job_id)]["status"] == "running"
 
 
 @pytest.mark.asyncio

@@ -98,6 +98,8 @@ class JobStatusResponse(BaseModel):
     stage_started_at: float | None = None
     stage_history: list[dict[str, Any]] = Field(default_factory=list)
     telemetry: dict[str, Any] = Field(default_factory=dict)
+    progress_signature: dict[str, Any] = Field(default_factory=dict)
+    last_progress_at: float | None = None
 
 
 class JobEventResponse(BaseModel):

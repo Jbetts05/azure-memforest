@@ -134,5 +134,23 @@ def record_model_call_failed(
         telemetry["in_flight_calls"] = max(0, int(telemetry.get("in_flight_calls", 0)) - 1)
 
 
+def update_model_telemetry_fields(telemetry: dict[str, Any], fields: dict[str, Any]) -> dict[str, Any]:
+    with _global_lock:
+        telemetry.update(fields)
+        return telemetry
+
+
+def snapshot_model_telemetry(telemetry: dict[str, Any]) -> dict[str, Any]:
+    with _global_lock:
+        snapshot = dict(telemetry)
+        calls = snapshot.get("calls")
+        if isinstance(calls, dict):
+            snapshot["calls"] = {
+                key: dict(value) if isinstance(value, dict) else value
+                for key, value in calls.items()
+            }
+        return snapshot
+
+
 def monotonic() -> float:
     return time.perf_counter()

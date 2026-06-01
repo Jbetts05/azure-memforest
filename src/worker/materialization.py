@@ -22,7 +22,8 @@ from src.forest.user_forest import ForestMaterializationSnapshot
 from src.service.jobs import WriteJobEnvelope
 from src.service.schemas import IngestSessionRequest
 from src.worker.consumer import PermanentHandlerError, TerminalHandlerError, TransientHandlerError
-from src.observability.model_telemetry import collect_model_telemetry
+from src.observability.model_telemetry import collect_model_telemetry, snapshot_model_telemetry, update_model_telemetry_fields
+from src.worker.progress import budget_for_envelope
 
 log = logging.getLogger(__name__)
 
@@ -288,32 +289,48 @@ class MemForestMaterializationHandler:
         metadata: dict[str, Any],
         telemetry: dict[str, Any],
     ) -> ForestMaterializationSnapshot:
-        stop_heartbeat = asyncio.Event()
-        heartbeat_task = asyncio.create_task(
-            self._heartbeat_extract_build(
+        stop_monitor = asyncio.Event()
+        ingest_task = asyncio.create_task(
+            asyncio.to_thread(
+                self._ingest_core.ingest_session,
+                session_id=session_id,
+                turns=turns,
+                metadata=metadata,
+            )
+        )
+        monitor_task = asyncio.create_task(
+            self._monitor_extract_build(
                 envelope,
                 fencing_token=fencing_token,
                 telemetry=telemetry,
-                stop_event=stop_heartbeat,
+                stop_event=stop_monitor,
             )
         )
         try:
-            return await asyncio.wait_for(
-                asyncio.to_thread(
-                    self._ingest_core.ingest_session,
-                    session_id=session_id,
-                    turns=turns,
-                    metadata=metadata,
-                ),
+            done, pending = await asyncio.wait(
+                {ingest_task, monitor_task},
                 timeout=self._config.ingest_timeout_seconds,
+                return_when=asyncio.FIRST_COMPLETED,
             )
+            if not done:
+                ingest_task.cancel()
+                monitor_task.cancel()
+                raise asyncio.TimeoutError()
+            if monitor_task in done:
+                # Cancelling asyncio.to_thread does not stop the underlying OS
+                # thread. Deployments that enable active budget aborts should
+                # also enable exit_on_ingest_timeout so the process is replaced
+                # before a ghost thread can write stale projections.
+                ingest_task.cancel()
+                await monitor_task
+            return await ingest_task
         finally:
-            stop_heartbeat.set()
-            heartbeat_task.cancel()
+            stop_monitor.set()
+            monitor_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
-                await heartbeat_task
+                await monitor_task
 
-    async def _heartbeat_extract_build(
+    async def _monitor_extract_build(
         self,
         envelope: WriteJobEnvelope,
         *,
@@ -321,9 +338,12 @@ class MemForestMaterializationHandler:
         telemetry: dict[str, Any],
         stop_event: asyncio.Event,
     ) -> None:
-        interval = max(1.0, float(self._config.extract_heartbeat_seconds))
+        interval = max(0.01, float(self._config.extract_heartbeat_seconds))
         stack_dump_interval = max(0.0, float(self._config.extract_stack_dump_seconds))
         next_stack_dump = time.monotonic() + stack_dump_interval if stack_dump_interval > 0 else 0.0
+        budget = budget_for_envelope(envelope)
+        last_signature = _telemetry_progress_signature(telemetry)
+        last_progress_at = time.monotonic()
         await self._update_job_stage(
             envelope,
             fencing_token=fencing_token,
@@ -336,6 +356,21 @@ class MemForestMaterializationHandler:
                 await asyncio.wait_for(stop_event.wait(), timeout=interval)
                 return
             except asyncio.TimeoutError:
+                signature = _telemetry_progress_signature(telemetry)
+                if signature != last_signature:
+                    last_signature = signature
+                    last_progress_at = time.monotonic()
+                completed_calls = int(signature.get("completed_model_calls") or 0)
+                if completed_calls > budget.max_completed_model_calls:
+                    raise TransientHandlerError(
+                        f"ingest_session exceeded model-call budget: {completed_calls}>{budget.max_completed_model_calls}",
+                        exit_code=75 if self._config.exit_on_ingest_timeout else None,
+                    )
+                if time.monotonic() - last_progress_at >= budget.stall_timeout_seconds:
+                    raise TransientHandlerError(
+                        f"ingest_session stalled with no real progress for {budget.stall_timeout_seconds:.0f}s",
+                        exit_code=75 if self._config.exit_on_ingest_timeout else None,
+                    )
                 if stack_dump_interval > 0 and time.monotonic() >= next_stack_dump:
                     log.warning(
                         "materialization_extract_build_stack_dump",
@@ -1014,9 +1049,29 @@ def _is_factless_snapshot(snapshot: ForestMaterializationSnapshot) -> bool:
 
 
 def _record_extract_heartbeat(telemetry: dict[str, Any]) -> dict[str, Any]:
-    telemetry["extract_build_heartbeat_count"] = int(telemetry.get("extract_build_heartbeat_count", 0)) + 1
-    telemetry["extract_build_last_heartbeat_unix"] = time.time()
-    return telemetry
+    snapshot = snapshot_model_telemetry(telemetry)
+    return update_model_telemetry_fields(
+        telemetry,
+        {
+            "extract_build_heartbeat_count": int(snapshot.get("extract_build_heartbeat_count", 0)) + 1,
+            "extract_build_last_heartbeat_unix": time.time(),
+        },
+    )
+
+
+def _telemetry_progress_signature(telemetry: dict[str, Any]) -> dict[str, int]:
+    telemetry = snapshot_model_telemetry(telemetry)
+    calls = telemetry.get("calls") if isinstance(telemetry, dict) else {}
+    embedded_items = 0
+    if isinstance(calls, dict):
+        for entry in calls.values():
+            if isinstance(entry, dict) and entry.get("operation") == "embedding":
+                embedded_items += int(entry.get("item_count") or 0)
+    return {
+        "completed_model_calls": int(telemetry.get("total_calls") or 0),
+        "embedded_items": embedded_items,
+        "durable_writes": int(telemetry.get("durable_write_count") or 0),
+    }
 
 
 def _extractable_turns(turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
