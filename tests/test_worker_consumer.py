@@ -358,11 +358,11 @@ async def test_worker_can_settle_message_before_long_handler() -> None:
     [
         (TerminalHandlerError("filtered", reason="content_filter"), "failed"),
         (PermanentHandlerError("bad"), "failed"),
-        (TransientHandlerError("try again"), "running"),
-        (RuntimeError("boom"), "running"),
+        (TransientHandlerError("try again"), "failed"),
+        (RuntimeError("boom"), "failed"),
     ],
 )
-async def test_worker_early_settle_does_not_resettle_on_handler_errors(error, expected_status) -> None:
+async def test_worker_early_settle_marks_handler_errors_failed_without_resettling(error, expected_status) -> None:
     envelope = _envelope()
     store = await _store_with_job(envelope)
     worker = ServiceBusWriteWorker(

@@ -153,6 +153,9 @@ class ServiceBusWriteWorker:
                 exc_info=True,
                 extra={"job_id": envelope.job_id, "delivery_count": getattr(message, "delivery_count", None)},
             )
+            if message_settled:
+                await self._fail_settled_job(envelope, claimed, reason="transient_handler_error", error=str(exc))
+                return WorkerOutcome(action="complete", reason="transient_handler_error")
             if _is_final_delivery(message):
                 if not message_settled:
                     await self._fail_and_dead_letter_final(message, envelope, claimed, reason="transient_handler_error", error=str(exc))
@@ -165,6 +168,14 @@ class ServiceBusWriteWorker:
                 "worker_unhandled_handler_error",
                 extra={"job_id": envelope.job_id, "delivery_count": getattr(message, "delivery_count", None)},
             )
+            if message_settled:
+                await self._fail_settled_job(
+                    envelope,
+                    claimed,
+                    reason="unhandled_handler_error",
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+                return WorkerOutcome(action="complete", reason="unhandled_handler_error")
             if _is_final_delivery(message):
                 if not message_settled:
                     await self._fail_and_dead_letter_final(message, envelope, claimed, reason="unhandled_handler_error", error=f"{type(exc).__name__}: {exc}")
@@ -221,6 +232,29 @@ class ServiceBusWriteWorker:
                 extra={"job_id": envelope.job_id, "delivery_count": getattr(message, "delivery_count", None)},
             )
         await _dead_letter(message, reason=reason, description=error or reason)
+
+    async def _fail_settled_job(
+        self,
+        envelope: WriteJobEnvelope,
+        claimed: dict[str, Any],
+        *,
+        reason: str,
+        error: str,
+    ) -> None:
+        try:
+            await self._job_store.fail_job(
+                tenant_id=envelope.tenant_id,
+                user_id=envelope.user_id,
+                job_id=envelope.job_id,
+                owner_id=self._owner_id,
+                fencing_token=int(claimed["fencing_token"]),
+                error=error or reason,
+            )
+        except Exception:
+            log.exception(
+                "worker_fail_settled_job_failed",
+                extra={"job_id": envelope.job_id, "reason": reason},
+            )
 
 
 def parse_write_job_envelope(body: bytes | str) -> WriteJobEnvelope:
