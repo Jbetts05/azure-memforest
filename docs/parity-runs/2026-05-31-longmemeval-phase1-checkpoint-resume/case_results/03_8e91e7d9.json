@@ -1929,12 +1929,12 @@
       "job_id": "job_a9852797cdd35dcf837ab02ac8687ab05576d060fa93f177440eb11568d0d3b9",
       "status": {
         "job_id": "job_a9852797cdd35dcf837ab02ac8687ab05576d060fa93f177440eb11568d0d3b9",
-        "status": "running",
+        "status": "failed",
         "tenant_id": "11111111-1111-4111-8111-111111111111",
         "user_id": "benchmark-phase1-03-8e91e7d9",
         "submitted_at": 1780307027.7109983,
-        "completed_at": null,
-        "error": null,
+        "completed_at": 1780319304.2173357,
+        "error": "manual_kill_requested: wedged benchmark session9 job killed after prolonged extract_build hang; no manifest committed.",
         "stage": "extract_build",
         "stage_started_at": 1780307037.7695904,
         "stage_history": [
@@ -1998,6 +1998,101 @@
             ]
           }
         ]
+      },
+      "reconciled_from_api": true
+    },
+    {
+      "step": "resume",
+      "completed_indices": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "skipped_source_session_ids": [
+        "44fc2b1e",
+        "da71721f"
+      ],
+      "timestamp_unix": 1780322573.3733299
+    },
+    {
+      "step": "ingest",
+      "index": 9,
+      "source_session_id": "answer_477ae455_1",
+      "job_id": "job_ca8405543073c9e3e7a2c11a9a55346c5fd8d64f5ae390d87b9d16ae7f04bc9f",
+      "status": {
+        "job_id": "job_ca8405543073c9e3e7a2c11a9a55346c5fd8d64f5ae390d87b9d16ae7f04bc9f",
+        "status": "running",
+        "tenant_id": "11111111-1111-4111-8111-111111111111",
+        "user_id": "benchmark-phase1-03-8e91e7d9",
+        "submitted_at": 1780322574.3854783,
+        "completed_at": null,
+        "error": null,
+        "stage": "extract_build",
+        "stage_started_at": 1780322584.0588918,
+        "stage_history": [
+          {
+            "stage": "hydrate",
+            "started_at": 1780322575.6567137,
+            "completed_at": 1780322584.0588918,
+            "detail": "Loading latest committed forest."
+          }
+        ],
+        "telemetry": {}
+      },
+      "elapsed_sec": 614.7325313091278,
+      "job_events": [
+        {
+          "event_type": "accepted",
+          "timestamp_unix": 1780322574.3854783,
+          "status": "accepted",
+          "detail": null
+        },
+        {
+          "event_type": "running",
+          "timestamp_unix": null,
+          "status": "running",
+          "detail": "Job has been claimed by a worker."
+        },
+        {
+          "event_type": "stage:hydrate",
+          "timestamp_unix": 1780322575.6567137,
+          "status": "completed",
+          "detail": "Loading latest committed forest."
+        },
+        {
+          "event_type": "stage:extract_build",
+          "timestamp_unix": 1780322584.0588918,
+          "status": "running",
+          "detail": "Current job stage."
+        }
+      ],
+      "wait_info": {
+        "timeout_reason": "idle_timeout",
+        "progress_events": [
+          {
+            "elapsed_sec": 0.0,
+            "fingerprint": [
+              "running",
+              "hydrate",
+              0,
+              null,
+              null
+            ]
+          },
+          {
+            "elapsed_sec": 12.06558871269226,
+            "fingerprint": [
+              "running",
+              "extract_build",
+              1,
+              null,
+              null
+            ]
+          }
+        ]
       }
     }
   ],
@@ -2034,10 +2129,10 @@
   "residue_probe": {
     "question": "How many tops have I bought from H&M so far?",
     "response": {
-      "query_id": "24d27595-30be-48a7-8691-f1368cd61205",
+      "query_id": "77548137-addc-4dae-b011-6b196a3db6ae",
       "status": "succeeded",
       "answer": "I don't know",
-      "reason": "The provided memory contains no information about buying tops from H&M.",
+      "reason": "The provided memory context contains no information about any tops purchased from H&M.",
       "facts": [
         {
           "fact_id": "fact_928f7ff471e8162d",
@@ -2069,7 +2164,7 @@
       ]
     }
   },
-  "checkpoint_resume_count": 7,
+  "checkpoint_resume_count": 8,
   "stale_job_reaps": [
     {
       "source_session_id": "answer_477ae455_1",
@@ -2094,6 +2189,15 @@
       "job_id": "job_a9852797cdd35dcf837ab02ac8687ab05576d060fa93f177440eb11568d0d3b9",
       "reason": "manual_user_requested_wedged_extract_build",
       "timestamp_unix": 1780319304.2173357,
+      "action": "marked_failed_and_released_user_lease",
+      "manifest_rows_for_job": 0
+    },
+    {
+      "source_session_id": "answer_477ae455_1",
+      "answer_bearing": true,
+      "job_id": "job_ca8405543073c9e3e7a2c11a9a55346c5fd8d64f5ae390d87b9d16ae7f04bc9f",
+      "reason": "scaled_zero_wedged_extract_build_no_heartbeat",
+      "timestamp_unix": 1780324056.7072582,
       "action": "marked_failed_and_released_user_lease",
       "manifest_rows_for_job": 0
     }

@@ -89,6 +89,9 @@ def progress_fingerprint(status: dict) -> tuple:
         status.get("stage"),
         len(status.get("stage_history") or []),
         telemetry.get("total_calls"),
+        telemetry.get("total_started_calls"),
+        telemetry.get("in_flight_calls"),
+        telemetry.get("extract_build_heartbeat_count"),
         telemetry.get("total_latency_ms"),
     )
 
@@ -186,6 +189,27 @@ def queue_state() -> dict:
     return json.loads(raw)
 
 
+def turns_for_ingest(session: dict) -> tuple[list[dict], dict]:
+    """Store assistant transcript turns, but exclude them from extraction for Phase 1."""
+    shaped: list[dict] = []
+    assistant_skip_count = 0
+    user_extract_count = 0
+    for turn in session.get("turns") or []:
+        copied = dict(turn)
+        metadata = dict(copied.get("metadata") or {})
+        if copied.get("role") == "assistant":
+            metadata["skip_extraction"] = True
+            assistant_skip_count += 1
+        elif copied.get("role") == "user":
+            user_extract_count += 1
+        copied["metadata"] = metadata
+        shaped.append(copied)
+    return shaped, {
+        "assistant_turns_marked_skip_extraction": assistant_skip_count,
+        "user_turns_extractable": user_extract_count,
+    }
+
+
 def residue_probe(question: str, *, user_id: str) -> dict:
     try:
         return api_post(f"/v1/users/{user_id}/query", {"question": question, "top_k": 3, "max_facts": 3, "trace_requested": False}, user_id=user_id)
@@ -256,9 +280,18 @@ def run_case(case: dict, index: int, previous_probe: str | None) -> dict:
             save(out, result)
             return result
         attempt = sum(1 for event in result.get("events", []) if event.get("step") == "ingest" and event.get("index") == session_index) + 1
+        ingest_turns, input_shaping = turns_for_ingest(session)
         ingest = api_post(
             f"/v1/users/{user_id}/sessions/{session['session_id']}-{uuid.uuid4().hex}:ingest",
-            {"turns": session["turns"], "metadata": {"source": "phase1-calibration", **session.get("metadata", {})}},
+            {
+                "turns": ingest_turns,
+                "metadata": {
+                    "source": "phase1-calibration",
+                    "assistant_transcript_extraction_policy": "skip_assistant_turns",
+                    **input_shaping,
+                    **session.get("metadata", {}),
+                },
+            },
             user_id=user_id,
             idem=f"phase1-ingest-{case_id}-{session_index}-attempt-{attempt}",
         )
@@ -275,6 +308,7 @@ def run_case(case: dict, index: int, previous_probe: str | None) -> dict:
                 "index": session_index,
                 "source_session_id": session["source_session_id"],
                 "job_id": ingest["job_id"],
+                "input_shaping": input_shaping,
                 "status": ingest_status,
                 "elapsed_sec": ingest_elapsed,
                 "job_events": job_events,
