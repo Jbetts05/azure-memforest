@@ -89,6 +89,8 @@ class MaterializationHandlerConfig:
     lease_renewal_seconds: float = 60.0
     clear_phase_timeout_seconds: float = 180.0
     clear_optional_timeout_seconds: float = 30.0
+    ingest_timeout_seconds: float = 1800.0
+    extract_heartbeat_seconds: float = 60.0
 
 
 class MemForestMaterializationHandler:
@@ -157,12 +159,18 @@ class MemForestMaterializationHandler:
             await self._update_job_stage(envelope, fencing_token=fencing_token, stage="extract_build", detail="Extracting facts, deduping, and rebuilding MemTrees.", telemetry=telemetry)
             try:
                 with collect_model_telemetry() as telemetry:
-                    snapshot = await asyncio.to_thread(
-                        self._ingest_core.ingest_session,
-                        session_id=envelope.session_id,
+                    snapshot = await self._run_ingest_session(
+                        envelope,
+                        fencing_token=fencing_token,
                         turns=_extractable_turns(turns),
                         metadata=request.metadata,
+                        telemetry=telemetry,
+                        session_id=envelope.session_id,
                     )
+            except asyncio.TimeoutError as exc:
+                raise TransientHandlerError(
+                    f"ingest_session timed out after {self._config.ingest_timeout_seconds:.0f}s"
+                ) from exc
             except Exception as exc:
                 if _is_content_filter_error(exc):
                     raise TerminalHandlerError(str(exc), reason="content_filter") from exc
@@ -250,6 +258,70 @@ class MemForestMaterializationHandler:
             )
         except Exception:
             log.exception("failed to update materialization job stage", extra={"job_id": envelope.job_id, "stage": stage})
+
+    async def _run_ingest_session(
+        self,
+        envelope: WriteJobEnvelope,
+        *,
+        fencing_token: int,
+        session_id: str,
+        turns: list[dict[str, Any]],
+        metadata: dict[str, Any],
+        telemetry: dict[str, Any],
+    ) -> ForestMaterializationSnapshot:
+        stop_heartbeat = asyncio.Event()
+        heartbeat_task = asyncio.create_task(
+            self._heartbeat_extract_build(
+                envelope,
+                fencing_token=fencing_token,
+                telemetry=telemetry,
+                stop_event=stop_heartbeat,
+            )
+        )
+        try:
+            return await asyncio.wait_for(
+                asyncio.to_thread(
+                    self._ingest_core.ingest_session,
+                    session_id=session_id,
+                    turns=turns,
+                    metadata=metadata,
+                ),
+                timeout=self._config.ingest_timeout_seconds,
+            )
+        finally:
+            stop_heartbeat.set()
+            heartbeat_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await heartbeat_task
+
+    async def _heartbeat_extract_build(
+        self,
+        envelope: WriteJobEnvelope,
+        *,
+        fencing_token: int,
+        telemetry: dict[str, Any],
+        stop_event: asyncio.Event,
+    ) -> None:
+        interval = max(1.0, float(self._config.extract_heartbeat_seconds))
+        await self._update_job_stage(
+            envelope,
+            fencing_token=fencing_token,
+            stage="extract_build",
+            detail="Extracting facts, deduping, and rebuilding MemTrees.",
+            telemetry=telemetry,
+        )
+        while True:
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=interval)
+                return
+            except asyncio.TimeoutError:
+                await self._update_job_stage(
+                    envelope,
+                    fencing_token=fencing_token,
+                    stage="extract_build",
+                    detail="Extracting facts, deduping, and rebuilding MemTrees.",
+                    telemetry=telemetry,
+                )
 
     async def _handle_delete(self, envelope: WriteJobEnvelope) -> None:
         if not envelope.session_id:

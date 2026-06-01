@@ -169,6 +169,8 @@ def fixed_materialization_config_factory(
     prompt_config_hash: str = "unknown",
     lease_ttl_seconds: int = 300,
     lease_renewal_seconds: float = 60.0,
+    ingest_timeout_seconds: float = 1800.0,
+    extract_heartbeat_seconds: float = 60.0,
 ) -> Callable[[WriteJobEnvelope], MaterializationHandlerConfig]:
     def build(envelope: WriteJobEnvelope) -> MaterializationHandlerConfig:
         return MaterializationHandlerConfig(
@@ -178,6 +180,8 @@ def fixed_materialization_config_factory(
             prompt_config_hash=prompt_config_hash,
             lease_ttl_seconds=lease_ttl_seconds,
             lease_renewal_seconds=lease_renewal_seconds,
+            ingest_timeout_seconds=ingest_timeout_seconds,
+            extract_heartbeat_seconds=extract_heartbeat_seconds,
         )
 
     return build
@@ -240,6 +244,8 @@ def build_worker_runtime_from_env(environ: dict[str, str] | None = None) -> Work
             prompt_config_hash=_prompt_config_hash(values),
             lease_ttl_seconds=int(values.get("AZURE_MEMFOREST_USER_LEASE_TTL_SECONDS", "300")),
             lease_renewal_seconds=float(values.get("AZURE_MEMFOREST_USER_LEASE_RENEWAL_SECONDS", "60")),
+            ingest_timeout_seconds=float(values.get("AZURE_MEMFOREST_INGEST_TIMEOUT_SECONDS", "1800")),
+            extract_heartbeat_seconds=float(values.get("AZURE_MEMFOREST_EXTRACT_HEARTBEAT_SECONDS", "60")),
         ),
     )
     worker = ServiceBusWriteWorker(

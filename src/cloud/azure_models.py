@@ -10,7 +10,9 @@ from openai import AzureOpenAI
 
 from src.api.json_parse import parse_json_object
 from src.cloud.config import AzureOpenAIConfig
-from src.observability.model_telemetry import record_model_call
+from src.observability.model_telemetry import record_model_call, record_model_call_failed, record_model_call_started
+
+DEFAULT_MODEL_TIMEOUT_SECONDS = 120.0
 
 
 class AzureOpenAIModelClient:
@@ -56,7 +58,7 @@ class AzureOpenAIModelClient:
             "temperature": 0.0 if temperature is None else temperature,
             "top_p": 1.0 if top_p is None else top_p,
             "response_format": {"type": "json_object"},
-            "timeout": timeout,
+            "timeout": _request_timeout(timeout),
         }
         if _uses_max_completion_tokens(deployment):
             token_limit = 4096 if max_tokens is None else max_tokens
@@ -65,7 +67,18 @@ class AzureOpenAIModelClient:
             token_limit = 1024 if max_tokens is None else max_tokens
             kwargs["max_tokens"] = token_limit
         start = time.perf_counter()
-        response = self.client.chat.completions.create(**kwargs)
+        record_model_call_started(role=role, deployment=deployment, operation="chat")
+        try:
+            response = self.client.chat.completions.create(**kwargs)
+        except Exception as exc:
+            record_model_call_failed(
+                role=role,
+                deployment=deployment,
+                operation="chat",
+                elapsed_seconds=time.perf_counter() - start,
+                error_type=type(exc).__name__,
+            )
+            raise
         record_model_call(
             role=role,
             deployment=deployment,
@@ -84,10 +97,28 @@ class AzureOpenAIModelClient:
         for index in range(0, len(texts), batch_size):
             batch = texts[index : index + batch_size]
             start = time.perf_counter()
-            response = self.client.embeddings.create(
-                model=self.config.embedding_deployment,
-                input=batch,
+            record_model_call_started(
+                role="embedding",
+                deployment=self.config.embedding_deployment,
+                operation="embedding",
+                item_count=len(batch),
             )
+            try:
+                response = self.client.embeddings.create(
+                    model=self.config.embedding_deployment,
+                    input=batch,
+                    timeout=_request_timeout(None),
+                )
+            except Exception as exc:
+                record_model_call_failed(
+                    role="embedding",
+                    deployment=self.config.embedding_deployment,
+                    operation="embedding",
+                    elapsed_seconds=time.perf_counter() - start,
+                    error_type=type(exc).__name__,
+                    item_count=len(batch),
+                )
+                raise
             record_model_call(
                 role="embedding",
                 deployment=self.config.embedding_deployment,
@@ -139,3 +170,12 @@ class AzureOpenAIModelClient:
 
 def _uses_max_completion_tokens(deployment_name: str) -> bool:
     return deployment_name.lower().replace("_", "-").startswith("gpt-5")
+
+
+def _request_timeout(timeout: float | None) -> float:
+    if timeout is not None:
+        return timeout
+    value = os.getenv("AZURE_MEMFOREST_MODEL_TIMEOUT_SECONDS", "").strip()
+    if value:
+        return float(value)
+    return DEFAULT_MODEL_TIMEOUT_SECONDS

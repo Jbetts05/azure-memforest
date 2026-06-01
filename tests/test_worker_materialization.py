@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 import asyncio
+import time
 
 from src.build.tree_types import MemTree, MemTreeNode, SessionLeaf
 from src.cloud.cosmos_leases import LeaseConflict
@@ -317,18 +318,29 @@ class HangingRecall:
         time.sleep(5)
 
 
+class FakeJobStore:
+    def __init__(self):
+        self.stage_updates = []
+
+    async def update_stage(self, **kwargs):
+        self.stage_updates.append(kwargs)
+
+
 class FakeIngestCore:
-    def __init__(self, snapshot, *, delete_missing=False):
+    def __init__(self, snapshot, *, delete_missing=False, ingest_delay=0.0):
         self.snapshot = snapshot
         self.called = False
         self.deleted = False
         self.delete_missing = delete_missing
         self.hydrated_from = None
         self.ingested_turns = None
+        self.ingest_delay = ingest_delay
 
     def ingest_session(self, *, session_id, turns, metadata):
         self.called = True
         self.ingested_turns = turns
+        if self.ingest_delay:
+            time.sleep(self.ingest_delay)
         return self.snapshot
 
     def delete_session(self, *, session_id):
@@ -419,7 +431,7 @@ def _envelope(job_type="ingest_session"):
     )
 
 
-def _handler(*, manifest_store=None, lease_store=None, node_store=None, calls=None, core=None, deletion_log=None):
+def _handler(*, manifest_store=None, lease_store=None, node_store=None, calls=None, core=None, deletion_log=None, job_store=None, config=None):
     calls = calls if calls is not None else []
     return MemForestMaterializationHandler(
         stores=MaterializationStores(
@@ -435,9 +447,11 @@ def _handler(*, manifest_store=None, lease_store=None, node_store=None, calls=No
             summary_cache=RecordingStore(calls, "summary_cache"),
             snapshot_store=RecordingStore(calls, "snapshot"),
             deletion_log=deletion_log,
+            job_store=job_store,
         ),
         ingest_core=core or FakeIngestCore(_snapshot()),
-        config=MaterializationHandlerConfig(owner_id="worker-1", embedding_model_version="embed-v1", code_version="test-sha", prompt_config_hash="prompt-hash", lease_renewal_seconds=9999),
+        config=config
+        or MaterializationHandlerConfig(owner_id="worker-1", embedding_model_version="embed-v1", code_version="test-sha", prompt_config_hash="prompt-hash", lease_renewal_seconds=9999),
     )
 
 
@@ -505,6 +519,49 @@ async def test_materialization_handler_stores_assistant_turns_but_skips_extracti
     assert len(core.ingested_turns) == 1
     assert core.ingested_turns[0]["role"] == "user"
     assert core.ingested_turns[0]["content"] == "I work at OpenAI as an FDE"
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_heartbeats_during_extract_build() -> None:
+    job_store = FakeJobStore()
+    handler = _handler(
+        core=FakeIngestCore(_factless_snapshot(), ingest_delay=0.2),
+        job_store=job_store,
+        config=MaterializationHandlerConfig(
+            owner_id="worker-1",
+            embedding_model_version="embed-v1",
+            code_version="test-sha",
+            prompt_config_hash="prompt-hash",
+            lease_renewal_seconds=9999,
+            extract_heartbeat_seconds=0.01,
+        ),
+    )
+
+    await handler.handle(_envelope(), {"fencing_token": 1})
+
+    extract_updates = [update for update in job_store.stage_updates if update["stage"] == "extract_build"]
+    assert len(extract_updates) >= 2
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_times_out_ingest_session() -> None:
+    lease_store = FakeLeaseStore()
+    handler = _handler(
+        lease_store=lease_store,
+        core=FakeIngestCore(_snapshot(), ingest_delay=0.1),
+        config=MaterializationHandlerConfig(
+            owner_id="worker-1",
+            embedding_model_version="embed-v1",
+            code_version="test-sha",
+            prompt_config_hash="prompt-hash",
+            lease_renewal_seconds=9999,
+            ingest_timeout_seconds=0.01,
+        ),
+    )
+
+    with pytest.raises(TransientHandlerError, match="ingest_session timed out"):
+        await handler.handle(_envelope(), {"fencing_token": 1})
+    assert lease_store.released is True
 
 
 @pytest.mark.asyncio

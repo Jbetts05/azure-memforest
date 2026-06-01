@@ -111,6 +111,24 @@ def test_azure_model_client_routes_role_to_deployment_and_parses_json() -> None:
     assert fake_client.chat.completions.last_model == "planner-deployment"
     assert fake_client.chat.completions.last_kwargs["max_tokens"] == 1024
     assert "max_completion_tokens" not in fake_client.chat.completions.last_kwargs
+    assert fake_client.chat.completions.last_kwargs["timeout"] == 120.0
+
+
+def test_azure_model_client_preserves_explicit_timeout() -> None:
+    fake_client = _FakeClient()
+    config = AzureOpenAIConfig(
+        endpoint="https://example.openai.azure.com",
+        api_version="2024-10-21",
+        chat_deployments={
+            "planner": AzureModelDeployment(role="planner", deployment_name="planner-deployment"),
+        },
+        use_managed_identity=True,
+    )
+    client = AzureOpenAIModelClient(config, openai_client=fake_client)
+
+    client.generate_json(system_prompt="system", user_prompt="user", model_name="planner", timeout=7.5)
+
+    assert fake_client.chat.completions.last_kwargs["timeout"] == 7.5
 
 
 def test_azure_model_client_uses_max_completion_tokens_for_gpt5_deployments() -> None:
@@ -193,6 +211,8 @@ def test_azure_model_client_records_model_call_telemetry() -> None:
         client.embed_texts(["a"])
 
     assert telemetry["total_calls"] == 2
+    assert telemetry["total_started_calls"] == 2
+    assert telemetry["in_flight_calls"] == 0
     assert telemetry["calls"]["chat:extraction:fast-memory"]["count"] == 1
     assert telemetry["calls"]["embedding:embedding:embedding-deployment"]["item_count"] == 1
 
