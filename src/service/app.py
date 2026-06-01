@@ -19,6 +19,7 @@ from src.cloud.cosmos_traces import CosmosQueryTraceService, trace_recorder_from
 from src.cloud.ui_read_service import CloudUiReadService
 from src.service.entra_auth import entra_auth_provider_from_env
 from src.service.jobs import JobRecordingCommandService
+from src.service.jobs import durable_command_service_from_env
 from src.service.jobs import service_bus_command_service_from_env
 from src.service.middleware import REQUEST_ID_HEADER, RequestIdMiddleware
 from src.service.readiness import ReadinessCheck, default_not_configured_checks, evaluate_readiness
@@ -64,7 +65,7 @@ def create_app(
         )
     app.state.auth_provider = auth_provider or _auth_provider_from_env(os.environ)
     job_store = job_store_from_env(os.environ)
-    command_service = service_bus_command_service_from_env(os.environ)
+    command_service = _memory_command_service_from_env(os.environ)
     app.state.memory_command_service = (
         JobRecordingCommandService(command_service, job_store)
         if command_service is not None and job_store is not None
@@ -137,6 +138,18 @@ def create_app(
         }
 
     return app
+
+
+def _memory_command_service_from_env(environ: dict[str, str]):
+    mode = str(environ.get("AZURE_MEMFOREST_DISPATCH_MODE", "servicebus")).strip().lower()
+    if mode == "durable":
+        durable = durable_command_service_from_env(environ)
+        if durable is not None:
+            return durable
+        log.warning("durable dispatch requested but durable start URL is not configured; falling back to Service Bus")
+    elif mode != "servicebus":
+        log.warning("unknown write dispatch mode; falling back to Service Bus", extra={"dispatch_mode": mode})
+    return service_bus_command_service_from_env(environ)
 
 
 def _default_readiness_checks() -> list[ReadinessCheck]:

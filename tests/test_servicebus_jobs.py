@@ -4,9 +4,12 @@ import pytest
 
 from src.service.auth import ActorContext, TenantContext
 from src.service.jobs import (
+    DurableJobStarter,
+    DurableMemoryCommandService,
     ServiceBusJobPublisher,
     ServiceBusMemoryCommandService,
     build_write_job_envelope,
+    durable_command_service_from_env,
     service_bus_command_service_from_env,
 )
 from src.service.schemas import IngestSessionRequest, TurnInput
@@ -34,6 +37,31 @@ class FakeServiceBusClient:
         return self.sender
 
     async def close(self) -> None:
+        self.closed = True
+
+
+class FakeResponse:
+    def __init__(self, status_code=200) -> None:
+        self.status_code = status_code
+        self.raise_for_status_called = False
+
+    def raise_for_status(self) -> None:
+        self.raise_for_status_called = True
+        if self.status_code >= 400:
+            raise RuntimeError("raw-url https://functions.example/start?code=secret")
+
+
+class FakeHttpClient:
+    def __init__(self) -> None:
+        self.posts = []
+        self.closed = False
+        self.response = FakeResponse()
+
+    async def post(self, url, *, json, headers, timeout):
+        self.posts.append({"url": url, "json": json, "headers": headers, "timeout": timeout})
+        return self.response
+
+    async def aclose(self):
         self.closed = True
 
 
@@ -158,6 +186,103 @@ def test_service_bus_command_service_from_env_requires_all_settings() -> None:
         },
         servicebus_client=FakeServiceBusClient(),
     ) is not None
+
+
+@pytest.mark.asyncio
+async def test_durable_starter_posts_write_envelope() -> None:
+    http_client = FakeHttpClient()
+    starter = DurableJobStarter(
+        start_url="https://functions.example/start",
+        bearer_token="token",
+        http_client=http_client,
+    )
+    envelope = build_write_job_envelope(
+        _actor(),
+        user_id="user-1",
+        session_id="session-1",
+        job_type="ingest_session",
+        idempotency_key="idem-1",
+        payload={"turns": []},
+    )
+
+    await starter.submit_job(envelope)
+    await starter.close()
+
+    post = http_client.posts[0]
+    assert post["url"] == "https://functions.example/start"
+    assert post["json"]["job_id"] == envelope.job_id
+    assert post["json"]["instance_id"] == envelope.job_id
+    assert post["headers"]["x-ms-durable-instance-id"] == envelope.job_id
+    assert post["headers"]["x-functions-key"] == "token"
+    assert http_client.response.raise_for_status_called is True
+    assert http_client.closed is True
+
+
+def test_durable_command_service_from_env_requires_start_url() -> None:
+    assert durable_command_service_from_env({}) is None
+    service = durable_command_service_from_env(
+        {"AZURE_MEMFOREST_DURABLE_START_URL": "https://functions.example/start"},
+        http_client=FakeHttpClient(),
+    )
+    assert isinstance(service, DurableMemoryCommandService)
+
+
+@pytest.mark.asyncio
+async def test_durable_starter_tolerates_duplicate_instance_conflict() -> None:
+    http_client = FakeHttpClient()
+    http_client.response = FakeResponse(status_code=409)
+    starter = DurableJobStarter(start_url="https://functions.example/start", http_client=http_client)
+    envelope = build_write_job_envelope(
+        _actor(),
+        user_id="user-1",
+        session_id="session-1",
+        job_type="ingest_session",
+        idempotency_key="idem-1",
+        payload={"turns": []},
+    )
+
+    await starter.submit_job(envelope)
+
+    assert http_client.posts[0]["json"]["instance_id"] == envelope.job_id
+
+
+@pytest.mark.asyncio
+async def test_durable_starter_sanitizes_start_failures() -> None:
+    http_client = FakeHttpClient()
+    http_client.response = FakeResponse(status_code=500)
+    starter = DurableJobStarter(start_url="https://functions.example/start?code=secret", http_client=http_client)
+    envelope = build_write_job_envelope(
+        _actor(),
+        user_id="user-1",
+        session_id="session-1",
+        job_type="ingest_session",
+        idempotency_key="idem-1",
+        payload={"turns": []},
+    )
+
+    with pytest.raises(RuntimeError, match="status 500") as exc_info:
+        await starter.submit_job(envelope)
+
+    assert "secret" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_durable_starter_rejects_oversized_payloads() -> None:
+    http_client = FakeHttpClient()
+    starter = DurableJobStarter(start_url="https://functions.example/start", http_client=http_client)
+    envelope = build_write_job_envelope(
+        _actor(),
+        user_id="user-1",
+        session_id="session-1",
+        job_type="ingest_session",
+        idempotency_key="idem-1",
+        payload={"turns": [{"role": "user", "content": "x" * (70 * 1024)}]},
+    )
+
+    with pytest.raises(ValueError, match="Durable start payload"):
+        await starter.submit_job(envelope)
+
+    assert http_client.posts == []
 
 
 @pytest.mark.asyncio

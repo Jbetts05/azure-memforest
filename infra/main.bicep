@@ -29,6 +29,9 @@ param maxReplicas int = 1
 @description('Deploy the no-ingress worker Container App. Keep false until the live worker factory is wired and approved.')
 param deployWorker bool = false
 
+@description('Deploy the dormant Durable Functions write orchestrator scaffold. Keep false until the orchestrator package is deployed and validated.')
+param deployDurableOrchestrator bool = false
+
 @description('Allow the worker entrypoint to connect to Service Bus. Keep false until smoke testing is approved.')
 param workerFactoryReady bool = false
 
@@ -137,6 +140,9 @@ var cosmosDataContributorRoleDefinitionId = '${cosmosAccount.id}/sqlRoleDefiniti
 var searchServiceContributorRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7ca78c08-252a-4471-8644-bb5ff32d4ba0')
 var searchIndexDataContributorRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '8ebe5a00-799e-43f5-93ac-243d3dce84a7')
 var storageBlobDataContributorRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
+var storageBlobDataOwnerRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b7e6dc6d-f1e8-4753-8033-0f276bb0955b')
+var storageQueueDataContributorRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '974c5e8b-45b9-4653-ba55-5f855dd0fb88')
+var storageTableDataContributorRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3')
 var serviceBusDataSenderRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '69a216fc-b8fb-44d8-bc22-1f3c2cd27a39')
 var serviceBusDataReceiverRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4f6d3b9b-027b-4f4c-9142-0e5a2a2247e0')
 var cognitiveServicesOpenAiUserRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '5e0bd9bd-7b93-4f28-af87-19fc36ad61bd')
@@ -421,6 +427,36 @@ resource storageBlobDataContributorAssignment 'Microsoft.Authorization/roleAssig
   scope: storageAccount
   properties: {
     roleDefinitionId: storageBlobDataContributorRoleDefinitionId
+    principalId: appIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource storageBlobDataOwnerAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (deployDurableOrchestrator) {
+  name: guid(storageAccount.id, appIdentity.id, 'storage-blob-data-owner')
+  scope: storageAccount
+  properties: {
+    roleDefinitionId: storageBlobDataOwnerRoleDefinitionId
+    principalId: appIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource storageQueueDataContributorAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (deployDurableOrchestrator) {
+  name: guid(storageAccount.id, appIdentity.id, 'storage-queue-data-contributor')
+  scope: storageAccount
+  properties: {
+    roleDefinitionId: storageQueueDataContributorRoleDefinitionId
+    principalId: appIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource storageTableDataContributorAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (deployDurableOrchestrator) {
+  name: guid(storageAccount.id, appIdentity.id, 'storage-table-data-contributor')
+  scope: storageAccount
+  properties: {
+    roleDefinitionId: storageTableDataContributorRoleDefinitionId
     principalId: appIdentity.properties.principalId
     principalType: 'ServicePrincipal'
   }
@@ -924,6 +960,136 @@ resource workerContainerApp 'Microsoft.App/containerApps@2024-03-01' = if (deplo
   ]
 }
 
+resource durableFunctionPlan 'Microsoft.Web/serverfarms@2023-12-01' = if (deployDurableOrchestrator) {
+  name: '${normalizedName}-durable-plan'
+  location: location
+  tags: tags
+  sku: {
+    name: 'EP1'
+    tier: 'ElasticPremium'
+  }
+  properties: {
+    reserved: true
+  }
+}
+
+resource durableFunctionApp 'Microsoft.Web/sites@2023-12-01' = if (deployDurableOrchestrator) {
+  name: '${normalizedName}-durable'
+  location: location
+  tags: tags
+  kind: 'functionapp,linux'
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${appIdentity.id}': {}
+    }
+  }
+  properties: {
+    serverFarmId: durableFunctionPlan.id
+    httpsOnly: true
+    siteConfig: {
+      linuxFxVersion: 'Python|3.11'
+      // Enabling this dormant scaffold still requires a code package deployment mechanism.
+      appSettings: [
+        {
+          name: 'FUNCTIONS_EXTENSION_VERSION'
+          value: '~4'
+        }
+        {
+          name: 'FUNCTIONS_WORKER_RUNTIME'
+          value: 'python'
+        }
+        {
+          name: 'AzureWebJobsFeatureFlags'
+          value: 'EnableWorkerIndexing'
+        }
+        {
+          name: 'AzureWebJobsStorage__accountName'
+          value: storageAccount.name
+        }
+        {
+          name: 'AzureWebJobsStorage__credential'
+          value: 'managedidentity'
+        }
+        {
+          name: 'AzureWebJobsStorage__clientId'
+          value: appIdentity.properties.clientId
+        }
+        {
+          name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
+          value: appInsights.properties.ConnectionString
+        }
+        {
+          name: 'AZURE_CLIENT_ID'
+          value: appIdentity.properties.clientId
+        }
+        {
+          name: 'AZURE_COSMOS_ENDPOINT'
+          value: cosmosAccount.properties.documentEndpoint
+        }
+        {
+          name: 'AZURE_COSMOS_DATABASE_NAME'
+          value: cosmosDatabase.properties.resource.id
+        }
+        {
+          name: 'AZURE_SEARCH_ENDPOINT'
+          value: 'https://${searchService.name}.search.windows.net'
+        }
+        {
+          name: 'AZURE_SEARCH_RECALL_INDEX_NAME'
+          value: searchRecallIndexName
+        }
+        {
+          name: 'AZURE_STORAGE_BLOB_ENDPOINT'
+          value: storageAccount.properties.primaryEndpoints.blob
+        }
+        {
+          name: 'AZURE_STORAGE_SNAPSHOT_CONTAINER'
+          value: snapshotsContainer.name
+        }
+        {
+          name: 'AZURE_OPENAI_ENDPOINT'
+          value: openAiAccount.properties.endpoint
+        }
+        {
+          name: 'AZURE_OPENAI_USE_MANAGED_IDENTITY'
+          value: 'true'
+        }
+        {
+          name: 'AZURE_OPENAI_API_VERSION'
+          value: '2024-10-21'
+        }
+        {
+          name: 'AZURE_OPENAI_CHAT_DEPLOYMENT'
+          value: openAiChatDeployment.name
+        }
+        {
+          name: 'AZURE_OPENAI_EMBEDDING_DEPLOYMENT'
+          value: openAiEmbeddingDeployment.name
+        }
+        {
+          name: 'AZURE_OPENAI_EMBEDDING_DIMENSION'
+          value: string(openAiEmbeddingDimension)
+        }
+        {
+          name: 'AZURE_OPENAI_EMBEDDING_MODEL_VERSION'
+          value: openAiEmbeddingModelVersion
+        }
+      ]
+    }
+  }
+  dependsOn: [
+    cosmosDataContributorAssignment
+    searchServiceContributorAssignment
+    searchIndexDataContributorAssignment
+    storageBlobDataContributorAssignment
+    storageBlobDataOwnerAssignment
+    storageQueueDataContributorAssignment
+    storageTableDataContributorAssignment
+    openAiUserAssignment
+  ]
+}
+
 resource uiStaticSite 'Microsoft.Web/staticSites@2022-09-01' = if (deployUi) {
   name: '${normalizedName}-ui'
   location: uiLocation
@@ -942,6 +1108,7 @@ resource uiStaticSite 'Microsoft.Web/staticSites@2022-09-01' = if (deployUi) {
 output containerAppName string = containerApp.name
 output containerAppFqdn string = containerApp.properties.configuration.ingress.fqdn
 output workerContainerAppName string = deployWorker ? workerContainerApp.name : ''
+output durableFunctionAppName string = deployDurableOrchestrator ? durableFunctionApp.name : ''
 output uiStaticSiteName string = deployUi ? uiStaticSite.name : ''
 output containerRegistryLoginServer string = containerRegistry.properties.loginServer
 output managedIdentityClientId string = appIdentity.properties.clientId

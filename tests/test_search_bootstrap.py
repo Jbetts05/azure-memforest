@@ -37,7 +37,7 @@ class FakeIndexClient:
 
 def test_build_recall_search_index_serializes_vector_schema() -> None:
     index = build_recall_search_index("memforest-recall", 1536)
-    data = index.serialize()
+    data = index.serialize() if hasattr(index, "serialize") else index.as_dict()
 
     fields = {field["name"]: field for field in data["fields"]}
     assert fields["embedding"]["dimensions"] == 1536

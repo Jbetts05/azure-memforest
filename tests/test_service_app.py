@@ -10,7 +10,7 @@ from fastapi import Depends, HTTPException, Request
 from fastapi.testclient import TestClient
 
 from src import __version__
-from src.service.app import create_app
+from src.service.app import _memory_command_service_from_env, create_app
 from src.cloud.cosmos_jobs import JobNotFound
 from src.service.auth import (
     ACTOR_ID_HEADER,
@@ -28,6 +28,7 @@ from src.service.logging import JsonLogFormatter
 from src.service.readiness import ReadinessCheckResult, StaticReadinessCheck
 from src.service.settings import ServiceSettings, load_service_settings
 from src.service.trace_context import parse_traceparent
+from src.service.jobs import DurableMemoryCommandService, ServiceBusMemoryCommandService
 
 
 def test_service_app_import_is_side_effect_light() -> None:
@@ -213,6 +214,26 @@ def test_service_settings_loads_safe_env_values() -> None:
     assert settings.ui_allowed_origins == ("https://ui.example", "http://localhost:5173")
     assert load_service_settings({}).ui_enabled is False
     assert load_service_settings({"AZURE_MEMFOREST_UI_ENABLED": "False"}).ui_enabled is False
+
+
+def test_memory_command_service_selector_uses_durable_only_when_configured() -> None:
+    durable = _memory_command_service_from_env(
+        {
+            "AZURE_MEMFOREST_DISPATCH_MODE": "durable",
+            "AZURE_MEMFOREST_DURABLE_START_URL": "https://functions.example/start",
+        }
+    )
+    fallback = _memory_command_service_from_env(
+        {
+            "AZURE_MEMFOREST_DISPATCH_MODE": "durable",
+            "AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE": "example.servicebus.windows.net",
+            "AZURE_SERVICEBUS_WRITES_QUEUE_NAME": "queue",
+            "AZURE_CLIENT_ID": "client-id",
+        }
+    )
+
+    assert isinstance(durable, DurableMemoryCommandService)
+    assert isinstance(fallback, ServiceBusMemoryCommandService)
 
 
 def test_ui_cors_is_gated_by_feature_flag() -> None:

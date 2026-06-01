@@ -21,6 +21,7 @@ from src.service.schemas import (
 
 JobType = Literal["ingest_session", "delete_session", "clear_memory"]
 MAX_SERVICE_BUS_MESSAGE_BYTES = 240 * 1024
+MAX_DURABLE_START_PAYLOAD_BYTES = 60 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -193,6 +194,105 @@ class ServiceBusMemoryCommandService(MemoryCommandService):
         )
 
 
+class DurableJobStarter:
+        def __init__(self, *, start_url: str, bearer_token: str = "", http_client: Any | None = None) -> None:
+            self.start_url = start_url
+            self.bearer_token = bearer_token
+            self._http_client = http_client
+
+        async def submit_job(self, envelope: WriteJobEnvelope) -> None:
+            payload = json.loads(envelope.to_json())
+            payload["instance_id"] = envelope.job_id
+            body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+            if len(body.encode("utf-8")) > MAX_DURABLE_START_PAYLOAD_BYTES:
+                raise ValueError("write job envelope exceeds Durable start payload size budget.")
+            headers = {"content-type": "application/json"}
+            headers["x-ms-durable-instance-id"] = envelope.job_id
+            if self.bearer_token:
+                headers["x-functions-key"] = self.bearer_token
+            if self._http_client is not None:
+                response = await _maybe_await(
+                    self._http_client.post(self.start_url, json=payload, headers=headers, timeout=30)
+                )
+                _raise_for_status(response)
+                return
+            import httpx
+
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.post(self.start_url, json=payload, headers=headers)
+                _raise_for_status(response)
+
+        async def close(self) -> None:
+            close = getattr(self._http_client, "aclose", None) or getattr(self._http_client, "close", None)
+            if close is not None:
+                await _maybe_await(close())
+
+
+class DurableMemoryCommandService(MemoryCommandService):
+        def __init__(self, starter: DurableJobStarter) -> None:
+            self._starter = starter
+
+        async def close(self) -> None:
+            await self._starter.close()
+
+        async def submit_ingest_session(
+            self,
+            actor: ActorContext,
+            *,
+            user_id: str,
+            session_id: str,
+            request: IngestSessionRequest,
+            idempotency_key: str,
+        ) -> IngestSessionResponse:
+            envelope = build_write_job_envelope(
+                actor,
+                user_id=user_id,
+                session_id=session_id,
+                job_type="ingest_session",
+                idempotency_key=idempotency_key,
+                payload=request.model_dump(mode="json"),
+            )
+            await self._starter.submit_job(envelope)
+            return IngestSessionResponse(job_id=envelope.job_id, tenant_id=actor.tenant.tenant_id, user_id=user_id, session_id=session_id)
+
+        async def submit_delete_session(
+            self,
+            actor: ActorContext,
+            *,
+            user_id: str,
+            session_id: str,
+            idempotency_key: str,
+        ) -> DeleteSessionResponse:
+            envelope = build_write_job_envelope(
+                actor,
+                user_id=user_id,
+                session_id=session_id,
+                job_type="delete_session",
+                idempotency_key=idempotency_key,
+                payload={},
+            )
+            await self._starter.submit_job(envelope)
+            return DeleteSessionResponse(job_id=envelope.job_id, tenant_id=actor.tenant.tenant_id, user_id=user_id, session_id=session_id)
+
+        async def submit_clear_memory(
+            self,
+            actor: ActorContext,
+            *,
+            user_id: str,
+            idempotency_key: str,
+        ) -> ClearMemoryResponse:
+            envelope = build_write_job_envelope(
+                actor,
+                user_id=user_id,
+                session_id="__all__",
+                job_type="clear_memory",
+                idempotency_key=idempotency_key,
+                payload={},
+            )
+            await self._starter.submit_job(envelope)
+            return ClearMemoryResponse(job_id=envelope.job_id, tenant_id=actor.tenant.tenant_id, user_id=user_id)
+
+
 def build_write_job_envelope(
     actor: ActorContext,
     *,
@@ -238,6 +338,19 @@ def service_bus_command_service_from_env(environ: dict[str, str], *, servicebus_
     )
 
 
+def durable_command_service_from_env(environ: dict[str, str], *, http_client: Any | None = None) -> DurableMemoryCommandService | None:
+    start_url = str(environ.get("AZURE_MEMFOREST_DURABLE_START_URL", "")).strip()
+    if not start_url:
+        return None
+    return DurableMemoryCommandService(
+        DurableJobStarter(
+            start_url=start_url,
+            bearer_token=str(environ.get("AZURE_MEMFOREST_DURABLE_START_TOKEN", "")).strip(),
+            http_client=http_client,
+        )
+    )
+
+
 def _job_id(
     *,
     tenant_id: str,
@@ -258,6 +371,26 @@ def _job_id(
         separators=(",", ":"),
     )
     return "job_" + hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+async def _maybe_await(value: Any) -> Any:
+    if hasattr(value, "__await__"):
+        return await value
+    return value
+
+
+def _raise_for_status(response: Any) -> None:
+    status_code = int(getattr(response, "status_code", 200) or 200)
+    if status_code == 409:
+        return
+    if 400 <= status_code:
+        raise RuntimeError(f"durable job start failed with status {status_code}")
+    raise_for_status = getattr(response, "raise_for_status", None)
+    if raise_for_status is not None:
+        try:
+            raise_for_status()
+        except Exception as exc:
+            raise RuntimeError("durable job start failed") from None
 
 
 class JobRecordingCommandService(MemoryCommandService):
