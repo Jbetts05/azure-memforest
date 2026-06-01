@@ -207,6 +207,8 @@ def turns_for_ingest(session: dict, *, case_id: str = "") -> tuple[list[dict], d
         turn for turn in original_turns
         if not retained_ids or turn.get("content_id") in retained_ids
     ]
+    synthetic_turns = [dict(turn) for turn in (override.get("synthetic_turns") or [])] if override else []
+    source_turns.extend(synthetic_turns)
     retained_hash = hashlib.sha256(
         json.dumps(source_turns, ensure_ascii=False, sort_keys=True).encode("utf-8")
     ).hexdigest()
@@ -228,6 +230,8 @@ def turns_for_ingest(session: dict, *, case_id: str = "") -> tuple[list[dict], d
         "evidence_minimized": bool(override),
         "override_type": override.get("override_type") if override else None,
         "retained_content_ids": sorted(retained_ids),
+        "synthetic_turn_count": len(synthetic_turns),
+        "synthetic_content_ids": [turn.get("content_id") for turn in synthetic_turns],
         "retained_turns_sha256": retained_hash,
         "exclude_from_pipeline_accuracy": bool(override and override.get("exclude_from_pipeline_accuracy")),
     }

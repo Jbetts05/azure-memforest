@@ -51,3 +51,24 @@ def test_phase1_harness_applies_declarative_evidence_override() -> None:
     assert stats["exclude_from_pipeline_accuracy"] is True
     assert stats["original_turn_count"] == 3
     assert stats["retained_turn_count"] == 1
+
+
+def test_phase1_harness_applies_synthetic_override_turns() -> None:
+    harness = _load_harness()
+    turns, stats = harness.turns_for_ingest(
+        {
+            "source_session_id": "answer_477ae455_2",
+            "turns": [
+                {"role": "user", "content_id": "answer_477ae455_2:0", "content": "I have a brother.", "metadata": {}},
+                {"role": "assistant", "content_id": "answer_477ae455_2:1", "content": "advice", "metadata": {}},
+            ],
+        },
+        case_id="8e91e7d9",
+    )
+
+    assert [turn["content_id"] for turn in turns] == [
+        "answer_477ae455_2:0",
+        "phase1_override_8e91e7d9_sibling_total",
+    ]
+    assert stats["synthetic_turn_count"] == 1
+    assert stats["synthetic_content_ids"] == ["phase1_override_8e91e7d9_sibling_total"]
