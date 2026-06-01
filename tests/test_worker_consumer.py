@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+import src.worker.consumer as consumer_module
 from src.cloud.cosmos_jobs import CosmosJobStore
 from src.service.auth import ActorContext, TenantContext
 from src.service.jobs import build_write_job_envelope
@@ -380,6 +381,36 @@ async def test_worker_early_settle_marks_handler_errors_failed_without_resettlin
     assert message.dead_lettered is False
     status = await store.get_job_by_ids(tenant_id="tenant-1", user_id="user-1", job_id=envelope.job_id)
     assert status.status == expected_status
+
+
+@pytest.mark.asyncio
+async def test_worker_early_settle_exits_after_failing_fatal_transient_error(monkeypatch) -> None:
+    envelope = _envelope()
+    store = await _store_with_job(envelope)
+    exits = []
+
+    def fake_exit(code):
+        exits.append(code)
+        raise SystemExit(code)
+
+    monkeypatch.setattr(consumer_module, "_exit_process", fake_exit)
+    worker = ServiceBusWriteWorker(
+        job_store=store,
+        handler=RecordingHandler(TransientHandlerError("timed out", exit_code=75)),
+        owner_id="worker-1",
+        settle_before_handle=True,
+    )
+    message = FakeMessage(envelope.to_json().encode("utf-8"))
+
+    with pytest.raises(SystemExit) as exc_info:
+        await worker.process_message(message)
+
+    assert exc_info.value.code == 75
+    assert exits == [75]
+    assert message.completed is True
+    status = await store.get_job_by_ids(tenant_id="tenant-1", user_id="user-1", job_id=envelope.job_id)
+    assert status.status == "failed"
+    assert status.error == "timed out"
 
 
 @pytest.mark.asyncio

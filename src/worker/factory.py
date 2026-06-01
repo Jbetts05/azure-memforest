@@ -171,6 +171,8 @@ def fixed_materialization_config_factory(
     lease_renewal_seconds: float = 60.0,
     ingest_timeout_seconds: float = 1800.0,
     extract_heartbeat_seconds: float = 60.0,
+    extract_stack_dump_seconds: float = 0.0,
+    exit_on_ingest_timeout: bool = False,
 ) -> Callable[[WriteJobEnvelope], MaterializationHandlerConfig]:
     def build(envelope: WriteJobEnvelope) -> MaterializationHandlerConfig:
         return MaterializationHandlerConfig(
@@ -182,6 +184,8 @@ def fixed_materialization_config_factory(
             lease_renewal_seconds=lease_renewal_seconds,
             ingest_timeout_seconds=ingest_timeout_seconds,
             extract_heartbeat_seconds=extract_heartbeat_seconds,
+            extract_stack_dump_seconds=extract_stack_dump_seconds,
+            exit_on_ingest_timeout=exit_on_ingest_timeout,
         )
 
     return build
@@ -246,6 +250,8 @@ def build_worker_runtime_from_env(environ: dict[str, str] | None = None) -> Work
             lease_renewal_seconds=float(values.get("AZURE_MEMFOREST_USER_LEASE_RENEWAL_SECONDS", "60")),
             ingest_timeout_seconds=float(values.get("AZURE_MEMFOREST_INGEST_TIMEOUT_SECONDS", "1800")),
             extract_heartbeat_seconds=float(values.get("AZURE_MEMFOREST_EXTRACT_HEARTBEAT_SECONDS", "60")),
+            extract_stack_dump_seconds=float(values.get("AZURE_MEMFOREST_EXTRACT_STACK_DUMP_SECONDS", "0")),
+            exit_on_ingest_timeout=str(values.get("AZURE_MEMFOREST_EXIT_ON_INGEST_TIMEOUT", "")).strip().lower() in {"1", "true", "yes", "on"},
         ),
     )
     worker = ServiceBusWriteWorker(

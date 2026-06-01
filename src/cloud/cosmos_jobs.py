@@ -144,7 +144,7 @@ class CosmosJobStore:
         item["stage"] = stage
         item["stage_started_at"] = item.get("stage_started_at") if previous_stage == stage else now
         item["stage_detail"] = detail
-        if telemetry:
+        if telemetry is not None:
             item["telemetry"] = telemetry
         item["updated_at"] = now
         await _conditional_replace(self.container, item, partition_key=tenant_id, etag=item.get("_etag"))

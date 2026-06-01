@@ -21,7 +21,9 @@ class PermanentHandlerError(Exception):
 
 
 class TransientHandlerError(Exception):
-    pass
+    def __init__(self, message: str, *, exit_code: int | None = None) -> None:
+        super().__init__(message)
+        self.exit_code = exit_code
 
 
 class TerminalHandlerError(Exception):
@@ -155,6 +157,12 @@ class ServiceBusWriteWorker:
             )
             if message_settled:
                 await self._fail_settled_job(envelope, claimed, reason="transient_handler_error", error=str(exc))
+                if exc.exit_code is not None:
+                    log.critical(
+                        "worker_exiting_after_settled_transient_error",
+                        extra={"job_id": envelope.job_id, "exit_code": exc.exit_code},
+                    )
+                    _exit_process(exc.exit_code)
                 return WorkerOutcome(action="complete", reason="transient_handler_error")
             if _is_final_delivery(message):
                 if not message_settled:
@@ -331,6 +339,10 @@ async def _dead_letter(message: Any, *, reason: str, description: str) -> None:
                 error_description=description,
             )
         )
+
+
+def _exit_process(exit_code: int) -> None:
+    os._exit(exit_code)
 
 
 async def _maybe_await(value):

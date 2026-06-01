@@ -541,6 +541,7 @@ async def test_materialization_handler_heartbeats_during_extract_build() -> None
 
     extract_updates = [update for update in job_store.stage_updates if update["stage"] == "extract_build"]
     assert len(extract_updates) >= 2
+    assert extract_updates[-1]["telemetry"]["extract_build_heartbeat_count"] >= 1
 
 
 @pytest.mark.asyncio
@@ -559,9 +560,30 @@ async def test_materialization_handler_times_out_ingest_session() -> None:
         ),
     )
 
-    with pytest.raises(TransientHandlerError, match="ingest_session timed out"):
+    with pytest.raises(TransientHandlerError, match="ingest_session timed out") as exc_info:
         await handler.handle(_envelope(), {"fencing_token": 1})
+    assert exc_info.value.exit_code is None
     assert lease_store.released is True
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_marks_timeout_as_fatal_when_configured() -> None:
+    handler = _handler(
+        core=FakeIngestCore(_snapshot(), ingest_delay=0.1),
+        config=MaterializationHandlerConfig(
+            owner_id="worker-1",
+            embedding_model_version="embed-v1",
+            code_version="test-sha",
+            prompt_config_hash="prompt-hash",
+            lease_renewal_seconds=9999,
+            ingest_timeout_seconds=0.01,
+            exit_on_ingest_timeout=True,
+        ),
+    )
+
+    with pytest.raises(TransientHandlerError, match="ingest_session timed out") as exc_info:
+        await handler.handle(_envelope(), {"fencing_token": 1})
+    assert exc_info.value.exit_code == 75
 
 
 @pytest.mark.asyncio

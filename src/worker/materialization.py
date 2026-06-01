@@ -5,8 +5,11 @@ from __future__ import annotations
 import json
 import asyncio
 import contextlib
+import faulthandler
 import hashlib
 import logging
+import sys
+import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -91,6 +94,8 @@ class MaterializationHandlerConfig:
     clear_optional_timeout_seconds: float = 30.0
     ingest_timeout_seconds: float = 1800.0
     extract_heartbeat_seconds: float = 60.0
+    extract_stack_dump_seconds: float = 0.0
+    exit_on_ingest_timeout: bool = False
 
 
 class MemForestMaterializationHandler:
@@ -124,6 +129,19 @@ class MemForestMaterializationHandler:
             return
         telemetry: dict[str, Any] | None = None
         fencing_token = int(claimed_job["fencing_token"])
+        log.info(
+            "materialization_ingest_start",
+            extra={
+                "job_id": envelope.job_id,
+                "session_id": envelope.session_id,
+                "turn_count": len(request.turns),
+                "ingest_timeout_seconds": self._config.ingest_timeout_seconds,
+                "extract_heartbeat_seconds": self._config.extract_heartbeat_seconds,
+                "extract_stack_dump_seconds": self._config.extract_stack_dump_seconds,
+                "exit_on_ingest_timeout": self._config.exit_on_ingest_timeout,
+                "code_version": self._config.code_version,
+            },
+        )
 
         try:
             lease = await self._stores.lease_store.acquire(
@@ -169,7 +187,8 @@ class MemForestMaterializationHandler:
                     )
             except asyncio.TimeoutError as exc:
                 raise TransientHandlerError(
-                    f"ingest_session timed out after {self._config.ingest_timeout_seconds:.0f}s"
+                    f"ingest_session timed out after {self._config.ingest_timeout_seconds:.0f}s",
+                    exit_code=75 if self._config.exit_on_ingest_timeout else None,
                 ) from exc
             except Exception as exc:
                 if _is_content_filter_error(exc):
@@ -303,24 +322,33 @@ class MemForestMaterializationHandler:
         stop_event: asyncio.Event,
     ) -> None:
         interval = max(1.0, float(self._config.extract_heartbeat_seconds))
+        stack_dump_interval = max(0.0, float(self._config.extract_stack_dump_seconds))
+        next_stack_dump = time.monotonic() + stack_dump_interval if stack_dump_interval > 0 else 0.0
         await self._update_job_stage(
             envelope,
             fencing_token=fencing_token,
             stage="extract_build",
             detail="Extracting facts, deduping, and rebuilding MemTrees.",
-            telemetry=telemetry,
+            telemetry=_record_extract_heartbeat(telemetry),
         )
         while True:
             try:
                 await asyncio.wait_for(stop_event.wait(), timeout=interval)
                 return
             except asyncio.TimeoutError:
+                if stack_dump_interval > 0 and time.monotonic() >= next_stack_dump:
+                    log.warning(
+                        "materialization_extract_build_stack_dump",
+                        extra={"job_id": envelope.job_id, "session_id": envelope.session_id},
+                    )
+                    faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
+                    next_stack_dump = time.monotonic() + stack_dump_interval
                 await self._update_job_stage(
                     envelope,
                     fencing_token=fencing_token,
                     stage="extract_build",
                     detail="Extracting facts, deduping, and rebuilding MemTrees.",
-                    telemetry=telemetry,
+                    telemetry=_record_extract_heartbeat(telemetry),
                 )
 
     async def _handle_delete(self, envelope: WriteJobEnvelope) -> None:
@@ -983,6 +1011,12 @@ def _canonical_level(level: Any) -> str:
 
 def _is_factless_snapshot(snapshot: ForestMaterializationSnapshot) -> bool:
     return not snapshot.facts and not any(_tree_has_fact_payload(tree) for tree in snapshot.trees)
+
+
+def _record_extract_heartbeat(telemetry: dict[str, Any]) -> dict[str, Any]:
+    telemetry["extract_build_heartbeat_count"] = int(telemetry.get("extract_build_heartbeat_count", 0)) + 1
+    telemetry["extract_build_last_heartbeat_unix"] = time.time()
+    return telemetry
 
 
 def _extractable_turns(turns: list[dict[str, Any]]) -> list[dict[str, Any]]:
