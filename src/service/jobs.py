@@ -293,6 +293,59 @@ class DurableMemoryCommandService(MemoryCommandService):
             return ClearMemoryResponse(job_id=envelope.job_id, tenant_id=actor.tenant.tenant_id, user_id=user_id)
 
 
+class DurableIngestMemoryCommandService(MemoryCommandService):
+        def __init__(self, durable: DurableMemoryCommandService, fallback: MemoryCommandService) -> None:
+            self._durable = durable
+            self._fallback = fallback
+
+        async def close(self) -> None:
+            await self._durable.close()
+            close = getattr(self._fallback, "close", None)
+            if close is not None:
+                await _maybe_await(close())
+
+        async def submit_ingest_session(
+            self,
+            actor: ActorContext,
+            *,
+            user_id: str,
+            session_id: str,
+            request: IngestSessionRequest,
+            idempotency_key: str,
+        ) -> IngestSessionResponse:
+            return await self._durable.submit_ingest_session(
+                actor,
+                user_id=user_id,
+                session_id=session_id,
+                request=request,
+                idempotency_key=idempotency_key,
+            )
+
+        async def submit_delete_session(
+            self,
+            actor: ActorContext,
+            *,
+            user_id: str,
+            session_id: str,
+            idempotency_key: str,
+        ) -> DeleteSessionResponse:
+            return await self._fallback.submit_delete_session(
+                actor,
+                user_id=user_id,
+                session_id=session_id,
+                idempotency_key=idempotency_key,
+            )
+
+        async def submit_clear_memory(
+            self,
+            actor: ActorContext,
+            *,
+            user_id: str,
+            idempotency_key: str,
+        ) -> ClearMemoryResponse:
+            return await self._fallback.submit_clear_memory(actor, user_id=user_id, idempotency_key=idempotency_key)
+
+
 def build_write_job_envelope(
     actor: ActorContext,
     *,

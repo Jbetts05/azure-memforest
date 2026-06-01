@@ -19,6 +19,7 @@ from src.cloud.cosmos_traces import CosmosQueryTraceService, trace_recorder_from
 from src.cloud.ui_read_service import CloudUiReadService
 from src.service.entra_auth import entra_auth_provider_from_env
 from src.service.jobs import JobRecordingCommandService
+from src.service.jobs import DurableIngestMemoryCommandService
 from src.service.jobs import durable_command_service_from_env
 from src.service.jobs import service_bus_command_service_from_env
 from src.service.middleware import REQUEST_ID_HEADER, RequestIdMiddleware
@@ -145,7 +146,11 @@ def _memory_command_service_from_env(environ: dict[str, str]):
     if mode == "durable":
         durable = durable_command_service_from_env(environ)
         if durable is not None:
-            return durable
+            servicebus = service_bus_command_service_from_env(environ)
+            if servicebus is not None:
+                return DurableIngestMemoryCommandService(durable, servicebus)
+            log.warning("durable dispatch requested but Service Bus fallback is not configured; write dispatch disabled")
+            return None
         log.warning("durable dispatch requested but durable start URL is not configured; falling back to Service Bus")
     elif mode != "servicebus":
         log.warning("unknown write dispatch mode; falling back to Service Bus", extra={"dispatch_mode": mode})

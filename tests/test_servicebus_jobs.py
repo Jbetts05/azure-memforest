@@ -5,6 +5,7 @@ import pytest
 from src.service.auth import ActorContext, TenantContext
 from src.service.jobs import (
     DurableJobStarter,
+    DurableIngestMemoryCommandService,
     DurableMemoryCommandService,
     ServiceBusJobPublisher,
     ServiceBusMemoryCommandService,
@@ -283,6 +284,38 @@ async def test_durable_starter_rejects_oversized_payloads() -> None:
         await starter.submit_job(envelope)
 
     assert http_client.posts == []
+
+
+@pytest.mark.asyncio
+async def test_durable_ingest_service_routes_delete_and_clear_to_fallback() -> None:
+    http_client = FakeHttpClient()
+    servicebus_client = FakeServiceBusClient()
+    durable = DurableMemoryCommandService(DurableJobStarter(start_url="https://functions.example/start", http_client=http_client))
+    fallback = ServiceBusMemoryCommandService(
+        ServiceBusJobPublisher(
+            fully_qualified_namespace="example.servicebus.windows.net",
+            queue_name="memforest-writes",
+            client_id="client-id",
+            servicebus_client=servicebus_client,
+        )
+    )
+    service = DurableIngestMemoryCommandService(durable, fallback)
+
+    await service.submit_ingest_session(
+        _actor(),
+        user_id="user-1",
+        session_id="session-1",
+        request=IngestSessionRequest(turns=[TurnInput(role="user", content="hello")]),
+        idempotency_key="idem-ingest",
+    )
+    await service.submit_delete_session(_actor(), user_id="user-1", session_id="session-1", idempotency_key="idem-delete")
+    await service.submit_clear_memory(_actor(), user_id="user-1", idempotency_key="idem-clear")
+
+    assert http_client.posts[0]["json"]["job_type"] == "ingest_session"
+    assert [message.application_properties["job_type"] for message in servicebus_client.sender.messages] == [
+        "delete_session",
+        "clear_memory",
+    ]
 
 
 @pytest.mark.asyncio

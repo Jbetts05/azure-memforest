@@ -46,16 +46,36 @@ async def start_write(req: func.HttpRequest, client: df.DurableOrchestrationClie
 @app.orchestration_trigger(context_name="context")
 def write_orchestrator(context: df.DurableOrchestrationContext):
     payload = context.get_input()
-    result = yield context.call_activity("record_write_started", payload)
-    return result
+    activity_input = {
+        "envelope": payload,
+        "owner_id": f"durable:{context.instance_id}",
+        "instance_id": context.instance_id,
+    }
+    retry_options = df.RetryOptions(5000, 3)
+    try:
+        return (yield context.call_activity_with_retry("materialize_write_job", retry_options, activity_input))
+    except Exception as exc:
+        return (
+            yield context.call_activity_with_retry(
+                "fail_write_job",
+                retry_options,
+                {
+                    **activity_input,
+                    "reason": f"durable_activity_failed:{type(exc).__name__}",
+                },
+            )
+        )
 
 
 @app.activity_trigger(input_name="payload")
-def record_write_started(payload: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "job_id": payload.get("job_id"),
-        "job_type": payload.get("job_type"),
-        "tenant_id": payload.get("tenant_id"),
-        "user_id": payload.get("user_id"),
-        "status": "durable_orchestrator_placeholder",
-    }
+async def materialize_write_job(payload: dict[str, Any]) -> dict[str, Any]:
+    from src.worker.durable_activity import materialize_write_job_from_env
+
+    return await materialize_write_job_from_env(payload)
+
+
+@app.activity_trigger(input_name="payload")
+async def fail_write_job(payload: dict[str, Any]) -> dict[str, Any]:
+    from src.worker.durable_activity import fail_write_job_from_env
+
+    return await fail_write_job_from_env(payload)

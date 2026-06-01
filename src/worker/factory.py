@@ -37,7 +37,7 @@ from src.worker.snapshot_hydration import ArchiveHydratingUserForestCore
 StoreFactory = Callable[[WriteJobEnvelope], MaterializationStores]
 CoreFactory = Callable[[WriteJobEnvelope], SyncIngestCore]
 
-REQUIRED_WORKER_ENV = (
+REQUIRED_MATERIALIZATION_ENV = (
     "AZURE_CLIENT_ID",
     "AZURE_COSMOS_ENDPOINT",
     "AZURE_COSMOS_DATABASE_NAME",
@@ -51,6 +51,10 @@ REQUIRED_WORKER_ENV = (
     "AZURE_OPENAI_EMBEDDING_MODEL_VERSION",
     "AZURE_STORAGE_BLOB_ENDPOINT",
     "AZURE_STORAGE_SNAPSHOT_CONTAINER",
+)
+
+REQUIRED_WORKER_ENV = (
+    *REQUIRED_MATERIALIZATION_ENV,
     "AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE",
     "AZURE_SERVICEBUS_WRITES_QUEUE_NAME",
 )
@@ -72,6 +76,13 @@ class WorkerRuntime:
                 value = close()
                 if hasattr(value, "__await__"):
                     await value
+
+
+@dataclass(slots=True)
+class MaterializationRuntime:
+    handler: WriteJobHandler
+    job_store: CosmosJobStore
+    closeables: list[Any]
 
 
 @dataclass(frozen=True, slots=True)
@@ -196,67 +207,17 @@ def build_worker_runtime_from_env(environ: dict[str, str] | None = None) -> Work
     missing = missing_worker_env(values)
     if missing:
         raise RuntimeError(f"worker environment is missing required settings: {', '.join(missing)}")
+    owner_id = values.get("AZURE_MEMFOREST_WORKER_OWNER_ID") or values.get("HOSTNAME") or "worker"
+    materialization = build_scoped_materialization_handler_from_env(values, owner_id=owner_id)
 
-    from azure.cosmos.aio import CosmosClient
-    from azure.identity import ManagedIdentityCredential, get_bearer_token_provider
     from azure.identity.aio import ManagedIdentityCredential as AsyncManagedIdentityCredential
     from azure.servicebus.aio import ServiceBusClient
 
     client_id = values["AZURE_CLIENT_ID"]
     async_credential = AsyncManagedIdentityCredential(client_id=client_id)
-    sync_credential = ManagedIdentityCredential(client_id=client_id)
-    cosmos_client = CosmosClient(values["AZURE_COSMOS_ENDPOINT"], credential=async_credential)
-    database = cosmos_client.get_database_client(values["AZURE_COSMOS_DATABASE_NAME"])
-    cloud_config = load_cloud_config(values)
-    if cloud_config.azure_openai is None:
-        raise RuntimeError("Azure OpenAI configuration is required for the worker")
-    token_provider = get_bearer_token_provider(sync_credential, "https://cognitiveservices.azure.com/.default")
-    model_client = AzureOpenAIModelClient(cloud_config.azure_openai, azure_ad_token_provider=token_provider)
-    memforest_config = _worker_memforest_config(values)
-
-    recall_index = AzureSearchRecallIndex(
-        endpoint=values["AZURE_SEARCH_ENDPOINT"],
-        index_name=values["AZURE_SEARCH_RECALL_INDEX_NAME"],
-        vector_dimensions=int(values["AZURE_OPENAI_EMBEDDING_DIMENSION"]),
-        credential=sync_credential,
-    )
-    snapshot_store = blob_snapshot_store_from_env(values, credential=sync_credential)
-    if snapshot_store is None:
-        raise RuntimeError("snapshot store configuration is required for the worker")
-
-    store_factory = cosmos_materialization_store_factory(
-        database_client=database,
-        recall_index=recall_index,
-        embedding_model_version=values["AZURE_OPENAI_EMBEDDING_MODEL_VERSION"],
-        snapshot_store=snapshot_store,
-    )
-    core_factory = hydrating_user_forest_core_factory(
-        config=memforest_config,
-        chat_client=model_client,
-        embedding_client=model_client,
-        snapshot_store=snapshot_store,
-        scratch_root=Path(values.get("AZURE_MEMFOREST_WORKER_SCRATCH_ROOT", "/tmp/azure-memforest-worker")),
-    )
-    owner_id = values.get("AZURE_MEMFOREST_WORKER_OWNER_ID") or values.get("HOSTNAME") or "worker"
-    handler = ScopedMaterializationHandler(
-        store_factory=store_factory,
-        core_factory=core_factory,
-        config_factory=fixed_materialization_config_factory(
-            owner_id=owner_id,
-            embedding_model_version=values["AZURE_OPENAI_EMBEDDING_MODEL_VERSION"],
-            code_version=values.get("AZURE_MEMFOREST_GIT_SHA", "unknown"),
-            prompt_config_hash=_prompt_config_hash(values),
-            lease_ttl_seconds=int(values.get("AZURE_MEMFOREST_USER_LEASE_TTL_SECONDS", "300")),
-            lease_renewal_seconds=float(values.get("AZURE_MEMFOREST_USER_LEASE_RENEWAL_SECONDS", "60")),
-            ingest_timeout_seconds=float(values.get("AZURE_MEMFOREST_INGEST_TIMEOUT_SECONDS", "1800")),
-            extract_heartbeat_seconds=float(values.get("AZURE_MEMFOREST_EXTRACT_HEARTBEAT_SECONDS", "60")),
-            extract_stack_dump_seconds=float(values.get("AZURE_MEMFOREST_EXTRACT_STACK_DUMP_SECONDS", "0")),
-            exit_on_ingest_timeout=str(values.get("AZURE_MEMFOREST_EXIT_ON_INGEST_TIMEOUT", "")).strip().lower() in {"1", "true", "yes", "on"},
-        ),
-    )
     worker = ServiceBusWriteWorker(
-        job_store=CosmosJobStore(database.get_container_client("jobs")),
-        handler=handler,
+        job_store=materialization.job_store,
+        handler=materialization.handler,
         owner_id=owner_id,
         lease_ttl_seconds=int(values.get("AZURE_MEMFOREST_JOB_LEASE_TTL_SECONDS", "300")),
         settle_before_handle=str(values.get("AZURE_MEMFOREST_WORKER_SETTLE_BEFORE_HANDLE", "")).strip().lower() in {"1", "true", "yes", "on"},
@@ -277,7 +238,80 @@ def build_worker_runtime_from_env(environ: dict[str, str] | None = None) -> Work
         ),
         lock_renewer=lock_renewer,
     )
-    return WorkerRuntime(receiver_loop=receiver_loop, closeables=[cosmos_client, servicebus_client, async_credential, sync_credential])
+    return WorkerRuntime(receiver_loop=receiver_loop, closeables=[*materialization.closeables, servicebus_client, async_credential])
+
+
+def build_scoped_materialization_handler_from_env(
+    environ: dict[str, str] | None = None,
+    *,
+    owner_id: str | None = None,
+) -> MaterializationRuntime:
+    values = dict(os.environ if environ is None else environ)
+    missing = [name for name in REQUIRED_MATERIALIZATION_ENV if not str(values.get(name, "")).strip()]
+    if missing:
+        raise RuntimeError(f"materialization environment is missing required settings: {', '.join(missing)}")
+
+    from azure.cosmos.aio import CosmosClient
+    from azure.identity import ManagedIdentityCredential, get_bearer_token_provider
+    from azure.identity.aio import ManagedIdentityCredential as AsyncManagedIdentityCredential
+
+    client_id = values["AZURE_CLIENT_ID"]
+    async_credential = AsyncManagedIdentityCredential(client_id=client_id)
+    sync_credential = ManagedIdentityCredential(client_id=client_id)
+    cosmos_client = CosmosClient(values["AZURE_COSMOS_ENDPOINT"], credential=async_credential)
+    database = cosmos_client.get_database_client(values["AZURE_COSMOS_DATABASE_NAME"])
+    cloud_config = load_cloud_config(values)
+    if cloud_config.azure_openai is None:
+        raise RuntimeError("Azure OpenAI configuration is required for materialization")
+    token_provider = get_bearer_token_provider(sync_credential, "https://cognitiveservices.azure.com/.default")
+    model_client = AzureOpenAIModelClient(cloud_config.azure_openai, azure_ad_token_provider=token_provider)
+    memforest_config = _worker_memforest_config(values)
+
+    recall_index = AzureSearchRecallIndex(
+        endpoint=values["AZURE_SEARCH_ENDPOINT"],
+        index_name=values["AZURE_SEARCH_RECALL_INDEX_NAME"],
+        vector_dimensions=int(values["AZURE_OPENAI_EMBEDDING_DIMENSION"]),
+        credential=sync_credential,
+    )
+    snapshot_store = blob_snapshot_store_from_env(values, credential=sync_credential)
+    if snapshot_store is None:
+        raise RuntimeError("snapshot store configuration is required for materialization")
+
+    store_factory = cosmos_materialization_store_factory(
+        database_client=database,
+        recall_index=recall_index,
+        embedding_model_version=values["AZURE_OPENAI_EMBEDDING_MODEL_VERSION"],
+        snapshot_store=snapshot_store,
+    )
+    core_factory = hydrating_user_forest_core_factory(
+        config=memforest_config,
+        chat_client=model_client,
+        embedding_client=model_client,
+        snapshot_store=snapshot_store,
+        scratch_root=Path(values.get("AZURE_MEMFOREST_WORKER_SCRATCH_ROOT", "/tmp/azure-memforest-worker")),
+    )
+    resolved_owner_id = owner_id or values.get("AZURE_MEMFOREST_WORKER_OWNER_ID") or values.get("HOSTNAME") or "worker"
+    handler = ScopedMaterializationHandler(
+        store_factory=store_factory,
+        core_factory=core_factory,
+        config_factory=fixed_materialization_config_factory(
+            owner_id=resolved_owner_id,
+            embedding_model_version=values["AZURE_OPENAI_EMBEDDING_MODEL_VERSION"],
+            code_version=values.get("AZURE_MEMFOREST_GIT_SHA", "unknown"),
+            prompt_config_hash=_prompt_config_hash(values),
+            lease_ttl_seconds=int(values.get("AZURE_MEMFOREST_USER_LEASE_TTL_SECONDS", "300")),
+            lease_renewal_seconds=float(values.get("AZURE_MEMFOREST_USER_LEASE_RENEWAL_SECONDS", "60")),
+            ingest_timeout_seconds=float(values.get("AZURE_MEMFOREST_INGEST_TIMEOUT_SECONDS", "1800")),
+            extract_heartbeat_seconds=float(values.get("AZURE_MEMFOREST_EXTRACT_HEARTBEAT_SECONDS", "60")),
+            extract_stack_dump_seconds=float(values.get("AZURE_MEMFOREST_EXTRACT_STACK_DUMP_SECONDS", "0")),
+            exit_on_ingest_timeout=str(values.get("AZURE_MEMFOREST_EXIT_ON_INGEST_TIMEOUT", "")).strip().lower() in {"1", "true", "yes", "on"},
+        ),
+    )
+    return MaterializationRuntime(
+        handler=handler,
+        job_store=CosmosJobStore(database.get_container_client("jobs")),
+        closeables=[cosmos_client, async_credential, sync_credential],
+    )
 
 
 def hydrating_user_forest_core_factory(
