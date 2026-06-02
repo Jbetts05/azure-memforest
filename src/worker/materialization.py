@@ -23,7 +23,7 @@ from src.service.jobs import WriteJobEnvelope
 from src.service.schemas import IngestSessionRequest
 from src.worker.consumer import PermanentHandlerError, TerminalHandlerError, TransientHandlerError
 from src.observability.model_telemetry import collect_model_telemetry, snapshot_model_telemetry, update_model_telemetry_fields
-from src.worker.progress import budget_for_envelope
+from src.worker.progress import JobProgressBudget, budget_for_envelope, budget_from_document
 
 log = logging.getLogger(__name__)
 
@@ -181,6 +181,7 @@ class MemForestMaterializationHandler:
                     snapshot = await self._run_ingest_session(
                         envelope,
                         fencing_token=fencing_token,
+                        budget=budget_from_document(claimed_job) or budget_for_envelope(envelope),
                         turns=_extractable_turns(turns),
                         metadata=request.metadata,
                         telemetry=telemetry,
@@ -284,6 +285,7 @@ class MemForestMaterializationHandler:
         envelope: WriteJobEnvelope,
         *,
         fencing_token: int,
+        budget: JobProgressBudget,
         session_id: str,
         turns: list[dict[str, Any]],
         metadata: dict[str, Any],
@@ -302,6 +304,7 @@ class MemForestMaterializationHandler:
             self._monitor_extract_build(
                 envelope,
                 fencing_token=fencing_token,
+                budget=budget,
                 telemetry=telemetry,
                 stop_event=stop_monitor,
             )
@@ -335,13 +338,13 @@ class MemForestMaterializationHandler:
         envelope: WriteJobEnvelope,
         *,
         fencing_token: int,
+        budget: JobProgressBudget,
         telemetry: dict[str, Any],
         stop_event: asyncio.Event,
     ) -> None:
         interval = max(0.01, float(self._config.extract_heartbeat_seconds))
         stack_dump_interval = max(0.0, float(self._config.extract_stack_dump_seconds))
         next_stack_dump = time.monotonic() + stack_dump_interval if stack_dump_interval > 0 else 0.0
-        budget = budget_for_envelope(envelope)
         last_signature = _telemetry_progress_signature(telemetry)
         last_progress_at = time.monotonic()
         await self._update_job_stage(

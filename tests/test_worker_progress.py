@@ -24,6 +24,42 @@ def test_ingest_budget_scales_with_input_size() -> None:
     assert small.max_completed_model_calls < large.max_completed_model_calls
 
 
+def test_ingest_budget_preserves_default_multiplier() -> None:
+    envelope = _envelope(turns=[{"role": "user", "content": "x" * 10_000}])
+
+    budget = budget_for_envelope(envelope, environ={})
+
+    assert budget.max_completed_model_calls == 192
+
+
+def test_ingest_budget_can_be_scaled_with_environment() -> None:
+    envelope = _envelope(turns=[{"role": "user", "content": "x" * 10_000}])
+
+    budget = budget_for_envelope(
+        envelope,
+        environ={
+            "AZURE_MEMFOREST_MODEL_CALL_BUDGET_MULTIPLIER": "8",
+            "AZURE_MEMFOREST_MODEL_CALL_BUDGET_MAX": "2000",
+        },
+    )
+
+    assert budget.max_completed_model_calls == 384
+
+
+def test_ingest_budget_cap_still_bounds_environment_multiplier() -> None:
+    envelope = _envelope(turns=[{"role": "user", "content": "x" * 10_000} for _ in range(50)])
+
+    budget = budget_for_envelope(
+        envelope,
+        environ={
+            "AZURE_MEMFOREST_MODEL_CALL_BUDGET_MULTIPLIER": "100",
+            "AZURE_MEMFOREST_MODEL_CALL_BUDGET_MAX": "1000",
+        },
+    )
+
+    assert budget.max_completed_model_calls == 1000
+
+
 def test_classify_job_progress_detects_stall_without_heartbeat_progress() -> None:
     classification = classify_job_progress(
         {

@@ -619,6 +619,43 @@ async def test_materialization_handler_stops_when_model_call_budget_exceeded(mon
 
 
 @pytest.mark.asyncio
+async def test_materialization_handler_uses_claimed_job_progress_budget(monkeypatch) -> None:
+    def tiny_budget(envelope):
+        return JobProgressBudget(
+            job_type="ingest_session",
+            stall_timeout_seconds=999,
+            max_completed_model_calls=0,
+            max_retries=1,
+        )
+
+    monkeypatch.setattr("src.worker.materialization.budget_for_envelope", tiny_budget)
+    handler = _handler(
+        core=FakeIngestCore(_snapshot(), ingest_delay=0.2, model_calls=1),
+        config=MaterializationHandlerConfig(
+            owner_id="worker-1",
+            embedding_model_version="embed-v1",
+            code_version="test-sha",
+            prompt_config_hash="prompt-hash",
+            lease_renewal_seconds=9999,
+            extract_heartbeat_seconds=0.01,
+        ),
+    )
+
+    await handler.handle(
+        _envelope(),
+        {
+            "fencing_token": 1,
+            "progress_budget": {
+                "job_type": "ingest_session",
+                "stall_timeout_seconds": 999,
+                "max_completed_model_calls": 10,
+                "max_retries": 1,
+            },
+        },
+    )
+
+
+@pytest.mark.asyncio
 async def test_materialization_handler_clear_memory_purges_user_docs() -> None:
     tenant = "tenant-1"
     user = "user-1"
