@@ -18,8 +18,9 @@ Azure-MemForest gives an agent a memory system that behaves less like a transcri
    - Cosmos DB for source records, canonical facts, tree nodes, fact locations, manifests, jobs, leases, deletions, and traces.
    - Azure AI Search for managed recall over committed tree roots.
    - Blob Storage for restorable UserForest snapshots and fingerprint artifacts.
-   - Service Bus sessions for ordered per-user writes.
-6. **Query memory** by recalling trees, browsing tree nodes, loading facts, reranking with stored fact embeddings, and composing grounded answers.
+   - Service Bus sessions for ordered per-user fallback writes.
+   - Durable Functions for long-running ingest orchestration when enabled.
+6. **Query memory** by recalling trees, browsing tree nodes, loading facts, adding gated lexical fact fallback for update/count questions, reranking with stored fact embeddings plus recency, and composing grounded answers.
 7. **Explain decisions** through safe trace records that expose recall, browse, rerank, and answer steps without raw prompt or memory payload leakage.
 
 ### MemTree views
@@ -52,13 +53,14 @@ The dev Azure environment has been built, deployed, and smoke-tested end to end.
 - API and worker run on Azure Container Apps.
 - Entra bearer-token auth is configured and verified.
 - The worker ingests Service Bus session messages and materializes committed memory generations with staged progress and model-call telemetry.
+- Durable Functions is validated as the long-running ingest orchestration path. API-through-Durable smoke, two-ingest hydration smoke, and Phase 1 Durable calibration all completed with Durable instances reaching `Completed`.
 - The chat-first UI persists user and assistant turns; assistant turns are retained for transcript history but marked to skip memory extraction.
 - Clear-memory is a real asynchronous job, not a UI-only reset.
-- Mixed model routing is deployed: a smaller GPT-5-family model builds memory, GPT-5.4 handles final answer paths, and `text-embedding-3-large` provides embeddings.
-- Cloud query returns grounded answers from latest committed memory.
+- Role-based model routing is deployed; the current dev environment uses `gpt-4-1-mini-dev` for chat/memory/answer roles and `text-embedding-3-small-dev` for embeddings.
+- Cloud query returns grounded answers from latest committed memory and includes a guarded lexical/recency fallback for knowledge-update/count questions.
 - Query trace readback is implemented.
 - Build provenance and dirty-tree image guards are in place.
-- Benchmark/parity run folders now include lightweight experiment manifests.
+- Benchmark/parity run folders now include lightweight experiment manifests and Durable calibration artifacts.
 
 The project has shipped a large goal-driven backlog covering ingest, query, routing, clear-memory, UI observability, and experiment tracking.
 
@@ -74,11 +76,16 @@ Azure Container Apps API
     |  accepted write job
     v
 Service Bus session queue  ----->  Worker Container App
+    |                                 |
+    |                                 | acquire per-user lease
+    |                                 | hydrate latest snapshot
+    |                                 | run MemForest core
+    |                                 | project committed generation
+    |
+    +-- optional Durable start ---->  Durable Functions orchestrator
                                       |
-                                      | acquire per-user lease
-                                      | hydrate latest snapshot
-                                      | run MemForest core
-                                      | project committed generation
+                                      | materialize_write_job activity
+                                      | reuse MemForestMaterializationHandler
                                       v
        +----------------------+----------------------+----------------------+
        |                      |                      |                      |
@@ -91,7 +98,12 @@ Service Bus session queue  ----->  Worker Container App
 
 ### Write path
 
-The write worker is intentionally strict and observable:
+There are two write execution modes:
+
+- **Service Bus mode** is the safe default and remains the fallback for `delete_session` and `clear_memory`.
+- **Durable mode** is validated for `ingest_session` and is enabled only in guarded windows or explicit deployments.
+
+Both paths use the same Cosmos job rows, per-user lease, manifest commit boundary, and materialization handler. The Service Bus worker is intentionally strict and observable:
 
 1. Accept a Service Bus message scoped by `tenant_id:user_id`.
 2. Claim the job in Cosmos DB.
@@ -121,6 +133,8 @@ Job status now includes:
 
 `GET /v1/users/{user_id}/jobs/{job_id}/events` exposes the same staged progress as timeline events.
 
+Durable ingest adds a second status source: Durable instance ID equals Cosmos `job_id`, so a write can be correlated across API job status and Durable orchestration state.
+
 ### Clear memory
 
 `POST /v1/users/{user_id}/memory:clear` creates a Service Bus `clear_memory` job. The worker clears user-scoped source turns, facts, trees, manifests, browse embeddings, fact locations, recall documents, snapshots, and deletion metadata where configured.
@@ -147,10 +161,9 @@ Azure-MemForest uses role-based Azure OpenAI deployment names:
 
 The current dev deployment uses:
 
-- `gpt-5.4-mini-memory` for high-volume memory-building roles.
-- `gpt-5.4` for answer paths.
-- `text-embedding-3-large` with 3072-dimensional vectors.
-- `memforest-recall-large` as the 3072-dimensional Azure AI Search recall index.
+- `gpt-4-1-mini-dev` for chat, extraction, dedupe, summarization, planner, browse, and answer roles.
+- `text-embedding-3-small-dev` with 1536-dimensional vectors.
+- `memforest-recall` as the Azure AI Search recall index.
 
 This mixed strategy avoids routing every internal memory-building call through full GPT-5.4, which caused very long benchmark-session tail latencies.
 
@@ -164,9 +177,10 @@ Cloud query follows the MemForest paper semantics:
 4. Browse Cosmos-backed tree nodes using browse embeddings.
 5. Collect leaf fact IDs.
 6. Load canonical facts from Cosmos DB.
-7. Rerank facts using stored extraction-time fact embeddings.
-8. Compose a grounded answer and reason.
-9. Persist safe explainability traces.
+7. For update/count-style questions, run a scoped lexical fact fallback and filter fallback facts through the latest committed `fact_locations`.
+8. Rerank facts using stored extraction-time fact embeddings plus a small recency signal.
+9. Compose a grounded answer and reason.
+10. Persist safe explainability traces.
 
 ## Repository layout
 
@@ -238,6 +252,10 @@ Important deployment switches:
 - `deployWorker`: deploy the worker Container App.
 - `workerFactoryReady`: allow the worker to connect to Service Bus.
 - `enableDevHeaderAuth`: development-only header auth.
+- `deployDurableOrchestrator`: deploy the Durable Functions orchestrator scaffold.
+- `durableHostingPlan`: `flex` or `ep1` for the Durable Function App.
+- `apiDispatchMode`: `servicebus` by default, `durable` for guarded ingest-dispatch tests.
+- `durableStartUrl` and `durableStartFunctionKey`: Durable starter endpoint and secret-backed Function key.
 - `entraTenantId` and `entraAudiences`: production bearer-token validation settings.
 
 Dev-header auth should remain disabled outside controlled smoke tests.
@@ -268,10 +286,11 @@ This lightweight tracking is intentional. Azure ML or Foundry eval orchestration
 
 Recent findings:
 
-- One-case LongMemEval smoke passed end to end.
-- A 10-case proxy-scored LongMemEval batch attempt exposed ingest tail-latency problems when all memory work used full GPT-5.4.
-- On the two previously slow target sessions used for validation, the staged mixed-model pipeline reduced ingest from hundreds of seconds/dead-letter risk to roughly one minute or less. This is not yet confirmed on a full benchmark batch.
-- GPT-5.4-mini is now the modern memory-building candidate, but it still needs a scored small-batch comparison before being treated as benchmark-proven.
+- Durable API ingest passed the reliability gate: Phase 1 Durable calibration completed 28/28 ingests, 28/28 Durable instances, 3/3 cases, 0 DLQ delta, and 0 content-filter skips.
+- The Phase 1 aggregate initially failed only on case `4b24c848`, a knowledge-update question that answered `3 tops` instead of `five`.
+- The correct `five tops` fact was present in the latest projection, but recall/rerank favored the older `three tops` fact.
+- A gated lexical fact fallback plus recency-aware rerank fixed the targeted case 2 rerun: answer `Five tops`, both judges correct, 9/9 Durable instances completed.
+- The remaining next benchmark gate is rerunning the full 3-case Phase 1 Durable harness with the knowledge-update fix and then deciding whether Phase 2 can proceed.
 
 ## Applications
 

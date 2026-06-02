@@ -6,9 +6,9 @@ For the current migration from Service Bus worker-owned execution to Durable Fun
 
 ## Current state
 
-The API publishes `WriteJobEnvelope` messages to the session-enabled Service Bus queue `memforest-writes` and records accepted job metadata in the Cosmos `jobs` container.
+The API records accepted `WriteJobEnvelope` metadata in the Cosmos `jobs` container. Service Bus remains the safe default write dispatch path and carries `delete_session` / `clear_memory` fallback traffic. Durable Functions is now validated for `ingest_session` in guarded windows; see the migration document linked above.
 
-No worker is deployed yet. Do not run a stub worker against the real queue. A stub would consume sessions, burn delivery counts, pollute the DLQ, and mark real jobs failed before the real materialization path exists.
+A worker Container App is deployed in dev for Service Bus-backed jobs, but Durable ingest no longer depends on Service Bus message locks for long-running memory materialization. Do not deploy stub workers against the real queue; a stub would consume sessions, burn delivery counts, pollute the DLQ, and mark real jobs failed before the real materialization path exists.
 
 ## Queue and ordering
 

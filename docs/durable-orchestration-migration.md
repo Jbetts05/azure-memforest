@@ -172,7 +172,7 @@ Validated:
 
 ### Phase 1 Durable calibration
 
-Result: ingestion/reliability passed; aggregate remains `gate_failed` due to answer quality.
+Result: ingestion/reliability passed; the first full aggregate remained `gate_failed` due to answer quality.
 
 Validated:
 
@@ -188,11 +188,20 @@ Failure:
 - Case `4b24c848` knowledge-update answered `3 tops` instead of expected `five`.
 - This is a retrieval/temporal update quality issue, not a Durable execution issue.
 
+Follow-up:
+
+- The correct fact, "The user has already purchased five tops from H&M so far," was present in canonical facts and referenced by latest fact locations.
+- Cloud query recall/rerank favored an older "three tops" fact.
+- A targeted fix added gated lexical fact fallback for update/count questions and recency-aware fact reranking.
+- Targeted case `4b24c848` rerun passed with answer `Five tops`, 9/9 Durable instances completed, and both judges correct.
+
 Committed artifacts:
 
 - `docs/parity-runs/2026-05-31-longmemeval-phase1-checkpoint-resume/aggregate.json`
 - `docs/parity-runs/2026-05-31-longmemeval-phase1-checkpoint-resume/case_results_durable-20260602135302/`
 - `docs/parity-runs/2026-05-31-longmemeval-phase1-checkpoint-resume/case2_retrieval_durable_20260602135302.json`
+- `docs/parity-runs/2026-05-31-longmemeval-phase1-checkpoint-resume/aggregate_case2fix_20260602163133.json`
+- `docs/parity-runs/2026-05-31-longmemeval-phase1-checkpoint-resume/case_results_case2fix-20260602163133/`
 
 ## Limitations and open issues
 
@@ -211,20 +220,19 @@ Committed artifacts:
 5. **Function indexing is sensitive to Python annotations**
    Flex/Python Durable indexing failed when activity functions used postponed/parameterized annotations. Keep Function entrypoint annotations simple.
 
-6. **Knowledge-update retrieval remains the active benchmark blocker**
-   Durable solved the execution reliability problem, but Phase 1 still fails on case `4b24c848` answer quality.
+6. **Knowledge-update retrieval was improved but needs full-suite revalidation**
+   The targeted `4b24c848` rerun passed after adding lexical fallback and recency-aware reranking. The full 3-case Phase 1 Durable harness should be rerun with this fix before Phase 2 promotion.
 
 7. **Service Bus still has unresolved historical blockers**
    Prior Phase 1 blockers around Service Bus lock/DLQ/stale-running jobs are bypassed for Durable ingests, not fully removed for all write types.
 
 ## Recommended next steps
 
-1. Investigate case `4b24c848` knowledge-update retrieval:
-   - Is the later "five tops" update extracted?
-   - Is it in the latest committed fact-location projection?
-   - Is it in Azure AI Search recall?
-   - Is it retrieved but down-ranked?
-   - Is answer composition ignoring the update?
+1. Rerun full Phase 1 Durable calibration with the knowledge-update fix:
+   - confirm 3/3 cases pass;
+   - confirm 28/28 Durable instances complete;
+   - confirm 0 DLQ delta and no content-filter skips;
+   - then decide whether Phase 2 can proceed.
 
 2. Decide delete/clear migration:
    - Keep on Service Bus with explicit docs and tests, or
