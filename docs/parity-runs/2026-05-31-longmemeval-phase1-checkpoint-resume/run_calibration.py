@@ -30,6 +30,7 @@ DURABLE_HUB = os.getenv("PHASE1_DURABLE_HUB", "MemForestWrites").strip()
 DURABLE_STATUS_CONNECTION = os.getenv("PHASE1_DURABLE_STATUS_CONNECTION", "Storage").strip()
 DURABLE_STATUS_REQUIRED = os.getenv("PHASE1_DURABLE_STATUS_REQUIRED", "").strip().lower() in {"1", "true", "yes", "on"}
 RUN_SUFFIX = os.getenv("PHASE1_RUN_SUFFIX", "").strip()
+CASE_FILTER = {item.strip() for item in os.getenv("PHASE1_CASE_IDS", "").split(",") if item.strip()}
 
 RUN = Path(__file__).resolve().parent
 CASES = json.loads((RUN / "calibration_cases.json").read_text(encoding="utf-8"))
@@ -525,11 +526,14 @@ def main() -> None:
         "durable_hub": DURABLE_HUB if DISPATCH_MODE == "durable" else None,
         "run_suffix": RUN_SUFFIX,
         "results_dir": str(RESULTS),
+        "case_filter": sorted(CASE_FILTER),
     }
     save(RUN / "run_metadata.json", metadata)
     previous_probe = None
     results = []
     for index, case in enumerate(CASES, start=1):
+        if CASE_FILTER and case["case_id"] not in CASE_FILTER:
+            continue
         print(json.dumps({"case": case["case_id"], "index": index, "type": case["question_type"]}), flush=True)
         result = run_case(case, index, previous_probe)
         results.append(result)
