@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import os
 import re
 import subprocess
 import time
@@ -21,6 +22,14 @@ USER = "22222222-2222-4222-8222-222222222222"
 API_SCOPE = "api://33333333-3333-4333-8333-333333333333/access_as_user"
 MODEL_SCOPE = "https://cognitiveservices.azure.com/.default"
 BENCHMARK_SECRET_PATH = Path.home() / "AppData" / "Local" / "Temp" / "azure_memforest_benchmark_secret.txt"
+AUTH_MODE = os.getenv("PHASE1_AUTH_MODE", "benchmark").strip().lower()
+DISPATCH_MODE = os.getenv("PHASE1_DISPATCH_MODE", "servicebus").strip().lower()
+DURABLE_STATUS_KEY = os.getenv("PHASE1_DURABLE_STATUS_KEY", "").strip()
+DURABLE_START_URL = os.getenv("PHASE1_DURABLE_START_URL", "").strip()
+DURABLE_HUB = os.getenv("PHASE1_DURABLE_HUB", "MemForestWrites").strip()
+DURABLE_STATUS_CONNECTION = os.getenv("PHASE1_DURABLE_STATUS_CONNECTION", "Storage").strip()
+DURABLE_STATUS_REQUIRED = os.getenv("PHASE1_DURABLE_STATUS_REQUIRED", "").strip().lower() in {"1", "true", "yes", "on"}
+RUN_SUFFIX = os.getenv("PHASE1_RUN_SUFFIX", "").strip()
 
 RUN = Path(__file__).resolve().parent
 CASES = json.loads((RUN / "calibration_cases.json").read_text(encoding="utf-8"))
@@ -29,7 +38,7 @@ OVERRIDE_BY_SESSION = {
     (item["case_id"], item["source_session_id"]): item
     for item in OVERRIDES.get("overrides", [])
 }
-RESULTS = RUN / "case_results"
+RESULTS = Path(os.getenv("PHASE1_RESULTS_DIR", str(RUN / "case_results")))
 RESULTS.mkdir(exist_ok=True)
 
 _tokens: dict[str, tuple[str, float]] = {}
@@ -61,10 +70,15 @@ def benchmark_secret() -> str:
 
 def api_headers(*, user_id: str = USER, json_body: bool = False, idem: str | None = None) -> dict[str, str]:
     headers = {
-        "x-benchmark-auth": benchmark_secret(),
         "x-tenant-id": TENANT,
         "x-actor-id": user_id,
     }
+    if AUTH_MODE == "benchmark":
+        headers["x-benchmark-auth"] = benchmark_secret()
+    elif AUTH_MODE == "dev":
+        headers["x-auth-roles"] = "memory.benchmark"
+    else:
+        raise RuntimeError(f"unsupported PHASE1_AUTH_MODE={AUTH_MODE!r}")
     if json_body:
         headers["Content-Type"] = "application/json"
     if idem:
@@ -122,6 +136,35 @@ def wait_job_progress(job_id: str, *, user_id: str, hard_timeout_seconds: int, i
             last_progress_at = time.time()
             progress_events.append({"elapsed_sec": last_progress_at - start, "fingerprint": list(fingerprint)})
     return status, time.time() - start, {"timeout_reason": None, "progress_events": progress_events}
+
+
+def durable_instance_status(job_id: str) -> dict | None:
+    if DISPATCH_MODE != "durable" or not (DURABLE_START_URL and DURABLE_STATUS_KEY):
+        return None
+    base_url = DURABLE_START_URL.split("/api/", 1)[0].rstrip("/")
+    last_error = None
+    for _ in range(12):
+        try:
+            response = requests.get(
+                f"{base_url}/runtime/webhooks/durabletask/instances/{job_id}",
+                params={"taskHub": DURABLE_HUB, "connection": DURABLE_STATUS_CONNECTION, "code": DURABLE_STATUS_KEY},
+                timeout=120,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            redacted = {key: value for key, value in payload.items() if key != "input"}
+            if redacted.get("runtimeStatus") == "Completed":
+                redacted.pop("output", None)
+            elif isinstance(redacted.get("output"), str) and len(redacted["output"]) > 4000:
+                redacted["output"] = redacted["output"][:4000] + "...<truncated>"
+            if redacted.get("runtimeStatus") in {"Completed", "Failed", "Terminated", "Canceled"}:
+                return redacted
+        except Exception as exc:
+            last_error = exc
+        time.sleep(5)
+    if last_error is not None:
+        raise last_error
+    return None
 
 
 def norm(text: object) -> str:
@@ -246,7 +289,7 @@ def residue_probe(question: str, *, user_id: str) -> dict:
 
 def run_case(case: dict, index: int, previous_probe: str | None) -> dict:
     case_id = case["case_id"]
-    user_id = f"benchmark-phase1-{index:02d}-{case_id}"
+    user_id = f"benchmark-phase1-{index:02d}-{case_id}{('-' + RUN_SUFFIX) if RUN_SUFFIX else ''}"
     out = RESULTS / f"{index:02d}_{case_id}.json"
     if out.exists():
         result = json.loads(out.read_text(encoding="utf-8"))
@@ -329,6 +372,12 @@ def run_case(case: dict, index: int, previous_probe: str | None) -> dict:
             idle_timeout_seconds=10 * 60,
         )
         job_events = api_get(f"/v1/users/{user_id}/jobs/{ingest['job_id']}/events", user_id=user_id)
+        durable_status = None
+        durable_error = None
+        try:
+            durable_status = durable_instance_status(ingest["job_id"])
+        except Exception as exc:
+            durable_error = f"{type(exc).__name__}: {exc}"
         result["events"].append(
             {
                 "step": "ingest",
@@ -340,6 +389,8 @@ def run_case(case: dict, index: int, previous_probe: str | None) -> dict:
                 "elapsed_sec": ingest_elapsed,
                 "job_events": job_events,
                 "wait_info": wait_info,
+                "durable_instance": durable_status,
+                "durable_status_error": durable_error,
             }
         )
         save(out, result)
@@ -364,6 +415,10 @@ def run_case(case: dict, index: int, previous_probe: str | None) -> dict:
                 print(json.dumps({"case": case_id, "ingest": session_index, "status": "filtered_skipped", "source_session_id": session["source_session_id"]}), flush=True)
                 continue
             result["status"] = "timeout_ingest" if wait_info.get("timeout_reason") else "failed_ingest"
+            save(out, result)
+            return result
+        if DURABLE_STATUS_REQUIRED and (not durable_status or durable_status.get("runtimeStatus") != "Completed"):
+            result["status"] = "failed_durable_instance"
             save(out, result)
             return result
 
@@ -407,6 +462,10 @@ def reconcile_existing_ingests(result: dict, *, user_id: str) -> None:
             event["status"] = refreshed
             event["reconciled_from_api"] = True
             event["dlq_settlement_artifact"] = True
+            try:
+                event["durable_instance"] = durable_instance_status(event["job_id"])
+            except Exception as exc:
+                event["durable_status_error"] = f"{type(exc).__name__}: {exc}"
         elif refreshed.get("status") in {"failed", "cancelled"}:
             event["status"] = refreshed
             event["reconciled_from_api"] = True
@@ -415,8 +474,26 @@ def reconcile_existing_ingests(result: dict, *, user_id: str) -> None:
 def aggregate(results: list[dict], before: dict, after: dict) -> dict:
     completed = [r for r in results if r.get("status") == "succeeded"]
     new_dlq = int(after.get("deadletter", 0)) - int(before.get("deadletter", 0))
+    durable_mode = DISPATCH_MODE == "durable"
+    durable_instances = [
+        event.get("durable_instance")
+        for result in results
+        for event in result.get("events", [])
+        if event.get("step") == "ingest" and event.get("durable_instance")
+    ]
+    successful_ingest_events = [
+        event
+        for result in results
+        for event in result.get("events", [])
+        if event.get("step") == "ingest" and (event.get("status") or {}).get("status") == "succeeded"
+    ]
+    durable_completed = sum(1 for item in durable_instances if item.get("runtimeStatus") == "Completed")
+    dlq_gate_passed = durable_mode or new_dlq == 0
+    durable_gate_passed = not durable_mode or durable_completed == len(successful_ingest_events)
     return {
-        "status": "succeeded" if len(completed) == len(results) and new_dlq == 0 and all(r["judges"]["primary"]["label"] for r in completed) else "gate_failed",
+        "status": "succeeded" if len(completed) == len(results) and dlq_gate_passed and durable_gate_passed and all(r["judges"]["primary"]["label"] for r in completed) else "gate_failed",
+        "dispatch_mode": DISPATCH_MODE,
+        "auth_mode": AUTH_MODE,
         "attempted_cases": len(results),
         "completed_cases": len(completed),
         "strict_unmodified_completed_cases": sum(1 for r in completed if not r.get("modified_input")),
@@ -426,6 +503,11 @@ def aggregate(results: list[dict], before: dict, after: dict) -> dict:
         "primary_judge_correct": sum(1 for r in completed if r["judges"]["primary"]["label"]),
         "judge_agreements": sum(1 for r in completed if r["judges"]["agreement"]),
         "new_dlq_count_delta": new_dlq,
+        "dlq_gate_enforced": not durable_mode,
+        "durable_instance_count": len(durable_instances),
+        "durable_instance_completed_count": durable_completed,
+        "successful_ingest_event_count": len(successful_ingest_events),
+        "durable_gate_passed": durable_gate_passed,
         "queue_before": before,
         "queue_after": after,
         "case_statuses": [{"case_id": r["case_id"], "status": r["status"], "answer": r.get("answer"), "primary_label": r.get("judges", {}).get("primary", {}).get("label"), "cross_label": r.get("judges", {}).get("cross_check", {}).get("label")} for r in results],
@@ -437,7 +519,12 @@ def main() -> None:
         "api_version": api_get("/version", user_id="benchmark-phase1-metadata"),
         "queue_before": queue_state(),
         "decisions": json.loads((RUN / "calibration_manifest.json").read_text(encoding="utf-8")),
-        "isolation": "fresh benchmark synthetic user per case using x-benchmark-auth; no clear-per-case",
+        "isolation": f"fresh benchmark synthetic user per case using auth_mode={AUTH_MODE}; dispatch_mode={DISPATCH_MODE}; no clear-per-case",
+        "auth_mode": AUTH_MODE,
+        "dispatch_mode": DISPATCH_MODE,
+        "durable_hub": DURABLE_HUB if DISPATCH_MODE == "durable" else None,
+        "run_suffix": RUN_SUFFIX,
+        "results_dir": str(RESULTS),
     }
     save(RUN / "run_metadata.json", metadata)
     previous_probe = None
