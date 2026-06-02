@@ -96,6 +96,64 @@ class FakeFactStore:
         ]
 
 
+class FakeKnowledgeUpdateFactStore:
+    def __init__(self):
+        self.facts = {
+            "old": ManagedFact(
+                fact_id="old",
+                fact_text="The user has bought three tops from H&M.",
+                embedding_id="",
+                origin="",
+                semantic_role="state",
+                entities=["H&M"],
+                topics=["shopping"],
+                attribute_keys=[],
+                domain_keys=["retail"],
+                collection_keys=["clothing_items"],
+                detail_level="specific",
+                confidence=1.0,
+                first_session_id="s1",
+                first_cell_id="c1",
+                metadata={"embedding": [1.0, 0.0]},
+                time_start=1.0,
+                time_end=1.0,
+            ),
+            "new": ManagedFact(
+                fact_id="new",
+                fact_text="The user has already purchased five tops from H&M so far.",
+                embedding_id="",
+                origin="",
+                semantic_role="state",
+                entities=["H&M"],
+                topics=["shopping"],
+                attribute_keys=[],
+                domain_keys=["retail"],
+                collection_keys=["clothing_items"],
+                detail_level="specific",
+                confidence=1.0,
+                first_session_id="s2",
+                first_cell_id="c2",
+                metadata={"embedding": [0.96, 0.0]},
+                time_start=2.0,
+                time_end=2.0,
+            ),
+        }
+
+    async def get_facts(self, fact_ids):
+        return [self.facts[fact_id] for fact_id in fact_ids if fact_id in self.facts]
+
+    async def search_facts_text(self, query_text, *, limit=20):
+        return [self.facts["new"], self.facts["old"]][:limit]
+
+
+class FakeFactLocationIndex:
+    def __init__(self, present):
+        self.present = set(present)
+
+    async def get_locations(self, fact_ids):
+        return {fact_id: ([object()] if fact_id in self.present else []) for fact_id in fact_ids}
+
+
 class FakeTraceRecorder:
     def __init__(self):
         self.calls = []
@@ -118,7 +176,7 @@ def _manifest():
     )
 
 
-def _service(manifest=None, recall=None, trace_recorder=None, model=None, fact_store=None):
+def _service(manifest=None, recall=None, trace_recorder=None, model=None, fact_store=None, fact_location_index=None, config=None):
     model = model or FakeModel()
     fact_store = fact_store or FakeFactStore()
     return CloudMemoryQueryService(
@@ -126,9 +184,10 @@ def _service(manifest=None, recall=None, trace_recorder=None, model=None, fact_s
         fact_store_factory=lambda tenant_id, user_id: fact_store,
         tree_node_store_factory=lambda tenant_id, user_id, forest_version: FakeTreeStore(),
         browse_embedding_store_factory=lambda tenant_id, user_id, forest_version, embedding_model_version: FakeEmbeddingStore(),
+        fact_location_index_factory=(lambda tenant_id, user_id, forest_version: FakeFactLocationIndex(fact_location_index)) if fact_location_index is not None else None,
         recall_index=recall or FakeRecallIndex(),
         model_client=model,
-        config=CloudQueryConfig(embedding_model_version="embed-v1", default_beam_width=2),
+        config=config or CloudQueryConfig(embedding_model_version="embed-v1", default_beam_width=2),
         trace_recorder=trace_recorder,
     )
 
@@ -185,6 +244,45 @@ async def test_cloud_query_handles_leaf_recall_candidate() -> None:
     )
 
     assert [fact.fact_id for fact in response.facts] == ["fact-b"]
+
+
+@pytest.mark.asyncio
+async def test_cloud_query_lexical_fallback_and_recency_surface_latest_update() -> None:
+    response = await _service(
+        _manifest(),
+        recall=FakeLeafRecallIndex(),
+        fact_store=FakeKnowledgeUpdateFactStore(),
+        fact_location_index={"new", "old"},
+        config=CloudQueryConfig(
+            embedding_model_version="embed-v1",
+            default_beam_width=2,
+            lexical_fact_fallback=True,
+            recency_rerank_weight=0.15,
+        ),
+    ).query(
+        ActorContext(actor_id="user-1", tenant=TenantContext("tenant-1")),
+        user_id="user-1",
+        request=QueryRequest(question="How many tops have I bought from H&M so far?", max_facts=2),
+    )
+
+    assert [fact.fact_id for fact in response.facts] == ["new", "old"]
+
+
+@pytest.mark.asyncio
+async def test_cloud_query_lexical_fallback_filters_facts_not_in_latest_projection() -> None:
+    response = await _service(
+        _manifest(),
+        recall=FakeLeafRecallIndex(),
+        fact_store=FakeKnowledgeUpdateFactStore(),
+        fact_location_index={"old"},
+        config=CloudQueryConfig(embedding_model_version="embed-v1", default_beam_width=2, lexical_fact_fallback=True),
+    ).query(
+        ActorContext(actor_id="user-1", tenant=TenantContext("tenant-1")),
+        user_id="user-1",
+        request=QueryRequest(question="How many tops have I bought from H&M so far?", max_facts=2),
+    )
+
+    assert [fact.fact_id for fact in response.facts] == ["old"]
 
 
 @pytest.mark.asyncio

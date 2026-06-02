@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import math
 import os
+import re
 import uuid
 import logging
 from dataclasses import dataclass
@@ -17,7 +18,7 @@ from src.cloud.config import load_cloud_config
 from src.cloud.cosmos_browse_embeddings import CosmosBrowseEmbeddingStore
 from src.cloud.cosmos_facts import CosmosFactStore
 from src.cloud.cosmos_manifests import CosmosManifestStore, ForestManifest
-from src.cloud.cosmos_source import CosmosTreeNodeStore
+from src.cloud.cosmos_source import CosmosFactLocationIndex, CosmosTreeNodeStore
 from src.cloud.cosmos_traces import trace_recorder_from_database
 from src.cloud.query_prerequisites import CloudQueryNotReady
 from src.observability import TraceEvent, TraceEventType
@@ -36,6 +37,9 @@ class CloudQueryConfig:
     embedding_model_version: str = ""
     compose_answer: bool = True
     rerank_facts: bool = True
+    lexical_fact_fallback: bool = True
+    lexical_fact_fallback_top_k: int = 20
+    recency_rerank_weight: float = 0.15
 
 
 class CloudMemoryQueryService:
@@ -46,6 +50,7 @@ class CloudMemoryQueryService:
         fact_store_factory: Any,
         tree_node_store_factory: Any,
         browse_embedding_store_factory: Any,
+        fact_location_index_factory: Any | None = None,
         recall_index: Any,
         model_client: Any,
         config: CloudQueryConfig,
@@ -55,6 +60,7 @@ class CloudMemoryQueryService:
         self._fact_store_factory = fact_store_factory
         self._tree_node_store_factory = tree_node_store_factory
         self._browse_embedding_store_factory = browse_embedding_store_factory
+        self._fact_location_index_factory = fact_location_index_factory
         self._recall_index = recall_index
         self._model_client = model_client
         self._config = config
@@ -155,14 +161,29 @@ class CloudMemoryQueryService:
                     seen.add(fact_id)
                     fact_ids.append(fact_id)
 
-        facts = await self._fact_store_factory(tenant_id, user_id).get_facts(fact_ids)
+        fact_store = self._fact_store_factory(tenant_id, user_id)
+        facts = await fact_store.get_facts(fact_ids)
+        fallback_facts = await self._lexical_fact_fallback(
+            fact_store,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            forest_version=manifest.forest_version,
+            question=request.question,
+            existing_fact_ids={fact.fact_id for fact in facts},
+        )
+        if fallback_facts:
+            facts = [*facts, *fallback_facts]
         events.append(
             TraceEvent(
                 query_id=query_id,
                 event_type=TraceEventType.FACTS_LOADED,
                 tenant_id=tenant_id,
                 user_id=user_id,
-                attributes={"fact_count": len(facts), "raw_fact_id_count": len(fact_ids)},
+                attributes={
+                    "fact_count": len(facts),
+                    "raw_fact_id_count": len(fact_ids),
+                    "lexical_fallback_fact_count": len(fallback_facts),
+                },
             )
         )
         scored_facts = await self._rerank_facts(facts, query_embedding)
@@ -245,6 +266,44 @@ class CloudMemoryQueryService:
         reason = str(payload.get("reason") or "").strip()
         return (answer or None), (reason or None)
 
+    async def _lexical_fact_fallback(
+        self,
+        fact_store: Any,
+        *,
+        tenant_id: str,
+        user_id: str,
+        forest_version: str,
+        question: str,
+        existing_fact_ids: set[str],
+    ) -> list[Any]:
+        if (
+            not self._config.lexical_fact_fallback
+            or not _should_use_lexical_fact_fallback(question)
+            or not hasattr(fact_store, "search_facts_text")
+        ):
+            return []
+        try:
+            candidates = await fact_store.search_facts_text(
+                question,
+                limit=max(1, int(self._config.lexical_fact_fallback_top_k)) * 4,
+            )
+        except Exception:
+            log.exception("failed lexical cloud query fact fallback")
+            return []
+        candidates = [fact for fact in candidates if fact.fact_id not in existing_fact_ids]
+        if not candidates:
+            return []
+        if self._fact_location_index_factory is None:
+            return candidates
+        location_index = self._fact_location_index_factory(tenant_id, user_id, forest_version)
+        try:
+            locations = await location_index.get_locations([fact.fact_id for fact in candidates])
+        except Exception:
+            log.exception("failed to filter lexical fallback facts by latest projection")
+            return []
+        filtered = [fact for fact in candidates if locations.get(fact.fact_id)]
+        return filtered[: max(1, int(self._config.lexical_fact_fallback_top_k))]
+
     async def _rerank_facts(self, facts: list[Any], query_embedding: list[float]) -> list[tuple[float, Any]]:
         if not self._config.rerank_facts or not facts:
             return []
@@ -259,10 +318,12 @@ class CloudMemoryQueryService:
                 return []
             for index, embedding in zip(missing_indexes, fallback_embeddings):
                 embeddings[index] = embedding
-        scored = [
-            (_dot(query_embedding, _normalize(embedding)), fact)
-            for embedding, fact in zip(embeddings, facts)
-        ]
+        recency_scores = _normalized_recency_scores(facts)
+        scored = []
+        for index, (embedding, fact) in enumerate(zip(embeddings, facts)):
+            semantic_score = _dot(query_embedding, _normalize(embedding))
+            recency_score = recency_scores.get(getattr(fact, "fact_id", ""), 0.0)
+            scored.append((semantic_score + (self._config.recency_rerank_weight * recency_score), fact))
         scored.sort(key=lambda item: item[0], reverse=True)
         return scored
 
@@ -365,6 +426,7 @@ def cloud_query_service_from_env(environ: dict[str, str] | None = None) -> Cloud
         fact_store_factory=lambda tenant_id, user_id: CosmosFactStore(database.get_container_client("facts"), tenant_id=tenant_id, user_id=user_id),
         tree_node_store_factory=lambda tenant_id, user_id, forest_version: CosmosTreeNodeStore(database.get_container_client("tree_nodes"), tenant_id=tenant_id, user_id=user_id, forest_version=forest_version),
         browse_embedding_store_factory=lambda tenant_id, user_id, forest_version, embedding_model_version: CosmosBrowseEmbeddingStore(database.get_container_client("browse_embeddings"), tenant_id=tenant_id, user_id=user_id, forest_version=forest_version, embedding_model_version=embedding_model_version),
+        fact_location_index_factory=lambda tenant_id, user_id, forest_version: CosmosFactLocationIndex(database.get_container_client("fact_locations"), tenant_id=tenant_id, user_id=user_id, forest_version=forest_version),
         recall_index=recall_index,
         model_client=model_client,
         config=CloudQueryConfig(
@@ -381,6 +443,39 @@ def _normalize(vec: list[float]) -> list[float]:
 
 def _dot(left: list[float], right: list[float]) -> float:
     return sum(a * b for a, b in zip(left, right))
+
+
+_UPDATE_QUERY_PATTERN = re.compile(r"\b(how many|so far|current|currently|latest|now|updated?|total)\b", re.IGNORECASE)
+
+
+def _should_use_lexical_fact_fallback(question: str) -> bool:
+    return bool(_UPDATE_QUERY_PATTERN.search(str(question or "")))
+
+
+def _normalized_recency_scores(facts: list[Any]) -> dict[str, float]:
+    fact_times = {
+        str(getattr(fact, "fact_id", "")): _fact_time(fact)
+        for fact in facts
+        if _fact_time(fact) is not None
+    }
+    if len(fact_times) < 2:
+        return {fact_id: 0.0 for fact_id in fact_times}
+    min_time = min(fact_times.values())
+    max_time = max(fact_times.values())
+    if max_time <= min_time:
+        return {fact_id: 0.0 for fact_id in fact_times}
+    return {
+        fact_id: (value - min_time) / (max_time - min_time)
+        for fact_id, value in fact_times.items()
+    }
+
+
+def _fact_time(fact: Any) -> float | None:
+    candidates = [getattr(fact, "time_end", None), getattr(fact, "time_start", None)]
+    for occurrence in getattr(fact, "occurrences", []) or []:
+        candidates.extend([getattr(occurrence, "time_end", None), getattr(occurrence, "time_start", None)])
+    numeric = [float(value) for value in candidates if value is not None]
+    return max(numeric) if numeric else None
 
 
 def _facts_context(facts: list[Any]) -> str:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import asdict
 from typing import Any
@@ -11,6 +12,24 @@ from src.cloud.schema import SCHEMA_VERSION, partition_key
 from src.utils.types import FactOccurrence, ManagedFact
 
 MAX_FACT_DOCUMENT_BYTES = 1024 * 1024
+MAX_LEXICAL_FACT_TOKENS = 5
+_FACT_SEARCH_STOPWORDS = {
+    "about",
+    "already",
+    "from",
+    "have",
+    "many",
+    "much",
+    "what",
+    "when",
+    "where",
+    "which",
+    "with",
+    "so",
+    "far",
+    "the",
+    "user",
+}
 
 
 class CosmosFactStore:
@@ -56,6 +75,27 @@ class CosmosFactStore:
                     fact = _fact_from_doc(item)
                     docs_by_fact_id[fact.fact_id] = fact
         return [docs_by_fact_id[fact_id] for fact_id in fact_ids if fact_id in docs_by_fact_id]
+
+    async def search_facts_text(self, query_text: str, *, limit: int = 20) -> list[ManagedFact]:
+        tokens = _lexical_tokens(query_text)[:MAX_LEXICAL_FACT_TOKENS]
+        if not tokens or limit <= 0:
+            return []
+        clauses = [f"CONTAINS(LOWER(c.fact_text), @token{index})" for index, _ in enumerate(tokens)]
+        query = (
+            "SELECT * FROM c WHERE c.tenant_user_key=@pk "
+            "AND (NOT IS_DEFINED(c.tombstoned) OR c.tombstoned=false) "
+            f"AND ({' OR '.join(clauses)})"
+        )
+        params = [{"name": "@pk", "value": self.tenant_user_key}] + [
+            {"name": f"@token{index}", "value": token}
+            for index, token in enumerate(tokens)
+        ]
+        facts = []
+        async for item in _aiter(self.container.query_items(query=query, parameters=params, partition_key=self.tenant_user_key)):
+            if item.get("tenant_id") == self.tenant_id and item.get("user_id") == self.user_id:
+                facts.append(_fact_from_doc(item))
+        facts.sort(key=_managed_fact_time, reverse=True)
+        return facts[:limit]
 
     async def upsert_facts(self, facts: list[ManagedFact]) -> None:
         for fact in facts:
@@ -155,6 +195,25 @@ def _fact_doc_id(fact_id: str) -> str:
 def _chunks(values: list[str], size: int):
     for index in range(0, len(values), size):
         yield values[index : index + size]
+
+
+def _lexical_tokens(text: str) -> list[str]:
+    seen = set()
+    tokens = []
+    for raw in re.findall(r"[a-z0-9]+(?:[&-][a-z0-9]+)*", str(text or "").lower()):
+        if len(raw) < 3 or raw in _FACT_SEARCH_STOPWORDS or raw in seen:
+            continue
+        seen.add(raw)
+        tokens.append(raw)
+    return tokens
+
+
+def _managed_fact_time(fact: ManagedFact) -> float:
+    candidates = [fact.time_end, fact.time_start]
+    for occurrence in fact.occurrences:
+        candidates.extend([occurrence.time_end, occurrence.time_start])
+    numeric = [float(value) for value in candidates if value is not None]
+    return max(numeric) if numeric else 0.0
 
 
 async def _maybe_await(value):

@@ -27,7 +27,12 @@ class FakeContainer:
         params = {param["name"]: param["value"] for param in parameters}
         result = []
         for (pk, _id), item in self.items.items():
-            if pk != partition_key or item["id"] not in params["@ids"]:
+            if pk != partition_key:
+                continue
+            if "@ids" in params and item["id"] not in params["@ids"]:
+                continue
+            token_values = [value for key, value in params.items() if key.startswith("@token")]
+            if token_values and not any(token in item.get("fact_text", "").lower() for token in token_values):
                 continue
             if item.get("tombstoned"):
                 continue
@@ -67,6 +72,31 @@ def _fact(fact_id="fact-1") -> ManagedFact:
         metadata={"embedding": [0.1, 0.2]},
         time_start=1.0,
         time_end=1.0,
+    )
+
+
+def _text_fact(fact_id: str, text: str, time_value: float) -> ManagedFact:
+    fact = _fact(fact_id)
+    return ManagedFact(
+        **{
+            **fact.__dict__,
+            "fact_text": text,
+            "time_start": time_value,
+            "time_end": time_value,
+            "occurrences": [
+                FactOccurrence(
+                    session_id="session-1",
+                    cell_id="cell-1",
+                    item_id=f"item-{fact_id}",
+                    source_turn_ids=["turn-1"],
+                    source_spans=["span"],
+                    participants=["user"],
+                    time_text=str(time_value),
+                    time_start=time_value,
+                    time_end=time_value,
+                )
+            ],
+        }
     )
 
 
@@ -126,3 +156,19 @@ async def test_cosmos_fact_store_is_not_forest_version_scoped() -> None:
     stored = next(iter(store.container.items.values()))
 
     assert "forest_version" not in stored
+
+
+@pytest.mark.asyncio
+async def test_cosmos_fact_store_search_preserves_brand_token_and_sorts_by_time() -> None:
+    store = CosmosFactStore(FakeContainer(), tenant_id="tenant-1", user_id="user-1")
+    await store.upsert_facts(
+        [
+            _text_fact("old", "The user bought three tops from H&M.", 1.0),
+            _text_fact("new", "The user has already purchased five tops from H&M so far.", 2.0),
+            _text_fact("other", "The user bought shoes from another brand.", 3.0),
+        ]
+    )
+
+    facts = await store.search_facts_text("How many tops from H&M so far?", limit=10)
+
+    assert [fact.fact_id for fact in facts[:2]] == ["new", "old"]
