@@ -26,6 +26,9 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
     function_key = args.function_key or os.getenv("AZURE_MEMFOREST_DURABLE_FUNCTION_KEY")
     if not function_key:
         raise RuntimeError("Provide --function-key or AZURE_MEMFOREST_DURABLE_FUNCTION_KEY.")
+    if not str(args.durable_start_url).lower().startswith("https://"):
+        raise RuntimeError("--durable-start-url must use https.")
+    durable_status_key = args.durable_status_key or os.getenv("AZURE_MEMFOREST_DURABLE_STATUS_KEY") or function_key
     benchmark_secret = args.benchmark_secret or _read_secret(args.benchmark_secret_path) if args.auth_mode == "benchmark" else ""
     started_at = time.time()
     run_id = uuid.uuid4().hex
@@ -84,6 +87,13 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
         headers=_api_headers(args.tenant_id, user_id, benchmark_secret, auth_mode=args.auth_mode),
         timeout=args.timeout_seconds,
     )
+    durable_instance = _get_durable_instance_status(
+        args.durable_start_url,
+        durable_status_key,
+        job_id,
+        task_hub=args.durable_hub,
+        timeout=args.timeout_seconds,
+    ) if args.verify_durable_instance else None
     artifact = {
         "run_id": run_id,
         "started_at_unix": started_at,
@@ -91,10 +101,12 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
         "durable_hub": args.durable_hub,
         "accepted_job": accepted,
         "durable_start": _redact_start(start),
+        "durable_instance": _redact_durable_instance(durable_instance) if durable_instance is not None else None,
         "job": status,
         "query": query,
         "assertions": {
             "job_succeeded": status.get("status") == "succeeded",
+            "durable_instance_completed": durable_instance is None or _durable_instance_completed(durable_instance),
             "query_mentions_marker": args.skip_query or run_id.lower() in str((query or {}).get("answer") or "").lower(),
         },
     }
@@ -235,6 +247,36 @@ def _get_json(url: str, *, headers: dict[str, str], timeout: int) -> dict[str, A
     return response.json()
 
 
+def _get_durable_instance_status(
+    durable_start_url: str,
+    durable_status_key: str,
+    job_id: str,
+    *,
+    task_hub: str,
+    timeout: int,
+) -> dict[str, Any]:
+    base_url = durable_start_url.split("/api/", 1)[0].rstrip("/")
+    response = httpx.get(
+        f"{base_url}/runtime/webhooks/durabletask/instances/{job_id}",
+        params={"taskHub": task_hub, "connection": "Storage", "code": durable_status_key},
+        timeout=timeout,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def _durable_instance_completed(instance: dict[str, Any]) -> bool:
+    return str(instance.get("runtimeStatus") or "").lower() == "completed"
+
+
+def _redact_durable_instance(instance: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in instance.items()
+        if key not in {"input", "output"}
+    }
+
+
 def _read_secret(path: Path | None) -> str:
     if path is None:
         raise RuntimeError("Provide --benchmark-secret or --benchmark-secret-path.")
@@ -262,6 +304,8 @@ def main() -> int:
     parser.add_argument("--benchmark-secret")
     parser.add_argument("--benchmark-secret-path", type=Path)
     parser.add_argument("--durable-hub", default="MemForestWrites")
+    parser.add_argument("--durable-status-key")
+    parser.add_argument("--verify-durable-instance", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--timeout-seconds", type=int, default=1800)
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
     args = parser.parse_args()

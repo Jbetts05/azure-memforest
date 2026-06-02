@@ -45,6 +45,20 @@ param workerFactoryReady bool = false
 @description('Enable development header auth for the API. Dev only; use Entra for production.')
 param enableDevHeaderAuth bool = false
 
+@allowed([
+  'servicebus'
+  'durable'
+])
+@description('Write dispatch mode for the API. Keep servicebus unless running an approved Durable smoke or migration gate.')
+param apiDispatchMode string = 'servicebus'
+
+@description('Durable Functions /writes/start endpoint used when apiDispatchMode=durable.')
+param durableStartUrl string = ''
+
+@secure()
+@description('Function key for the Durable /writes/start endpoint. Stored as a Container Apps secret when provided.')
+param durableStartFunctionKey string = ''
+
 @description('Enable UI routes/assets when a frontend is deployed. Keep false until UI feature gate is ready.')
 param enableUiFeature bool = false
 
@@ -649,13 +663,19 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
           identity: appIdentity.id
         }
       ]
+      secrets: apiDispatchMode == 'durable' ? [
+        {
+          name: 'durable-start-function-key'
+          value: durableStartFunctionKey
+        }
+      ] : []
     }
     template: {
       containers: [
         {
           name: 'api'
           image: containerImage
-          env: [
+          env: concat([
             {
               name: 'AZURE_MEMFOREST_ENV'
               value: environmentName
@@ -784,7 +804,20 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
               name: 'ENTRA_AUDIENCES'
               value: entraAudiences
             }
-          ]
+          ], apiDispatchMode == 'durable' ? [
+            {
+              name: 'AZURE_MEMFOREST_DISPATCH_MODE'
+              value: 'durable'
+            }
+            {
+              name: 'AZURE_MEMFOREST_DURABLE_START_URL'
+              value: durableStartUrl
+            }
+            {
+              name: 'AZURE_MEMFOREST_DURABLE_START_TOKEN'
+              secretRef: 'durable-start-function-key'
+            }
+          ] : [])
           resources: {
             cpu: json('0.5')
             memory: '1Gi'
