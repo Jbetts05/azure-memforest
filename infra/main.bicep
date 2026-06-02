@@ -141,6 +141,9 @@ var cosmosName = take('${replace(normalizedName, '-', '')}cosmos', 44)
 var searchName = take('${replace(normalizedName, '-', '')}search', 60)
 var storageName = '${take(replace(normalizedName, '-', ''), 9)}st${uniqueString(resourceGroup().id)}'
 var durableDeploymentContainerName = 'durable-package-${take(replace(normalizedName, '-', ''), 24)}'
+var storageBlobServiceUri = substring(storageAccount.properties.primaryEndpoints.blob, 0, max(0, length(storageAccount.properties.primaryEndpoints.blob) - 1))
+var storageQueueServiceUri = substring(storageAccount.properties.primaryEndpoints.queue, 0, max(0, length(storageAccount.properties.primaryEndpoints.queue) - 1))
+var storageTableServiceUri = substring(storageAccount.properties.primaryEndpoints.table, 0, max(0, length(storageAccount.properties.primaryEndpoints.table) - 1))
 var serviceBusName = take('${replace(normalizedName, '-', '')}sb', 50)
 var openAiName = '${take(replace(normalizedName, '-', ''), 11)}ai${uniqueString(resourceGroup().id)}'
 var acrPullRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
@@ -992,8 +995,16 @@ var durableBaseFunctionAppSettings = [
     value: 'EnableWorkerIndexing'
   }
   {
-    name: 'AzureWebJobsStorage__accountName'
-    value: storageAccount.name
+    name: 'AzureWebJobsStorage__blobServiceUri'
+    value: storageBlobServiceUri
+  }
+  {
+    name: 'AzureWebJobsStorage__queueServiceUri'
+    value: storageQueueServiceUri
+  }
+  {
+    name: 'AzureWebJobsStorage__tableServiceUri'
+    value: storageTableServiceUri
   }
   {
     name: 'AzureWebJobsStorage__credential'

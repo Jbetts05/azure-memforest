@@ -1,7 +1,4 @@
-from __future__ import annotations
-
 import json
-from typing import Any
 
 import azure.durable_functions as df
 import azure.functions as func
@@ -27,7 +24,7 @@ async def start_write(req: func.HttpRequest, client: df.DurableOrchestrationClie
         )
 
     existing = await client.get_status(instance_id)
-    if existing is not None:
+    if existing is not None and existing.runtime_status is not None:
         # Restart semantics for terminal instances must be explicit before this path becomes live.
         return func.HttpResponse(
             json.dumps({"id": instance_id, "status": str(existing.runtime_status), "deduped": True}),
@@ -68,14 +65,14 @@ def write_orchestrator(context: df.DurableOrchestrationContext):
 
 
 @app.activity_trigger(input_name="payload")
-async def materialize_write_job(payload: dict[str, Any]) -> dict[str, Any]:
+async def materialize_write_job(payload: dict) -> dict:
     from src.worker.durable_activity import materialize_write_job_from_env
 
     return await materialize_write_job_from_env(payload)
 
 
 @app.activity_trigger(input_name="payload")
-async def fail_write_job(payload: dict[str, Any]) -> dict[str, Any]:
+async def fail_write_job(payload: dict) -> dict:
     from src.worker.durable_activity import fail_write_job_from_env
 
     return await fail_write_job_from_env(payload)
