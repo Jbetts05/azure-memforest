@@ -2,6 +2,8 @@
 
 The write worker consumes ordered memory mutation jobs and materializes them into durable Azure stores. It must preserve MemForest paper behavior while making writes safe under horizontal scale.
 
+For the current migration from Service Bus worker-owned execution to Durable Functions orchestration, see [Service Bus to Durable Functions migration](durable-orchestration-migration.md).
+
 ## Current state
 
 The API publishes `WriteJobEnvelope` messages to the session-enabled Service Bus queue `memforest-writes` and records accepted job metadata in the Cosmos `jobs` container.
