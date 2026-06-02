@@ -257,6 +257,7 @@ class CloudMemoryQueryService:
             answer = str(payload.get("answer") or "").strip()
             reason = str(payload.get("reason") or "").strip()
             if not answer:
+                log.info("retrying blank cloud query answer", extra={"fact_count": len(facts)})
                 retry_prompt = (
                     f"{user_prompt}\n\n"
                     "The previous response did not include a non-empty final answer. "
