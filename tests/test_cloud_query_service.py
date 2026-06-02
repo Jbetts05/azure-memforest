@@ -49,6 +49,28 @@ class FakeModel:
         return {"answer": "Alice moved to Seattle.", "reason": "The retrieved memory says Alice moved to Seattle."}
 
 
+class BlankThenAnswerModel(FakeModel):
+    def __init__(self):
+        super().__init__()
+        self.generate_prompts = []
+
+    def generate_json(self, **kwargs):
+        self.generate_prompts.append(kwargs["user_prompt"])
+        if len(self.generate_prompts) == 1:
+            return {"answer": "", "reason": ""}
+        return {"answer": "4", "reason": "The memory says the user has 3 sisters and 1 brother."}
+
+
+class BlankAnswerModel(FakeModel):
+    def __init__(self):
+        super().__init__()
+        self.generate_count = 0
+
+    def generate_json(self, **kwargs):
+        self.generate_count += 1
+        return {"answer": "", "reason": ""}
+
+
 class FakeTreeStore:
     def __init__(self):
         self.nodes = {
@@ -91,6 +113,30 @@ class FakeFactStore:
                 first_session_id="s1",
                 first_cell_id="c1",
                 metadata={"embedding": [0.1, 1.0] if fact_id == "fact-a" else [1.0, 0.0]} if self.include_embeddings else {},
+            )
+            for fact_id in fact_ids
+        ]
+
+
+class FakeSiblingFactStore:
+    async def get_facts(self, fact_ids):
+        return [
+            ManagedFact(
+                fact_id=fact_id,
+                fact_text="The user has 3 sisters and 1 brother, making a total of 4 siblings.",
+                embedding_id="",
+                origin="",
+                semantic_role="state",
+                entities=[],
+                topics=[],
+                attribute_keys=[],
+                domain_keys=[],
+                collection_keys=[],
+                detail_level="specific",
+                confidence=1.0,
+                first_session_id="s1",
+                first_cell_id="c1",
+                metadata={"embedding": [1.0, 0.0]},
             )
             for fact_id in fact_ids
         ]
@@ -244,6 +290,35 @@ async def test_cloud_query_handles_leaf_recall_candidate() -> None:
     )
 
     assert [fact.fact_id for fact in response.facts] == ["fact-b"]
+
+
+@pytest.mark.asyncio
+async def test_cloud_query_retries_blank_answer_with_stricter_prompt() -> None:
+    model = BlankThenAnswerModel()
+    response = await _service(_manifest(), model=model, fact_store=FakeSiblingFactStore()).query(
+        ActorContext(actor_id="user-1", tenant=TenantContext("tenant-1")),
+        user_id="user-1",
+        request=QueryRequest(question="What is the total number of siblings I have?", max_facts=1),
+    )
+
+    assert response.answer == "4"
+    assert len(model.generate_prompts) == 2
+    assert "non-empty `answer`" in model.generate_prompts[1]
+
+
+@pytest.mark.asyncio
+async def test_cloud_query_keeps_facts_when_answer_retry_stays_blank() -> None:
+    model = BlankAnswerModel()
+    response = await _service(_manifest(), model=model, fact_store=FakeSiblingFactStore()).query(
+        ActorContext(actor_id="user-1", tenant=TenantContext("tenant-1")),
+        user_id="user-1",
+        request=QueryRequest(question="What is the total number of siblings I have?", max_facts=1),
+    )
+
+    assert response.answer is None
+    assert len(response.facts) == 1
+    assert response.facts[0].text == "The user has 3 sisters and 1 brother, making a total of 4 siblings."
+    assert model.generate_count == 2
 
 
 @pytest.mark.asyncio

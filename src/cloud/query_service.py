@@ -251,20 +251,34 @@ class CloudMemoryQueryService:
         if not self._config.compose_answer or not facts:
             return None, None
         context = _facts_context(facts)
+        user_prompt = build_answer_user_message(question, context)
         try:
-            payload = await asyncio.to_thread(
-                self._model_client.generate_json,
-                system_prompt=ANSWER_SYSTEM,
-                user_prompt=build_answer_user_message(question, context),
-                model_name="answer",
-                step_label="cloud_query_answer",
-            )
+            payload = await self._generate_answer_json(user_prompt)
+            answer = str(payload.get("answer") or "").strip()
+            reason = str(payload.get("reason") or "").strip()
+            if not answer:
+                retry_prompt = (
+                    f"{user_prompt}\n\n"
+                    "The previous response did not include a non-empty final answer. "
+                    "Return JSON with a non-empty `answer` extracted from the provided facts. "
+                    "If the facts directly state a count or total, use that value."
+                )
+                payload = await self._generate_answer_json(retry_prompt)
         except Exception:
             log.exception("failed to compose cloud query answer")
             return None, None
         answer = str(payload.get("answer") or "").strip()
         reason = str(payload.get("reason") or "").strip()
         return (answer or None), (reason or None)
+
+    async def _generate_answer_json(self, user_prompt: str) -> dict[str, Any]:
+        return await asyncio.to_thread(
+            self._model_client.generate_json,
+            system_prompt=ANSWER_SYSTEM,
+            user_prompt=user_prompt,
+            model_name="answer",
+            step_label="cloud_query_answer",
+        )
 
     async def _lexical_fact_fallback(
         self,

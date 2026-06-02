@@ -148,7 +148,8 @@ def durable_instance_status(job_id: str) -> dict | None:
         try:
             response = requests.get(
                 f"{base_url}/runtime/webhooks/durabletask/instances/{job_id}",
-                params={"taskHub": DURABLE_HUB, "connection": DURABLE_STATUS_CONNECTION, "code": DURABLE_STATUS_KEY},
+                params={"taskHub": DURABLE_HUB, "connection": DURABLE_STATUS_CONNECTION},
+                headers={"x-functions-key": DURABLE_STATUS_KEY},
                 timeout=120,
             )
             response.raise_for_status()
@@ -160,8 +161,11 @@ def durable_instance_status(job_id: str) -> dict | None:
                 redacted["output"] = redacted["output"][:4000] + "...<truncated>"
             if redacted.get("runtimeStatus") in {"Completed", "Failed", "Terminated", "Canceled"}:
                 return redacted
+        except requests.HTTPError as exc:
+            status_code = exc.response.status_code if exc.response is not None else "unknown"
+            last_error = RuntimeError(f"Durable status request failed with HTTP {status_code}")
         except Exception as exc:
-            last_error = exc
+            last_error = RuntimeError(f"Durable status request failed: {type(exc).__name__}")
         time.sleep(5)
     if last_error is not None:
         raise last_error
