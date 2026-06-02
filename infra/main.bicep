@@ -32,6 +32,13 @@ param deployWorker bool = false
 @description('Deploy the dormant Durable Functions write orchestrator scaffold. Keep false until the orchestrator package is deployed and validated.')
 param deployDurableOrchestrator bool = false
 
+@allowed([
+  'flex'
+  'ep1'
+])
+@description('Hosting plan for the dormant Durable Functions write orchestrator. Flex avoids EP quota when available; EP1 remains an explicit fallback.')
+param durableHostingPlan string = 'flex'
+
 @description('Allow the worker entrypoint to connect to Service Bus. Keep false until smoke testing is approved.')
 param workerFactoryReady bool = false
 
@@ -133,6 +140,7 @@ var acrName = replace(take('${replace(normalizedName, '-', '')}acr', 50), '_', '
 var cosmosName = take('${replace(normalizedName, '-', '')}cosmos', 44)
 var searchName = take('${replace(normalizedName, '-', '')}search', 60)
 var storageName = '${take(replace(normalizedName, '-', ''), 9)}st${uniqueString(resourceGroup().id)}'
+var durableDeploymentContainerName = 'durable-package-${take(replace(normalizedName, '-', ''), 24)}'
 var serviceBusName = take('${replace(normalizedName, '-', '')}sb', 50)
 var openAiName = '${take(replace(normalizedName, '-', ''), 11)}ai${uniqueString(resourceGroup().id)}'
 var acrPullRoleDefinitionId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
@@ -422,6 +430,14 @@ resource snapshotsContainer 'Microsoft.Storage/storageAccounts/blobServices/cont
   }
 }
 
+resource durableDeploymentContainer 'Microsoft.Storage/storageAccounts/blobServices/containers@2023-05-01' = if (deployDurableOrchestrator && durableHostingPlan == 'flex') {
+  name: durableDeploymentContainerName
+  parent: blobService
+  properties: {
+    publicAccess: 'None'
+  }
+}
+
 resource storageBlobDataContributorAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   name: guid(storageAccount.id, appIdentity.id, 'storage-blob-data-contributor')
   scope: storageAccount
@@ -437,6 +453,16 @@ resource storageBlobDataOwnerAssignment 'Microsoft.Authorization/roleAssignments
   scope: storageAccount
   properties: {
     roleDefinitionId: storageBlobDataOwnerRoleDefinitionId
+    principalId: appIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+resource durableDeploymentBlobContributorAssignment 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (deployDurableOrchestrator && durableHostingPlan == 'flex') {
+  name: guid(durableDeploymentContainer.id, appIdentity.id, 'durable-deployment-blob-data-contributor')
+  scope: durableDeploymentContainer
+  properties: {
+    roleDefinitionId: storageBlobDataContributorRoleDefinitionId
     principalId: appIdentity.properties.principalId
     principalType: 'ServicePrincipal'
   }
@@ -960,7 +986,123 @@ resource workerContainerApp 'Microsoft.App/containerApps@2024-03-01' = if (deplo
   ]
 }
 
-resource durableFunctionPlan 'Microsoft.Web/serverfarms@2023-12-01' = if (deployDurableOrchestrator) {
+var durableBaseFunctionAppSettings = [
+  {
+    name: 'AzureWebJobsFeatureFlags'
+    value: 'EnableWorkerIndexing'
+  }
+  {
+    name: 'AzureWebJobsStorage__accountName'
+    value: storageAccount.name
+  }
+  {
+    name: 'AzureWebJobsStorage__credential'
+    value: 'managedidentity'
+  }
+  {
+    name: 'AzureWebJobsStorage__clientId'
+    value: appIdentity.properties.clientId
+  }
+  {
+    name: 'PYTHON_ENABLE_WORKER_EXTENSIONS'
+    value: '1'
+  }
+  {
+    name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
+    value: appInsights.properties.ConnectionString
+  }
+  {
+    name: 'AZURE_CLIENT_ID'
+    value: appIdentity.properties.clientId
+  }
+  {
+    name: 'AZURE_COSMOS_ENDPOINT'
+    value: cosmosAccount.properties.documentEndpoint
+  }
+  {
+    name: 'AZURE_COSMOS_DATABASE_NAME'
+    value: cosmosDatabase.properties.resource.id
+  }
+  {
+    name: 'AZURE_SEARCH_ENDPOINT'
+    value: 'https://${searchService.name}.search.windows.net'
+  }
+  {
+    name: 'AZURE_SEARCH_RECALL_INDEX_NAME'
+    value: searchRecallIndexName
+  }
+  {
+    name: 'AZURE_STORAGE_BLOB_ENDPOINT'
+    value: storageAccount.properties.primaryEndpoints.blob
+  }
+  {
+    name: 'AZURE_STORAGE_SNAPSHOT_CONTAINER'
+    value: snapshotsContainer.name
+  }
+  {
+    name: 'AZURE_OPENAI_ENDPOINT'
+    value: openAiAccount.properties.endpoint
+  }
+  {
+    name: 'AZURE_OPENAI_USE_MANAGED_IDENTITY'
+    value: 'true'
+  }
+  {
+    name: 'AZURE_OPENAI_API_VERSION'
+    value: '2024-10-21'
+  }
+  {
+    name: 'AZURE_OPENAI_CHAT_DEPLOYMENT'
+    value: openAiChatDeployment.name
+  }
+  {
+    name: 'AZURE_OPENAI_EMBEDDING_DEPLOYMENT'
+    value: openAiEmbeddingDeployment.name
+  }
+  {
+    name: 'AZURE_OPENAI_EMBEDDING_DIMENSION'
+    value: string(openAiEmbeddingDimension)
+  }
+  {
+    name: 'AZURE_OPENAI_EMBEDDING_MODEL_VERSION'
+    value: openAiEmbeddingModelVersion
+  }
+]
+var durableFlexFunctionAppSettings = durableBaseFunctionAppSettings
+var durablePremiumFunctionAppSettings = concat([
+  {
+    name: 'FUNCTIONS_EXTENSION_VERSION'
+    value: '~4'
+  }
+  {
+    name: 'FUNCTIONS_WORKER_RUNTIME'
+    value: 'python'
+  }
+  {
+    name: 'SCM_DO_BUILD_DURING_DEPLOYMENT'
+    value: 'true'
+  }
+  {
+    name: 'ENABLE_ORYX_BUILD'
+    value: 'true'
+  }
+], durableBaseFunctionAppSettings)
+
+resource durableFlexFunctionPlan 'Microsoft.Web/serverfarms@2023-12-01' = if (deployDurableOrchestrator && durableHostingPlan == 'flex') {
+  name: '${normalizedName}-durable-plan'
+  location: location
+  tags: tags
+  kind: 'functionapp'
+  sku: {
+    name: 'FC1'
+    tier: 'FlexConsumption'
+  }
+  properties: {
+    reserved: true
+  }
+}
+
+resource durablePremiumFunctionPlan 'Microsoft.Web/serverfarms@2023-12-01' = if (deployDurableOrchestrator && durableHostingPlan == 'ep1') {
   name: '${normalizedName}-durable-plan'
   location: location
   tags: tags
@@ -973,7 +1115,7 @@ resource durableFunctionPlan 'Microsoft.Web/serverfarms@2023-12-01' = if (deploy
   }
 }
 
-resource durableFunctionApp 'Microsoft.Web/sites@2023-12-01' = if (deployDurableOrchestrator) {
+resource durableFunctionApp 'Microsoft.Web/sites@2024-04-01' = if (deployDurableOrchestrator) {
   name: '${normalizedName}-durable'
   location: location
   tags: tags
@@ -984,114 +1126,44 @@ resource durableFunctionApp 'Microsoft.Web/sites@2023-12-01' = if (deployDurable
       '${appIdentity.id}': {}
     }
   }
-  properties: {
-    serverFarmId: durableFunctionPlan.id
+  properties: union({
+    serverFarmId: durableHostingPlan == 'flex' ? durableFlexFunctionPlan.id : durablePremiumFunctionPlan.id
     httpsOnly: true
-    siteConfig: {
+    siteConfig: durableHostingPlan == 'flex' ? {
+      appSettings: durableFlexFunctionAppSettings
+    } : {
       linuxFxVersion: 'Python|3.11'
-      // Enabling this dormant scaffold still requires a code package deployment mechanism.
-      appSettings: [
-        {
-          name: 'FUNCTIONS_EXTENSION_VERSION'
-          value: '~4'
-        }
-        {
-          name: 'FUNCTIONS_WORKER_RUNTIME'
-          value: 'python'
-        }
-        {
-          name: 'AzureWebJobsFeatureFlags'
-          value: 'EnableWorkerIndexing'
-        }
-        {
-          name: 'SCM_DO_BUILD_DURING_DEPLOYMENT'
-          value: 'true'
-        }
-        {
-          name: 'ENABLE_ORYX_BUILD'
-          value: 'true'
-        }
-        {
-          name: 'AzureWebJobsStorage__accountName'
-          value: storageAccount.name
-        }
-        {
-          name: 'AzureWebJobsStorage__credential'
-          value: 'managedidentity'
-        }
-        {
-          name: 'AzureWebJobsStorage__clientId'
-          value: appIdentity.properties.clientId
-        }
-        {
-          name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
-          value: appInsights.properties.ConnectionString
-        }
-        {
-          name: 'AZURE_CLIENT_ID'
-          value: appIdentity.properties.clientId
-        }
-        {
-          name: 'AZURE_COSMOS_ENDPOINT'
-          value: cosmosAccount.properties.documentEndpoint
-        }
-        {
-          name: 'AZURE_COSMOS_DATABASE_NAME'
-          value: cosmosDatabase.properties.resource.id
-        }
-        {
-          name: 'AZURE_SEARCH_ENDPOINT'
-          value: 'https://${searchService.name}.search.windows.net'
-        }
-        {
-          name: 'AZURE_SEARCH_RECALL_INDEX_NAME'
-          value: searchRecallIndexName
-        }
-        {
-          name: 'AZURE_STORAGE_BLOB_ENDPOINT'
-          value: storageAccount.properties.primaryEndpoints.blob
-        }
-        {
-          name: 'AZURE_STORAGE_SNAPSHOT_CONTAINER'
-          value: snapshotsContainer.name
-        }
-        {
-          name: 'AZURE_OPENAI_ENDPOINT'
-          value: openAiAccount.properties.endpoint
-        }
-        {
-          name: 'AZURE_OPENAI_USE_MANAGED_IDENTITY'
-          value: 'true'
-        }
-        {
-          name: 'AZURE_OPENAI_API_VERSION'
-          value: '2024-10-21'
-        }
-        {
-          name: 'AZURE_OPENAI_CHAT_DEPLOYMENT'
-          value: openAiChatDeployment.name
-        }
-        {
-          name: 'AZURE_OPENAI_EMBEDDING_DEPLOYMENT'
-          value: openAiEmbeddingDeployment.name
-        }
-        {
-          name: 'AZURE_OPENAI_EMBEDDING_DIMENSION'
-          value: string(openAiEmbeddingDimension)
-        }
-        {
-          name: 'AZURE_OPENAI_EMBEDDING_MODEL_VERSION'
-          value: openAiEmbeddingModelVersion
-        }
-      ]
+      appSettings: durablePremiumFunctionAppSettings
     }
-  }
+  }, durableHostingPlan == 'flex' ? {
+    functionAppConfig: {
+      deployment: {
+        storage: {
+          type: 'blobContainer'
+          value: '${storageAccount.properties.primaryEndpoints.blob}${durableDeploymentContainer.name}'
+          authentication: {
+            type: 'UserAssignedIdentity'
+            userAssignedIdentityResourceId: appIdentity.id
+          }
+        }
+      }
+      runtime: {
+        name: 'python'
+        version: '3.11'
+      }
+      scaleAndConcurrency: {
+        maximumInstanceCount: 10
+        instanceMemoryMB: 2048
+      }
+    }
+  } : {})
   dependsOn: [
     cosmosDataContributorAssignment
     searchServiceContributorAssignment
     searchIndexDataContributorAssignment
     storageBlobDataContributorAssignment
     storageBlobDataOwnerAssignment
+    durableDeploymentBlobContributorAssignment
     storageQueueDataContributorAssignment
     storageTableDataContributorAssignment
     openAiUserAssignment

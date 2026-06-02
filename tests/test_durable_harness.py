@@ -20,6 +20,8 @@ def test_durable_orchestrator_package_contains_function_root_and_src(tmp_path: P
     assert "requirements.txt" in names
     assert "src/worker/durable_activity.py" in names
     assert "src/service/jobs.py" in names
+    assert "functions.metadata" not in names
+    assert not any(name.endswith("function.json") for name in names)
     assert not any("__pycache__" in name for name in names)
     assert not any(name.endswith(".pyc") for name in names)
 

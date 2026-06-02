@@ -28,20 +28,21 @@ def build_package(*, output: Path = DEFAULT_OUTPUT) -> Path:
 
 
 def deploy_package(*, package: Path, resource_group: str, function_app: str) -> None:
-    _run(["az", "functionapp", "show", "--resource-group", resource_group, "--name", function_app, "--query", "name", "-o", "tsv"])
+    az = _az_command()
+    _run([az, "functionapp", "show", "--resource-group", resource_group, "--name", function_app, "--query", "name", "-o", "tsv"])
     _run(
         [
-            "az",
+            az,
             "functionapp",
-            "deploy",
+            "deployment",
+            "source",
+            "config-zip",
             "--resource-group",
             resource_group,
             "--name",
             function_app,
-            "--src-path",
+            "--src",
             str(package),
-            "--type",
-            "zip",
             "--build-remote",
             "true",
         ]
@@ -82,6 +83,16 @@ def _ignore(_directory: str, names: list[str]) -> set[str]:
 
 def _run(command: list[str]) -> None:
     subprocess.run(command, check=True)
+
+
+def _az_command() -> str:
+    found = shutil.which("az") or shutil.which("az.cmd")
+    if found:
+        return found
+    default = Path(r"C:\Program Files\Microsoft SDKs\Azure\CLI2\wbin\az.cmd")
+    if default.exists():
+        return str(default)
+    raise FileNotFoundError("Azure CLI executable not found on PATH.")
 
 
 def main(argv: list[str] | None = None) -> int:
