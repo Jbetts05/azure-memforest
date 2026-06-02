@@ -67,16 +67,19 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
         "idempotency_key": idempotency_key,
         "payload": ingest_payload,
     }
-    start = _post_json(
-        args.durable_start_url,
-        envelope,
-        headers={"x-functions-key": function_key, "Content-Type": "application/json", "x-ms-durable-instance-id": job_id},
-        timeout=args.timeout_seconds,
-    )
-    if start.get("deduped"):
-        raise RuntimeError(f"Durable starter deduped fresh smoke job {job_id}: {start}")
-    if start.get("id") != job_id:
-        raise RuntimeError(f"Durable starter returned unexpected id: {start}")
+    if args.job_source == "api":
+        start = {"id": job_id, "status": "started_by_api", "deduped": False}
+    else:
+        start = _post_json(
+            args.durable_start_url,
+            envelope,
+            headers={"x-functions-key": function_key, "Content-Type": "application/json", "x-ms-durable-instance-id": job_id},
+            timeout=args.timeout_seconds,
+        )
+        if start.get("deduped"):
+            raise RuntimeError(f"Durable starter deduped fresh smoke job {job_id}: {start}")
+        if start.get("id") != job_id:
+            raise RuntimeError(f"Durable starter returned unexpected id: {start}")
     if args.status_source == "cosmos":
         status = asyncio.run(_wait_job_cosmos(args, job_id, user_id))
     else:

@@ -27,6 +27,11 @@ class FakeRecallIndex:
         return [RecallCandidate(tree_id="tree-1", node_id="root", score=1.0)]
 
 
+class FakeLeafRecallIndex:
+    def search(self, query_embedding, *, top_k, filters=None):
+        return [RecallCandidate(tree_id="tree-1", node_id="leaf-b", score=1.0)]
+
+
 class FakeModel:
     def __init__(self):
         self.embed_calls = []
@@ -169,6 +174,17 @@ async def test_cloud_query_rerank_uses_stored_fact_embeddings() -> None:
 
     assert [fact.fact_id for fact in response.facts] == ["fact-b", "fact-a"]
     assert model.embed_calls == [["Where?"]]
+
+
+@pytest.mark.asyncio
+async def test_cloud_query_handles_leaf_recall_candidate() -> None:
+    response = await _service(_manifest(), recall=FakeLeafRecallIndex()).query(
+        ActorContext(actor_id="user-1", tenant=TenantContext("tenant-1")),
+        user_id="user-1",
+        request=QueryRequest(question="Where?", max_facts=2),
+    )
+
+    assert [fact.fact_id for fact in response.facts] == ["fact-b"]
 
 
 @pytest.mark.asyncio

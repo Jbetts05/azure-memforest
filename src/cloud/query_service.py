@@ -293,6 +293,8 @@ async def _browse_tree(
     root = await tree_store.get_node(tree_id, root_node_id)
     if root is None:
         return []
+    if root.level == "L0":
+        return list(root.fact_ids)
     frontier = [root]
     settled = []
     while frontier and len(settled) < beam_width:
