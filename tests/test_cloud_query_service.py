@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from src.cloud.contracts import RecallCandidate, StoredTreeNode
@@ -293,17 +295,19 @@ async def test_cloud_query_handles_leaf_recall_candidate() -> None:
 
 
 @pytest.mark.asyncio
-async def test_cloud_query_retries_blank_answer_with_stricter_prompt() -> None:
+async def test_cloud_query_retries_blank_answer_with_stricter_prompt(caplog) -> None:
     model = BlankThenAnswerModel()
-    response = await _service(_manifest(), model=model, fact_store=FakeSiblingFactStore()).query(
-        ActorContext(actor_id="user-1", tenant=TenantContext("tenant-1")),
-        user_id="user-1",
-        request=QueryRequest(question="What is the total number of siblings I have?", max_facts=1),
-    )
+    with caplog.at_level(logging.INFO, logger="src.cloud.query_service"):
+        response = await _service(_manifest(), model=model, fact_store=FakeSiblingFactStore()).query(
+            ActorContext(actor_id="user-1", tenant=TenantContext("tenant-1")),
+            user_id="user-1",
+            request=QueryRequest(question="What is the total number of siblings I have?", max_facts=1),
+        )
 
     assert response.answer == "4"
     assert len(model.generate_prompts) == 2
     assert "non-empty `answer`" in model.generate_prompts[1]
+    assert "retrying blank cloud query answer" in caplog.text
 
 
 @pytest.mark.asyncio
