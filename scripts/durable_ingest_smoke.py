@@ -32,18 +32,69 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
     benchmark_secret = args.benchmark_secret or _read_secret(args.benchmark_secret_path) if args.auth_mode == "benchmark" else ""
     started_at = time.time()
     run_id = uuid.uuid4().hex
-    session_id = f"durable-smoke-session-{run_id}"
     user_id = args.user_id or f"durable-smoke-{run_id}"
-    idempotency_key = f"durable-smoke-{run_id}"
+    sessions = []
+    for index in range(1, args.session_count + 1):
+        sessions.append(_run_ingest_smoke_session(args, run_id, user_id, index, benchmark_secret, function_key, durable_status_key))
+    query_results = [] if args.skip_query else [
+        _query_marker_with_retry(args, user_id, benchmark_secret, session["code"])
+        for session in sessions
+    ]
+    projection = None
+    if args.verify_projection and args.cosmos_endpoint and args.cosmos_database and args.azure_client_id:
+        projection = _latest_projection_contains_codes(args, user_id, [session["code"] for session in sessions])
+    artifact = {
+        "run_id": run_id,
+        "started_at_unix": started_at,
+        "completed_at_unix": time.time(),
+        "durable_hub": args.durable_hub,
+        "user_id": user_id,
+        "session_count": args.session_count,
+        "sessions": sessions,
+        "accepted_job": sessions[0]["accepted_job"] if len(sessions) == 1 else None,
+        "durable_start": sessions[0]["durable_start"] if len(sessions) == 1 else None,
+        "durable_instance": sessions[0]["durable_instance"] if len(sessions) == 1 else None,
+        "job": sessions[0]["job"] if len(sessions) == 1 else None,
+        "query": query_results[0]["response"] if len(query_results) == 1 else None,
+        "queries": query_results,
+        "projection": projection,
+        "assertions": {
+            "jobs_succeeded": all(session["job"].get("status") == "succeeded" for session in sessions),
+            "durable_instances_completed": all(
+                session["durable_instance"] is None or _durable_instance_completed(session["durable_instance"])
+                for session in sessions
+            ),
+            "queries_mention_markers": args.skip_query or all(query["mentions_marker"] for query in query_results),
+            "latest_projection_contains_all_markers": projection is None or projection["contains_all_codes"],
+        },
+    }
+    failures = [name for name, passed in artifact["assertions"].items() if not passed]
+    if failures:
+        raise RuntimeError(f"Durable smoke assertions failed: {failures}; artifact={json.dumps(_redact_artifact_for_error(artifact), ensure_ascii=False)[:2000]}")
+    return artifact
+
+
+def _run_ingest_smoke_session(
+    args: argparse.Namespace,
+    run_id: str,
+    user_id: str,
+    index: int,
+    benchmark_secret: str,
+    function_key: str,
+    durable_status_key: str,
+) -> dict[str, Any]:
+    session_id = f"durable-smoke-session-{run_id}-{index}"
+    idempotency_key = f"durable-smoke-{run_id}-{index}"
+    code = f"{run_id}-{index}"
     ingest_payload = {
         "turns": [
             {
                 "role": "user",
-                "content": f"Durable smoke memory marker {run_id}. My durable smoke code is {run_id}.",
-                "metadata": {"source": "durable-smoke", "run_id": run_id},
+                "content": f"Durable smoke memory marker {code}. My durable smoke code number {index} is {code}.",
+                "metadata": {"source": "durable-smoke", "run_id": run_id, "session_index": index, "code": code},
             }
         ],
-        "metadata": {"source": "durable-smoke", "run_id": run_id},
+        "metadata": {"source": "durable-smoke", "run_id": run_id, "session_index": index, "code": code},
     }
     if args.job_source == "cosmos":
         accepted = asyncio.run(_create_accepted_job_cosmos(args, user_id, session_id, idempotency_key, ingest_payload))
@@ -84,12 +135,6 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
         status = asyncio.run(_wait_job_cosmos(args, job_id, user_id))
     else:
         status = _wait_job_api(args.api_url, args.tenant_id, user_id, benchmark_secret, job_id, args.timeout_seconds, auth_mode=args.auth_mode)
-    query = None if args.skip_query else _post_json(
-        f"{args.api_url.rstrip('/')}/v1/users/{user_id}/query",
-        {"question": "What is my durable smoke code?", "top_k": 3, "max_facts": 3, "trace_requested": True},
-        headers=_api_headers(args.tenant_id, user_id, benchmark_secret, auth_mode=args.auth_mode),
-        timeout=args.timeout_seconds,
-    )
     durable_instance = _get_durable_instance_status(
         args.durable_start_url,
         durable_status_key,
@@ -97,27 +142,15 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
         task_hub=args.durable_hub,
         timeout=args.timeout_seconds,
     ) if args.verify_durable_instance else None
-    artifact = {
-        "run_id": run_id,
-        "started_at_unix": started_at,
-        "completed_at_unix": time.time(),
-        "durable_hub": args.durable_hub,
+    return {
+        "index": index,
+        "code": code,
+        "session_id": session_id,
         "accepted_job": accepted,
         "durable_start": _redact_start(start),
         "durable_instance": _redact_durable_instance(durable_instance) if durable_instance is not None else None,
         "job": status,
-        "query": query,
-        "assertions": {
-            "job_succeeded": status.get("status") == "succeeded",
-            "durable_instance_completed": durable_instance is None or _durable_instance_completed(durable_instance),
-            "query_mentions_marker": args.skip_query or run_id.lower() in str((query or {}).get("answer") or "").lower(),
-        },
     }
-    if not artifact["assertions"]["job_succeeded"]:
-        raise RuntimeError(f"Durable smoke job did not succeed: {status}")
-    if not artifact["assertions"]["query_mentions_marker"]:
-        raise RuntimeError(f"Durable smoke query did not recover marker {run_id}: {query}")
-    return artifact
 
 
 def _wait_job_api(
@@ -142,6 +175,108 @@ def _wait_job_api(
             return last
         time.sleep(10)
     raise TimeoutError(f"Timed out waiting for job {job_id}: {last}")
+
+
+def _query_marker_with_retry(args: argparse.Namespace, user_id: str, benchmark_secret: str, code: str) -> dict[str, Any]:
+    deadline = time.time() + args.query_timeout_seconds
+    last: dict[str, Any] = {}
+    while time.time() < deadline:
+        response = _post_json(
+            f"{args.api_url.rstrip('/')}/v1/users/{user_id}/query",
+            {
+                "question": f"What is my durable smoke code number {code.rsplit('-', 1)[-1]}?",
+                "top_k": max(args.session_count + 2, 8),
+                "max_facts": max(args.session_count + 2, 8),
+                "trace_requested": True,
+            },
+            headers=_api_headers(args.tenant_id, user_id, benchmark_secret, auth_mode=args.auth_mode),
+            timeout=args.timeout_seconds,
+        )
+        last = {
+            "code": code,
+            "mentions_marker": code.lower() in str(response.get("answer") or "").lower()
+            or any(code.lower() in str(fact.get("text") or "").lower() for fact in response.get("facts") or []),
+            "response": response,
+        }
+        if last["mentions_marker"]:
+            return last
+        time.sleep(args.query_poll_seconds)
+    return last
+
+
+def _latest_projection_contains_codes(args: argparse.Namespace, user_id: str, codes: list[str]) -> dict[str, Any]:
+    credential, client = _cosmos_client(args)
+    try:
+        database = client.get_database_client(args.cosmos_database)
+        manifests = list(
+            database.get_container_client("manifests").query_items(
+                query=(
+                    "SELECT TOP 1 * FROM c WHERE c.tenant_id=@tenant AND c.user_id=@user "
+                    "AND c.status='committed' ORDER BY c.generation DESC"
+                ),
+                parameters=[
+                    {"name": "@tenant", "value": args.tenant_id},
+                    {"name": "@user", "value": user_id},
+                ],
+                enable_cross_partition_query=True,
+            )
+        )
+        if not manifests:
+            return {"contains_all_codes": False, "missing_codes": codes, "reason": "latest_manifest_missing"}
+        manifest = manifests[0]
+        forest_version = str(manifest.get("forest_version") or "")
+        locations = list(
+            database.get_container_client("fact_locations").query_items(
+                query=(
+                    "SELECT DISTINCT c.fact_id FROM c WHERE c.tenant_id=@tenant AND c.user_id=@user "
+                    "AND c.forest_version=@forest_version"
+                ),
+                parameters=[
+                    {"name": "@tenant", "value": args.tenant_id},
+                    {"name": "@user", "value": user_id},
+                    {"name": "@forest_version", "value": forest_version},
+                ],
+                enable_cross_partition_query=True,
+            )
+        )
+        fact_ids = sorted({str(location.get("fact_id") or "") for location in locations if location.get("fact_id")})
+        fact_docs = []
+        if fact_ids:
+            fact_docs = list(
+                database.get_container_client("facts").query_items(
+                    query=(
+                        "SELECT c.fact_id, c.fact_text FROM c WHERE c.tenant_id=@tenant AND c.user_id=@user "
+                        "AND ARRAY_CONTAINS(@fact_ids, c.fact_id)"
+                    ),
+                    parameters=[
+                        {"name": "@tenant", "value": args.tenant_id},
+                        {"name": "@user", "value": user_id},
+                        {"name": "@fact_ids", "value": fact_ids},
+                    ],
+                    enable_cross_partition_query=True,
+                )
+            )
+        fact_text = "\n".join(str(fact.get("fact_text") or "") for fact in fact_docs).lower()
+        missing = [code for code in codes if code.lower() not in fact_text]
+        return {
+            "contains_all_codes": not missing,
+            "missing_codes": missing,
+            "forest_version": forest_version,
+            "manifest_id": manifest.get("manifest_id") or manifest.get("id"),
+            "fact_location_count": len(locations),
+            "fact_count": len(fact_docs),
+        }
+    finally:
+        _close_cosmos_client(credential, client)
+
+
+def _redact_artifact_for_error(artifact: dict[str, Any]) -> dict[str, Any]:
+    redacted = dict(artifact)
+    for session in redacted.get("sessions") or []:
+        accepted = session.get("accepted_job")
+        if isinstance(accepted, dict) and "envelope" in accepted:
+            accepted["envelope"] = "<redacted>"
+    return redacted
 
 
 async def _wait_job_cosmos(args: argparse.Namespace, job_id: str, user_id: str) -> dict[str, Any]:
@@ -301,6 +436,10 @@ def main() -> int:
     parser.add_argument("--job-source", choices=["cosmos", "api"], default="cosmos")
     parser.add_argument("--status-source", choices=["cosmos", "api"], default="cosmos")
     parser.add_argument("--skip-query", action="store_true")
+    parser.add_argument("--session-count", type=int, default=1)
+    parser.add_argument("--verify-projection", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--query-timeout-seconds", type=int, default=300)
+    parser.add_argument("--query-poll-seconds", type=int, default=10)
     parser.add_argument("--cosmos-endpoint")
     parser.add_argument("--cosmos-database")
     parser.add_argument("--azure-client-id")
