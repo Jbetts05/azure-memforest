@@ -164,6 +164,20 @@ Decision:
 
 - `195a1a1b` is ready for another combined targeted validation, still as modified-input calibration only.
 
+Combined answer-fidelity validation on image `4e4ac0bf6a71`:
+
+- Artifact: `case_results_targeted-fixed-3-answer-20260604000326/aggregate.json`
+- Operationally clean: 3/3 cases completed, 31/31 Durable instances completed, 0 DLQ delta, 0 content-filter skips, 0 Durable failures.
+- All judges passed:
+  - `195a1a1b`: primary/cross true, still modified-input calibration only.
+  - `gpt4_d6585ce8`: primary/cross true, all five musical events in order.
+  - `gpt4_70e84552_abs`: primary/cross true, insufficient-information abstention.
+
+Decision:
+
+- The three diagnosed Phase 2 quality failures are now fixed in targeted validation.
+- Next step is rubber-duck review of readiness for a full 10-case intended-stack pilot rerun.
+
 ## Temporal fallback follow-up
 
 Artifacts:
