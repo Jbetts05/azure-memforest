@@ -20,7 +20,9 @@ def test_extraction_prompt_allows_marked_assistant_advice_context() -> None:
 
     assert "assistant_advice_context=true" in prompt
     assert "later user turns accepted or acted on the advice" in prompt
-    assert "Preserve concrete examples verbatim" in prompt
+    assert "preserve concrete examples verbatim" in prompt
+    assert "screens (phones, tablets, laptops, or TVs)" in prompt
+    assert "blue light suppressing melatonin" in prompt
     assert "Do NOT rewrite them as user-authored preferences" in prompt
 
 

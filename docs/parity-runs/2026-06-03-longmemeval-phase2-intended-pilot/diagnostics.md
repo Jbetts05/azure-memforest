@@ -86,6 +86,7 @@ The abstention issue has a plausible query-side fix, but the temporal completene
 Artifact:
 
 - `case_results_negative-pref-195-20260603172248/04_195a1a1b.json`
+- `case_results_negative-pref-marker-195-20260603202112/04_195a1a1b.json`
 
 Findings:
 
@@ -97,6 +98,21 @@ Interpretation:
 
 - Allowing the assistant turn through extraction is not enough; the extraction prompt needs stronger, scoped instructions for `assistant_advice_context=true`.
 - This case remains excluded from unmodified pipeline accuracy because the gold evidence lives in assistant advice.
+
+Follow-up validation on image `093f448d4cc2`:
+
+- The full targeted `195a1a1b` run completed with 9/9 Durable instances completed, 0 DLQ delta, and 0 content-filter skips.
+- The marked assistant-advice turn extracted the concrete negative screen fact: `phones, tablets, laptops, or TVs`.
+- The answer avoided screens for the last 30 minutes before bed and recommended relaxing evening activities.
+- Both judges passed (`primary=true`, `cross=true`).
+
+Interpretation:
+
+- The assistant-advice marker plus extraction prompt refinement fixes this targeted failure mode.
+- The case should remain excluded from unmodified pipeline accuracy because the calibration evidence is assistant-origin and exposed through a harness override.
+- This is a targeted modified-input calibration result, not proof that the unmodified pipeline would pass the case.
+- Before any full 10-case rerun, reconfirm this result together with the temporal-event and abstention fixes so retrieval/query changes are tested for cross-interactions.
+- Combined targeted validation later passed this case again, but the extracted fact regressed from explicit `phones, tablets, laptops, or TVs` to the broader `screens`. The answer and judges still passed, but the prompt was hardened again to require parenthetical examples and sleep-impact rationale when marked assistant advice includes them.
 
 ## Temporal fallback follow-up
 
@@ -124,3 +140,27 @@ Follow-up caveats:
 - The fix is validated for the `gpt4_d6585ce8` event-list failure, not every possible event-list phrasing.
 - The event selector intentionally requires "happened" language such as attended, saw, went to, got back from, or enjoyed; future cases may need additional synonyms.
 - Event-list questions can include more facts than the caller's requested `max_facts` so the answer model receives the complete chronological event set.
+
+## Combined targeted validation
+
+Artifact:
+
+- `case_results_targeted-fixed-3-20260603203620/aggregate.json`
+
+Findings:
+
+- The three fixed failure modes completed together on image `093f448d4cc2`.
+- Cases:
+  - `195a1a1b`: passed as modified-input calibration only; the answer avoided screens, but the fact text did not preserve `phones/tablets/laptops/TVs` in this repeat.
+  - `gpt4_d6585ce8`: passed with all five expected musical events in the expected order.
+  - `gpt4_70e84552_abs`: passed with an insufficient-information abstention.
+- Aggregate:
+  - 3/3 cases completed.
+  - primary/cross judges passed for all 3.
+  - 31/31 Durable instances completed.
+  - 0 DLQ delta, 0 content-filter skips, 0 Durable failures.
+
+Decision:
+
+- The temporal-event and abstention fixes are ready for the next full-pilot rerun.
+- The negative-preference fix needs one more targeted validation on the hardened assistant-advice prompt because exact concrete examples were not stable across repeats.
