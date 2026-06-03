@@ -80,3 +80,23 @@ The abstention issue has a plausible query-side fix, but the temporal completene
 1. improving retrieval/composition for ordered event-list questions;
 2. improving extraction or fallback coverage for negative preferences;
 3. then running targeted query/ingest diagnostics before a full 10-case rerun.
+
+## Temporal fallback follow-up
+
+Artifacts:
+
+- `query_only_temporal_a552ada7aaf1.json`
+- `query_only_temporal_86196df38172.json`
+- `query_only_temporal_f7ca1cb4b37f.json`
+
+Findings:
+
+- The first temporal fallback attempt regressed to `I don't know`.
+- The corrected query-expansion attempt still returned `I don't know`.
+- The direct event-fact fallback attempt on `f7ca1cb4b37f` consistently returned only Billie Eilish facts across three repeated query-only checks.
+
+Interpretation:
+
+- The temporal failure is now localized to fallback retrieval/selection for event facts.
+- Answer composition is using the provided context, but the context is still incomplete.
+- Further work should add instrumentation for fallback query strings, raw candidate counts, location-filter drops, and selected temporal facts before another fix attempt.
