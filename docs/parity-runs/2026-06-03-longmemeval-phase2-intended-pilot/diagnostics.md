@@ -94,9 +94,16 @@ Findings:
 - The first temporal fallback attempt regressed to `I don't know`.
 - The corrected query-expansion attempt still returned `I don't know`.
 - The direct event-fact fallback attempt on `f7ca1cb4b37f` consistently returned only Billie Eilish facts across three repeated query-only checks.
+- The refined temporal-context attempt on `62149d58ba89` returned all five expected events in chronological order across three repeated query-only checks.
 
 Interpretation:
 
 - The temporal failure is now localized to fallback retrieval/selection for event facts.
 - Answer composition is using the provided context, but the context is still incomplete.
 - Further work should add instrumentation for fallback query strings, raw candidate counts, location-filter drops, and selected temporal facts before another fix attempt.
+
+Follow-up caveats:
+
+- The fix is validated for the `gpt4_d6585ce8` event-list failure, not every possible event-list phrasing.
+- The event selector intentionally requires "happened" language such as attended, saw, went to, got back from, or enjoyed; future cases may need additional synonyms.
+- Event-list questions can include more facts than the caller's requested `max_facts` so the answer model receives the complete chronological event set.
