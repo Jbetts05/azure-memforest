@@ -74,8 +74,9 @@ def chunk_session(
         start = current[0]
         end = current[-1]
         chunk_text = _render_chunk_text(current)
+        digest_text = _render_chunk_text(current, include_metadata_markers=False)
         digest = hashlib.md5(
-            f"{session_id}|{start.turn_index}|{end.turn_index}|{chunk_text}".encode("utf-8")
+            f"{session_id}|{start.turn_index}|{end.turn_index}|{digest_text}".encode("utf-8")
         ).hexdigest()[:12]
         chunks.append(
             MemCell(
@@ -117,9 +118,18 @@ def chunk_session(
     return chunks
 
 
-def _render_chunk_text(turns: Sequence[NormalizedTurn]) -> str:
+def _render_chunk_text(turns: Sequence[NormalizedTurn], *, include_metadata_markers: bool = True) -> str:
     lines: list[str] = []
     for turn in turns:
         speaker = normalize_entity_key(turn.speaker_name) or turn.speaker_name
+        if include_metadata_markers and _is_marked_assistant_advice(turn):
+            lines.append("[meta] assistant_advice_context=true")
         lines.append(f"[{turn.timestamp_text}] {speaker}: {turn.text}")
     return "\n".join(lines)
+
+
+def _is_marked_assistant_advice(turn: NormalizedTurn) -> bool:
+    if str(turn.speaker_tag).strip().lower() != "assistant":
+        return False
+    nested = turn.metadata.get("metadata")
+    return isinstance(nested, dict) and nested.get("assistant_advice_context") is True
