@@ -202,8 +202,12 @@ class CloudMemoryQueryService:
             )
         facts = [fact for _, fact in scored_facts] if scored_facts else facts
         max_facts = request.max_facts if request.max_facts is not None else self._config.default_max_facts
+        temporal_facts = _temporal_event_facts(request.question, facts) if _is_temporal_event_list_question(request.question) else []
         if max_facts and max_facts > 0:
-            facts = facts[:max_facts]
+            if temporal_facts:
+                facts = _merge_prioritized_facts(temporal_facts, facts, max_facts=max_facts)
+            else:
+                facts = facts[:max_facts]
         answer, reason = await self._compose_answer(request.question, facts)
         if answer:
             events.append(
@@ -298,10 +302,12 @@ class CloudMemoryQueryService:
         ):
             return []
         try:
-            candidates = await fact_store.search_facts_text(
-                question,
-                limit=max(1, int(self._config.lexical_fact_fallback_top_k)) * 4,
-            )
+            candidates_by_id = {}
+            limit = max(1, int(self._config.lexical_fact_fallback_top_k)) * (6 if _is_temporal_event_list_question(question) else 4)
+            for query_text in _lexical_fallback_queries(question):
+                for fact in await fact_store.search_facts_text(query_text, limit=limit):
+                    candidates_by_id[getattr(fact, "fact_id", "")] = fact
+            candidates = list(candidates_by_id.values())
         except Exception:
             log.exception("failed lexical cloud query fact fallback")
             return []
@@ -473,6 +479,97 @@ _LEXICAL_FALLBACK_QUERY_PATTERN = re.compile(
 
 def _should_use_lexical_fact_fallback(question: str) -> bool:
     return bool(_LEXICAL_FALLBACK_QUERY_PATTERN.search(str(question or "")))
+
+
+def _is_temporal_event_list_question(question: str) -> bool:
+    text = str(question or "").lower()
+    return bool(
+        re.search(r"\b(order(?:ed)?|chronological|earliest|first to last|list (?:all|every)|all (?:the )?(?:events?|times?))\b", text)
+        and re.search(r"\b(events?|concerts?|musical|attended|went|saw)\b", text)
+    )
+
+
+def _lexical_fallback_queries(question: str) -> list[str]:
+    queries = [str(question or "")]
+    if _is_temporal_event_list_question(question):
+        queries.extend(
+            [
+                f"{question} concert show festival music event attended",
+                f"{question} gig performance live venue band artist",
+                f"{question} outdoor open-air park local bar club",
+                f"{question} saw went attended enjoyed got back from",
+            ]
+        )
+    return queries
+
+
+def _temporal_event_facts(question: str, facts: list[Any]) -> list[Any]:
+    terms = _event_terms_for_question(question)
+    scored: list[tuple[float, float, str, Any]] = []
+    for fact in facts:
+        text = str(getattr(fact, "fact_text", "") or "")
+        normalized = text.lower()
+        if not any(term in normalized for term in terms):
+            continue
+        score = sum(1.0 for term in terms if term in normalized)
+        happened = bool(re.search(r"\b(attended|went to|got back from|saw|been to|has been to|recently been to|enjoyed)\b", normalized))
+        speculative = bool(re.search(r"\b(thinking|wants?|recommend|looking for|possible|might|soon)\b", normalized))
+        if speculative and not happened:
+            continue
+        if happened:
+            score += 3.0
+        if speculative:
+            score -= 2.0
+        if score <= 0:
+            continue
+        timestamp = _fact_timestamp(fact)
+        scored.append((timestamp, -score, str(getattr(fact, "fact_id", "")), fact))
+    scored.sort(key=lambda item: (item[0], item[1], item[2]))
+    return [_fact for _, _, _, _fact in scored]
+
+
+def _merge_prioritized_facts(priority: list[Any], remaining: list[Any], *, max_facts: int) -> list[Any]:
+    merged = []
+    seen = set()
+    for fact in [*priority, *remaining]:
+        fact_id = str(getattr(fact, "fact_id", ""))
+        if fact_id in seen:
+            continue
+        seen.add(fact_id)
+        merged.append(fact)
+        if len(merged) >= max_facts:
+            break
+    return merged
+
+
+def _event_terms_for_question(question: str) -> set[str]:
+    text = str(question or "").lower()
+    terms = set(re.findall(r"[a-z0-9]+(?:[-&][a-z0-9]+)*", text))
+    terms.update({"concert", "show", "gig", "festival", "performance", "music", "musical", "event", "attended", "saw", "live", "venue"})
+    if "outdoor" in text or "concert" in text or "event" in text:
+        terms.update({"outdoor", "open-air", "park"})
+    if "music" in text or "musical" in text or "concert" in text:
+        terms.update({"jazz", "band", "artist"})
+    return terms
+
+
+def _fact_timestamp(fact: Any) -> float:
+    for attr in ("time_start", "time_end"):
+        value = getattr(fact, attr, None)
+        if value is not None:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                pass
+    for occurrence in getattr(fact, "occurrences", []) or []:
+        for attr in ("time_start", "time_end"):
+            value = getattr(occurrence, attr, None)
+            if value is not None:
+                try:
+                    return float(value)
+                except (TypeError, ValueError):
+                    pass
+    return float("inf")
 
 
 def _normalized_recency_scores(facts: list[Any]) -> dict[str, float]:

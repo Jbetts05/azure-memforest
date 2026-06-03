@@ -204,6 +204,27 @@ class FakeKnowledgeUpdateFactStore:
         return [self.facts["new"], self.facts["old"]][:limit]
 
 
+class FakeEventListFactStore:
+    def __init__(self):
+        self.facts = {
+            "billie": _managed_fact("billie", "The user got back from a Billie Eilish concert at the Wells Fargo Center in Philly today.", time=1.0),
+            "outdoor": _managed_fact("outdoor", "The user attended a free outdoor concert series in the park on March 25, 2023.", time=2.0),
+            "brooklyn": _managed_fact("brooklyn", "The user attended a music festival in Brooklyn that featured the user's favorite indie bands.", time=3.0),
+            "jazz": _managed_fact("jazz", "The user enjoyed a jazz night at a local bar today.", time=4.0),
+            "queen": _managed_fact("queen", "The user saw Queen live with Adam Lambert at the Prudential Center in Newark, NJ.", time=5.0),
+            "maybe": _managed_fact("maybe", "The user is thinking of attending a jazz night at a local bar soon.", time=0.5),
+        }
+
+    async def get_facts(self, fact_ids):
+        return [self.facts[fact_id] for fact_id in fact_ids if fact_id in self.facts]
+
+    async def search_facts_text(self, query_text, *, limit=20):
+        query = query_text.lower()
+        if "outdoor" in query or "jazz" in query:
+            return [self.facts["maybe"], self.facts["outdoor"], self.facts["jazz"]][:limit]
+        return [self.facts["billie"], self.facts["brooklyn"], self.facts["queen"]][:limit]
+
+
 class FakeFactLocationIndex:
     def __init__(self, present):
         self.present = set(present)
@@ -231,6 +252,28 @@ def _manifest():
         status="committed",
         created_at_unix=1.0,
         metadata={"embedding_model_version": "embed-v1"},
+    )
+
+
+def _managed_fact(fact_id: str, fact_text: str, *, time: float):
+    return ManagedFact(
+        fact_id=fact_id,
+        fact_text=fact_text,
+        embedding_id="",
+        origin="",
+        semantic_role="event",
+        entities=[],
+        topics=["music"],
+        attribute_keys=[],
+        domain_keys=[],
+        collection_keys=[],
+        detail_level="specific",
+        confidence=1.0,
+        first_session_id="s1",
+        first_cell_id="c1",
+        metadata={"embedding": [1.0, 0.0]},
+        time_start=time,
+        time_end=time,
     )
 
 
@@ -352,6 +395,23 @@ async def test_cloud_query_answer_prompt_includes_abstention_rule() -> None:
 
     assert model.generate_kwargs
     assert "The information provided is not enough" in model.generate_kwargs[0]["system_prompt"]
+
+
+@pytest.mark.asyncio
+async def test_cloud_query_event_list_prioritizes_all_event_facts_chronologically() -> None:
+    response = await _service(
+        _manifest(),
+        recall=FakeLeafRecallIndex(),
+        fact_store=FakeEventListFactStore(),
+        fact_location_index={"billie", "outdoor", "brooklyn", "jazz", "queen", "maybe"},
+        config=CloudQueryConfig(embedding_model_version="embed-v1", default_beam_width=2, lexical_fact_fallback=True),
+    ).query(
+        ActorContext(actor_id="user-1", tenant=TenantContext("tenant-1")),
+        user_id="user-1",
+        request=QueryRequest(question="What is the order of the concerts and musical events I attended?", max_facts=5),
+    )
+
+    assert [fact.fact_id for fact in response.facts] == ["billie", "outdoor", "brooklyn", "jazz", "queen"]
 
 
 @pytest.mark.asyncio
