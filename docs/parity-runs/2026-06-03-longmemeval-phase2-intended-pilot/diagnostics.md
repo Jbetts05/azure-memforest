@@ -127,6 +127,18 @@ Interpretation:
 - The remaining `195a1a1b` failure is answer-context selection/composition noise, not extraction coverage or model routing.
 - The next fix should prioritize direct evening/sleep/relaxation/avoid-screen preference facts for forward-looking activity-suggestion questions while keeping this case excluded from unmodified pipeline accuracy.
 
+Preference-context validation on image `ccf55b968111`:
+
+- Artifact: `case_results_negative-pref-context-195-20260603223433/04_195a1a1b.json`
+- The run used the intended stack and completed cleanly: 9/9 ingests succeeded, 9/9 Durable instances completed, 0 DLQ delta.
+- The final context included the explicit negative fact: `avoiding screens (phones, tablets, laptops, or TVs)`.
+- The answer recommended a calming wind-down routine, screen-free activities, Headspace's `Sleep`, and winding down by 9:30 pm.
+- Both judges passed (`primary=true`, `cross=true`).
+
+Remaining caveat:
+
+- One lower-ranked dance-class fact still appeared in the returned context tail, but the answer no longer used it. Combined targeted validation should confirm this does not interfere with the temporal-event and abstention fixes.
+
 ## Temporal fallback follow-up
 
 Artifacts:
