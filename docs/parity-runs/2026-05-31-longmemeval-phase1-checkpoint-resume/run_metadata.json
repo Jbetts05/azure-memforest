@@ -2,7 +2,7 @@
   "api_version": {
     "name": "azure-memforest-api",
     "version": "0.1.0",
-    "git_sha": "7fd9af789508",
+    "git_sha": "6b4aacdf7e1d",
     "image_dirty": "false"
   },
   "queue_before": {
@@ -63,12 +63,28 @@
   "auth_mode": "dev",
   "dispatch_mode": "durable",
   "durable_hub": "MemForestWrites",
-  "run_suffix": "durable-full-answerretry-20260602200804",
-  "results_dir": "docs\\parity-runs\\2026-05-31-longmemeval-phase1-checkpoint-resume\\case_results_durable-full-answerretry-20260602200804",
+  "run_suffix": "intended-phase1-budget20-20260603010332",
+  "results_dir": "docs\\parity-runs\\2026-05-31-longmemeval-phase1-checkpoint-resume\\case_results_intended-phase1-budget20-20260603010332",
   "case_filter": [],
   "image": {
     "repository": "memforestexampleacr.azurecr.io/azure-memforest-api",
-    "tag": "7fd9af789508",
-    "digest": "sha256:8e117f09bed3e5375df551e2deb9fe1a81df477a5e63cb0274ad75eaa403594b"
+    "tag": "6b4aacdf7e1d",
+    "digest": "sha256:c5eee3c84a5579fa410c610358cf6d74a8a189fdd7358b68eda240fd77dcd302"
+  },
+  "intended_stack": {
+    "endpoint": "https://memforest-example-foundry.cognitiveservices.azure.com/",
+    "default_chat": "gpt-5.4-mini-memory",
+    "extraction": "gpt-5.4-mini-memory",
+    "dedupe": "gpt-5.4-mini-memory",
+    "summarization_env": "gpt-5.4",
+    "planner": "gpt-5.4-mini-memory",
+    "browse": "gpt-5.4-mini-memory",
+    "answer": "gpt-5.4",
+    "embedding": "text-embedding-3-large",
+    "embedding_dimension": 3072,
+    "embedding_model_version": "text-embedding-3-large-1",
+    "search_index": "memforest-recall-large",
+    "model_call_budget_multiplier": 20,
+    "note": "Worker summarization still resolves through default for some paths; this run validates the practical intended stack used by the deployed code."
   }
 }
