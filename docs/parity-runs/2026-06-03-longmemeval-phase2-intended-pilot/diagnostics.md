@@ -153,6 +153,17 @@ Interpretation:
 - Context selection now surfaces the right negative-preference facts, but answer wording still collapsed the explicit phone/TV evidence to `screens` and omitted the sleep-quality rationale.
 - The next narrow slice is answer-generation fidelity for preference/recommendation/activity questions: preserve concrete avoidance examples and stated reasons when they are present in memory context, while keeping abstention rules unchanged.
 
+Answer-fidelity validation on image `4e4ac0bf6a71`:
+
+- Artifact: `case_results_negative-pref-answer-195-20260603234938/04_195a1a1b.json`
+- The run used the intended stack and completed cleanly: 9/9 ingests succeeded, 9/9 Durable instances completed, 0 DLQ delta.
+- The answer explicitly recommended relaxing evening activities, winding down by 9:30 pm, and avoiding `phones, tablets, laptops, or TVs` for the last 30 minutes before bed.
+- Both judges passed (`primary=true`, `cross=true`).
+
+Decision:
+
+- `195a1a1b` is ready for another combined targeted validation, still as modified-input calibration only.
+
 ## Temporal fallback follow-up
 
 Artifacts:
