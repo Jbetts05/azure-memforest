@@ -81,6 +81,23 @@ The abstention issue has a plausible query-side fix, but the temporal completene
 2. improving extraction or fallback coverage for negative preferences;
 3. then running targeted query/ingest diagnostics before a full 10-case rerun.
 
+## Negative-preference follow-up
+
+Artifact:
+
+- `case_results_negative-pref-195-20260603172248/04_195a1a1b.json`
+
+Findings:
+
+- The harness override successfully retained `answer_6dc4305e:5` as extractable assistant advice context rather than synthetic user text.
+- The extracted facts still did not include `phone`, `TV`, `screens`, `melatonin`, or `sleep quality`.
+- The answer remained meditation-focused and both judges still disagreed (`primary=false`, `cross=true`).
+
+Interpretation:
+
+- Allowing the assistant turn through extraction is not enough; the extraction prompt needs stronger, scoped instructions for `assistant_advice_context=true`.
+- This case remains excluded from unmodified pipeline accuracy because the gold evidence lives in assistant advice.
+
 ## Temporal fallback follow-up
 
 Artifacts:

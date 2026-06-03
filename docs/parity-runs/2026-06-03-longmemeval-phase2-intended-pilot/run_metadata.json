@@ -2,7 +2,7 @@
   "api_version": {
     "name": "azure-memforest-api",
     "version": "0.1.0",
-    "git_sha": "6b4aacdf7e1d",
+    "git_sha": "62149d58ba89",
     "image_dirty": "false"
   },
   "queue_before": {
@@ -17,7 +17,7 @@
       "date_utc": "2026-06-03T02:04:03Z",
       "title": "LongMemEval-S Phase 2 intended-stack pilot",
       "goal": "Lock the 10-case intended-stack pilot plan after Phase 1 passed on the GPT-5-family stack.",
-      "status": "planned",
+      "status": "gate_failed",
       "owner": "local"
     },
     "purpose": "internal intended-stack infrastructure and quality pilot",
@@ -151,13 +151,21 @@
         "case_results_<suffix>/"
       ]
     },
-    "next_gate": "Implement/adapt the Phase 2 pilot harness locally, add static tests, then request explicit approval before a guarded live 10-case run."
+    "next_gate": "Implement/adapt the Phase 2 pilot harness locally, add static tests, then request explicit approval before a guarded live 10-case run.",
+    "postrun": {
+      "report": "postrun.md",
+      "run_suffix": "live-intended-20260603032131",
+      "aggregate_status": "gate_failed",
+      "decision": "Do not advance to 50-case subset yet."
+    }
   },
   "isolation": "fresh benchmark synthetic user per case using auth_mode=dev; dispatch_mode=durable; no clear-per-case",
   "auth_mode": "dev",
   "dispatch_mode": "durable",
   "durable_hub": "MemForestWrites",
-  "run_suffix": "live-intended-20260603032131",
-  "results_dir": "docs\\parity-runs\\2026-06-03-longmemeval-phase2-intended-pilot\\case_results_live-intended-20260603032131",
-  "case_filter": []
+  "run_suffix": "negative-pref-195-20260603172248",
+  "results_dir": "docs\\parity-runs\\2026-06-03-longmemeval-phase2-intended-pilot\\case_results_negative-pref-195-20260603172248",
+  "case_filter": [
+    "195a1a1b"
+  ]
 }
