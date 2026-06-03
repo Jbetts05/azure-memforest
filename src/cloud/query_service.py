@@ -494,10 +494,10 @@ def _lexical_fallback_queries(question: str) -> list[str]:
     if _is_temporal_event_list_question(question):
         queries.extend(
             [
-                f"{question} concert show festival music event attended",
-                f"{question} gig performance live venue band artist",
-                f"{question} outdoor open-air park local bar club",
-                f"{question} saw went attended enjoyed got back from",
+                f"concert show festival music event attended {question}",
+                f"gig performance live venue band artist {question}",
+                f"outdoor open-air park local bar club {question}",
+                f"saw went attended enjoyed got back from {question}",
             ]
         )
     return queries

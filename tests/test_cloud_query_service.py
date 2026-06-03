@@ -6,7 +6,7 @@ import pytest
 
 from src.cloud.contracts import RecallCandidate, StoredTreeNode
 from src.cloud.cosmos_manifests import ForestManifest
-from src.cloud.query_service import CloudMemoryQueryService, CloudQueryConfig, CloudQueryNotReady, _should_use_lexical_fact_fallback
+from src.cloud.query_service import CloudMemoryQueryService, CloudQueryConfig, CloudQueryNotReady, _lexical_fallback_queries, _should_use_lexical_fact_fallback
 from src.service.auth import ActorContext, TenantContext
 from src.service.schemas import QueryRequest
 from src.utils.types import ManagedFact
@@ -381,6 +381,14 @@ async def test_cloud_query_keeps_facts_when_answer_retry_stays_blank() -> None:
 def test_cloud_query_lexical_fallback_triggers_for_ordering_questions() -> None:
     assert _should_use_lexical_fact_fallback("What is the order of the concerts I attended?")
     assert _should_use_lexical_fact_fallback("List all musical events from the past two months.")
+
+
+def test_cloud_query_event_list_expansion_puts_synonyms_first() -> None:
+    queries = _lexical_fallback_queries("What is the order of the concerts and musical events I attended?")
+
+    assert queries[1].startswith("concert show festival music event")
+    assert queries[2].startswith("gig performance live venue band")
+    assert queries[3].startswith("outdoor open-air park local bar")
 
 
 @pytest.mark.asyncio
