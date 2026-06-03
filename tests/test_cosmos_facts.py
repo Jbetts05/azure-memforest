@@ -34,6 +34,9 @@ class FakeContainer:
             token_values = [value for key, value in params.items() if key.startswith("@token")]
             if token_values and not any(token in item.get("fact_text", "").lower() for token in token_values):
                 continue
+            term_values = [value for key, value in params.items() if key.startswith("@term")]
+            if term_values and not any(term in item.get("fact_text", "").lower() for term in term_values):
+                continue
             if item.get("tombstoned"):
                 continue
             result.append(dict(item))
@@ -172,3 +175,19 @@ async def test_cosmos_fact_store_search_preserves_brand_token_and_sorts_by_time(
     facts = await store.search_facts_text("How many tops from H&M so far?", limit=10)
 
     assert [fact.fact_id for fact in facts[:2]] == ["new", "old"]
+
+
+@pytest.mark.asyncio
+async def test_cosmos_fact_store_search_event_facts_text_returns_event_terms_by_time() -> None:
+    store = CosmosFactStore(FakeContainer(), tenant_id="tenant-1", user_id="user-1")
+    await store.upsert_facts(
+        [
+            _text_fact("later", "The user saw Queen live at a venue.", 5.0),
+            _text_fact("earlier", "The user attended a music festival in Brooklyn.", 2.0),
+            _text_fact("non-event", "The user bought a kitchen table.", 1.0),
+        ]
+    )
+
+    facts = await store.search_event_facts_text(limit=10)
+
+    assert [fact.fact_id for fact in facts] == ["earlier", "later"]

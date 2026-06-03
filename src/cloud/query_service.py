@@ -173,6 +173,16 @@ class CloudMemoryQueryService:
         )
         if fallback_facts:
             facts = [*facts, *fallback_facts]
+        event_facts = await self._event_fact_fallback(
+            fact_store,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            forest_version=manifest.forest_version,
+            question=request.question,
+            existing_fact_ids={fact.fact_id for fact in facts},
+        )
+        if event_facts:
+            facts = [*facts, *event_facts]
         events.append(
             TraceEvent(
                 query_id=query_id,
@@ -183,6 +193,7 @@ class CloudMemoryQueryService:
                     "fact_count": len(facts),
                     "raw_fact_id_count": len(fact_ids),
                     "lexical_fallback_fact_count": len(fallback_facts),
+                    "event_fallback_fact_count": len(event_facts),
                 },
             )
         )
@@ -347,6 +358,37 @@ class CloudMemoryQueryService:
             scored.append((semantic_score + (self._config.recency_rerank_weight * recency_score), fact))
         scored.sort(key=lambda item: item[0], reverse=True)
         return scored
+
+    async def _event_fact_fallback(
+        self,
+        fact_store: Any,
+        *,
+        tenant_id: str,
+        user_id: str,
+        forest_version: str,
+        question: str,
+        existing_fact_ids: set[str],
+    ) -> list[Any]:
+        if not _is_temporal_event_list_question(question) or not hasattr(fact_store, "search_event_facts_text"):
+            return []
+        try:
+            candidates = await fact_store.search_event_facts_text(limit=max(50, int(self._config.lexical_fact_fallback_top_k) * 4))
+        except Exception:
+            log.exception("failed event-list cloud query fact fallback")
+            return []
+        candidates = [fact for fact in candidates if fact.fact_id not in existing_fact_ids]
+        if not candidates:
+            return []
+        if self._fact_location_index_factory is None:
+            return candidates
+        location_index = self._fact_location_index_factory(tenant_id, user_id, forest_version)
+        try:
+            locations = await location_index.get_locations([fact.fact_id for fact in candidates])
+        except Exception:
+            log.exception("failed to filter event fallback facts by latest projection")
+            return []
+        filtered = [fact for fact in candidates if locations.get(fact.fact_id)]
+        return filtered[: max(50, int(self._config.lexical_fact_fallback_top_k) * 4)]
 
     async def _record_trace(self, *, tenant_id: str, user_id: str, query_id: str, forest_version: str, events: list[TraceEvent]) -> None:
         if self._trace_recorder is None:

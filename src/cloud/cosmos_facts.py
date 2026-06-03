@@ -97,6 +97,48 @@ class CosmosFactStore:
         facts.sort(key=_managed_fact_time, reverse=True)
         return facts[:limit]
 
+    async def search_event_facts_text(self, *, limit: int = 100) -> list[ManagedFact]:
+        if limit <= 0:
+            return []
+        terms = [
+            "concert",
+            "show",
+            "gig",
+            "festival",
+            "performance",
+            "music",
+            "musical",
+            "event",
+            "attended",
+            "saw",
+            "live",
+            "venue",
+            "jazz",
+            "band",
+            "artist",
+            "outdoor",
+            "open-air",
+            "park",
+            "bar",
+            "club",
+        ]
+        clauses = [f"CONTAINS(LOWER(c.fact_text), @term{index})" for index, _ in enumerate(terms)]
+        query = (
+            "SELECT * FROM c WHERE c.tenant_user_key=@pk "
+            "AND (NOT IS_DEFINED(c.tombstoned) OR c.tombstoned=false) "
+            f"AND ({' OR '.join(clauses)})"
+        )
+        params = [{"name": "@pk", "value": self.tenant_user_key}] + [
+            {"name": f"@term{index}", "value": term}
+            for index, term in enumerate(terms)
+        ]
+        facts = []
+        async for item in _aiter(self.container.query_items(query=query, parameters=params, partition_key=self.tenant_user_key)):
+            if item.get("tenant_id") == self.tenant_id and item.get("user_id") == self.user_id:
+                facts.append(_fact_from_doc(item))
+        facts.sort(key=_managed_fact_time)
+        return facts[:limit]
+
     async def upsert_facts(self, facts: list[ManagedFact]) -> None:
         for fact in facts:
             existing = await self._read_raw_fact(fact.fact_id)

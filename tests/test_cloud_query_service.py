@@ -224,6 +224,16 @@ class FakeEventListFactStore:
             return [self.facts["maybe"], self.facts["outdoor"], self.facts["jazz"]][:limit]
         return [self.facts["billie"], self.facts["brooklyn"], self.facts["queen"]][:limit]
 
+    async def search_event_facts_text(self, *, limit=100):
+        return [
+            self.facts["maybe"],
+            self.facts["billie"],
+            self.facts["outdoor"],
+            self.facts["brooklyn"],
+            self.facts["jazz"],
+            self.facts["queen"],
+        ][:limit]
+
 
 class FakeFactLocationIndex:
     def __init__(self, present):
