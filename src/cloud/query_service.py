@@ -216,7 +216,8 @@ class CloudMemoryQueryService:
         temporal_facts = _temporal_event_facts(request.question, facts) if _is_temporal_event_list_question(request.question) else []
         if max_facts and max_facts > 0:
             if temporal_facts:
-                facts = _merge_prioritized_facts(temporal_facts, facts, max_facts=max_facts)
+                effective_max_facts = max(max_facts, min(self._config.default_max_facts, max(12, len(temporal_facts))))
+                facts = _merge_prioritized_facts(temporal_facts, [], max_facts=effective_max_facts)
             else:
                 facts = facts[:max_facts]
         answer, reason = await self._compose_answer(request.question, facts)
@@ -556,6 +557,8 @@ def _temporal_event_facts(question: str, facts: list[Any]) -> list[Any]:
         score = sum(1.0 for term in terms if term in normalized)
         happened = bool(re.search(r"\b(attended|went to|got back from|saw|been to|has been to|recently been to|enjoyed)\b", normalized))
         speculative = bool(re.search(r"\b(thinking|wants?|recommend|looking for|possible|might|soon)\b", normalized))
+        if _is_temporal_event_list_question(question) and not happened:
+            continue
         if speculative and not happened:
             continue
         if happened:

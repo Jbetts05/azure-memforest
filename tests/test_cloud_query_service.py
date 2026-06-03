@@ -213,6 +213,7 @@ class FakeEventListFactStore:
             "jazz": _managed_fact("jazz", "The user enjoyed a jazz night at a local bar today.", time=4.0),
             "queen": _managed_fact("queen", "The user saw Queen live with Adam Lambert at the Prudential Center in Newark, NJ.", time=5.0),
             "maybe": _managed_fact("maybe", "The user is thinking of attending a jazz night at a local bar soon.", time=0.5),
+            "job": _managed_fact("job", "The user asked whether the library offers any job fairs or events.", time=0.1),
         }
 
     async def get_facts(self, fact_ids):
@@ -227,6 +228,7 @@ class FakeEventListFactStore:
     async def search_event_facts_text(self, *, limit=100):
         return [
             self.facts["maybe"],
+            self.facts["job"],
             self.facts["billie"],
             self.facts["outdoor"],
             self.facts["brooklyn"],
@@ -426,7 +428,7 @@ async def test_cloud_query_event_list_prioritizes_all_event_facts_chronologicall
     ).query(
         ActorContext(actor_id="user-1", tenant=TenantContext("tenant-1")),
         user_id="user-1",
-        request=QueryRequest(question="What is the order of the concerts and musical events I attended?", max_facts=5),
+        request=QueryRequest(question="What is the order of the concerts and musical events I attended?", max_facts=3),
     )
 
     assert [fact.fact_id for fact in response.facts] == ["billie", "outdoor", "brooklyn", "jazz", "queen"]
