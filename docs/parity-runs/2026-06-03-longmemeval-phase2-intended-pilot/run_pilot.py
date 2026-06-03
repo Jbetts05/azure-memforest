@@ -500,10 +500,19 @@ def aggregate(results: list[dict], before: dict, after: dict) -> dict:
         for event in result.get("events", [])
         if event.get("step") == "ingest" and (event.get("status") or {}).get("status") == "succeeded"
     ]
+    skipped_non_answer_ingest_events = [
+        event
+        for result in results
+        for event in result.get("events", [])
+        if event.get("step") == "ingest"
+        and (event.get("status") or {}).get("status") == "failed"
+        and _is_skipped_non_answer_ingest(result, event)
+    ]
     durable_completed = sum(1 for item in durable_instances if item.get("runtimeStatus") == "Completed")
     durable_failed = sum(1 for item in durable_instances if item.get("runtimeStatus") in {"Failed", "Terminated", "Canceled"})
     dlq_gate_passed = new_dlq == 0
-    durable_gate_passed = not durable_mode or durable_completed == len(successful_ingest_events)
+    durable_accounted_events = len(successful_ingest_events) + len(skipped_non_answer_ingest_events)
+    durable_gate_passed = not durable_mode or durable_completed == durable_accounted_events
     calibration_primary_correct = sum(1 for r in completed if r["judges"]["primary"]["label"])
     calibration_judge_disagreements = sum(1 for r in completed if not r["judges"]["agreement"])
     pipeline_primary_correct = sum(1 for r in pipeline_completed if r["judges"]["primary"]["label"])
@@ -548,6 +557,8 @@ def aggregate(results: list[dict], before: dict, after: dict) -> dict:
         "durable_instance_completed_count": durable_completed,
         "durable_instance_failed_count": durable_failed,
         "successful_ingest_event_count": len(successful_ingest_events),
+        "skipped_non_answer_ingest_event_count": len(skipped_non_answer_ingest_events),
+        "durable_accounted_event_count": durable_accounted_events,
         "durable_gate_passed": durable_gate_passed,
         "residue_contamination_events": residue_contamination_events,
         "advance_to_50_case_subset": all_gates_passed,
@@ -580,6 +591,19 @@ def _residue_contaminated(probe: dict | None) -> bool:
     )
     refusal = any(marker in answer.lower() for marker in refusal_markers)
     return bool(facts or (answer and not refusal))
+
+
+def _is_skipped_non_answer_ingest(result: dict, event: dict) -> bool:
+    status = event.get("status") or {}
+    if not is_content_filter_failure(status):
+        return False
+    source_session_id = event.get("source_session_id")
+    return any(
+        skip.get("source_session_id") == source_session_id
+        and skip.get("reason") == "content_filter"
+        and skip.get("answer_bearing") is False
+        for skip in result.get("filtered_skips", [])
+    )
 
 
 def _restore_override_flags(result: dict) -> None:

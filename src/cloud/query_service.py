@@ -22,7 +22,7 @@ from src.cloud.cosmos_source import CosmosFactLocationIndex, CosmosTreeNodeStore
 from src.cloud.cosmos_traces import trace_recorder_from_database
 from src.cloud.query_prerequisites import CloudQueryNotReady
 from src.observability import TraceEvent, TraceEventType
-from src.prompt.answer_prompts import ANSWER_SYSTEM, build_answer_user_message
+from src.prompt.answer_prompts import ANSWER_SYSTEM_CLOUD as ANSWER_SYSTEM, build_answer_user_message
 from src.service.auth import ActorContext
 from src.service.schemas import MemoryFactResponse, QueryRequest, QueryResponse
 
@@ -460,11 +460,19 @@ def _dot(left: list[float], right: list[float]) -> float:
     return sum(a * b for a, b in zip(left, right))
 
 
-_UPDATE_QUERY_PATTERN = re.compile(r"\b(how many|so far|current|currently|latest|now|updated?|total)\b", re.IGNORECASE)
+_LEXICAL_FALLBACK_QUERY_PATTERN = re.compile(
+    r"\b("
+    r"how many|so far|current|currently|latest|now|updated?|total|"
+    r"order(?:ed)?(?: by| chronologically)?|earliest|first to last|"
+    r"list (?:all|every)|all (?:the )?(?:events?|times?)|"
+    r"(?:what|which) events?|events? (?:i|have i) attended"
+    r")\b",
+    re.IGNORECASE,
+)
 
 
 def _should_use_lexical_fact_fallback(question: str) -> bool:
-    return bool(_UPDATE_QUERY_PATTERN.search(str(question or "")))
+    return bool(_LEXICAL_FALLBACK_QUERY_PATTERN.search(str(question or "")))
 
 
 def _normalized_recency_scores(facts: list[Any]) -> dict[str, float]:

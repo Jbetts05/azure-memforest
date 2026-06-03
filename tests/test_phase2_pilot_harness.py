@@ -128,6 +128,32 @@ def test_phase2_aggregate_rejects_new_dlq_even_in_durable_mode(monkeypatch) -> N
     assert aggregate["dlq_gate_passed"] is False
 
 
+def test_phase2_aggregate_accounts_for_non_answer_content_filter_skips(monkeypatch) -> None:
+    harness = _load_harness(monkeypatch, PHASE2_DISPATCH_MODE="durable")
+    results = [_result(case["case_id"]) for case in harness.CASES]
+    skipped = results[0]["events"][0]
+    skipped["source_session_id"] = "non-answer-session"
+    skipped["status"] = {
+        "status": "failed",
+        "error": "content_filter: ResponsibleAIPolicyViolation",
+    }
+    results[0]["filtered_skips"] = [
+        {
+            "source_session_id": "non-answer-session",
+            "reason": "content_filter",
+            "answer_bearing": False,
+        }
+    ]
+
+    aggregate = harness.aggregate(results, {"deadletter": 19}, {"deadletter": 19})
+
+    assert aggregate["status"] == "succeeded"
+    assert aggregate["successful_ingest_event_count"] == 9
+    assert aggregate["skipped_non_answer_ingest_event_count"] == 1
+    assert aggregate["durable_accounted_event_count"] == 10
+    assert aggregate["durable_gate_passed"] is True
+
+
 def test_phase2_aggregate_rejects_residue_contamination(monkeypatch) -> None:
     harness = _load_harness(monkeypatch, PHASE2_DISPATCH_MODE="durable")
     results = [_result(case["case_id"]) for case in harness.CASES]

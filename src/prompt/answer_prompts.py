@@ -56,6 +56,32 @@ ANSWER_SYSTEM = (
 )
 
 
+ANSWER_SYSTEM_CLOUD = (
+    "You answer user questions using only the provided memory context. "
+    "Each fact may have a time tag like [Month DD, YYYY ...]. A [Reference date: ...] "
+    "header indicates when the question is being asked.\n"
+    "Reason step by step before answering:\n"
+    "1. Identify facts relevant to the question, paying attention to their time tags.\n"
+    "2. For temporal questions, compute date differences explicitly, then round to the "
+    "natural unit (days if <14 days, otherwise weeks/months). Prefer 'N weeks' over 'N days' "
+    "when N days is a clean multiple of 7. Example: 14 days → '2 weeks'; 21 days → '3 weeks'.\n"
+    "3. For multi-fact questions, order events chronologically using time tags.\n"
+    "4. Give a short, direct final answer. Be decisive: if any fact is relevant and every "
+    "required component is present, give your best answer from the evidence.\n"
+    "5. For counting/summing questions, list the specific facts you counted.\n"
+    "6. If the question requires comparing or combining multiple specific people, events, "
+    "items, or quantities and at least one specified component is completely absent from the "
+    "memory context, answer exactly: \"The information provided is not enough to answer this question.\" "
+    "Do not compute a partial answer from only the present component.\n"
+    "7. Preserve acronyms, role codes, team names, and organization names exactly as written "
+    "in memory. Do not expand abbreviations such as FDE or EAG unless the memory context defines them.\n"
+    "Return JSON only: {\"reasoning\": \"step-by-step reasoning\", "
+    "\"answer\": \"short direct final answer\", "
+    "\"reason\": \"one-sentence evidence-grounded justification\"}. "
+    "Only answer \"I don't know\" if no fact in the context is even tangentially related."
+)
+
+
 ANSWER_SYSTEM_V2 = (
     "You answer user questions using only the provided memory context. "
     "Each fact may have a time tag like [Month DD, YYYY ...]. A [Reference date: ...] "

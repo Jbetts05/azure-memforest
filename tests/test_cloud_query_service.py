@@ -6,7 +6,7 @@ import pytest
 
 from src.cloud.contracts import RecallCandidate, StoredTreeNode
 from src.cloud.cosmos_manifests import ForestManifest
-from src.cloud.query_service import CloudMemoryQueryService, CloudQueryConfig, CloudQueryNotReady
+from src.cloud.query_service import CloudMemoryQueryService, CloudQueryConfig, CloudQueryNotReady, _should_use_lexical_fact_fallback
 from src.service.auth import ActorContext, TenantContext
 from src.service.schemas import QueryRequest
 from src.utils.types import ManagedFact
@@ -61,6 +61,16 @@ class BlankThenAnswerModel(FakeModel):
         if len(self.generate_prompts) == 1:
             return {"answer": "", "reason": ""}
         return {"answer": "4", "reason": "The memory says the user has 3 sisters and 1 brother."}
+
+
+class RecordingModel(FakeModel):
+    def __init__(self):
+        super().__init__()
+        self.generate_kwargs = []
+
+    def generate_json(self, **kwargs):
+        self.generate_kwargs.append(kwargs)
+        return super().generate_json(**kwargs)
 
 
 class BlankAnswerModel(FakeModel):
@@ -323,6 +333,25 @@ async def test_cloud_query_keeps_facts_when_answer_retry_stays_blank() -> None:
     assert len(response.facts) == 1
     assert response.facts[0].text == "The user has 3 sisters and 1 brother, making a total of 4 siblings."
     assert model.generate_count == 2
+
+
+def test_cloud_query_lexical_fallback_triggers_for_ordering_questions() -> None:
+    assert _should_use_lexical_fact_fallback("What is the order of the concerts I attended?")
+    assert _should_use_lexical_fact_fallback("List all musical events from the past two months.")
+
+
+@pytest.mark.asyncio
+async def test_cloud_query_answer_prompt_includes_abstention_rule() -> None:
+    model = RecordingModel()
+
+    await _service(_manifest(), model=model).query(
+        ActorContext(actor_id="user-1", tenant=TenantContext("tenant-1")),
+        user_id="user-1",
+        request=QueryRequest(question="Which task happened first?", max_facts=1),
+    )
+
+    assert model.generate_kwargs
+    assert "The information provided is not enough" in model.generate_kwargs[0]["system_prompt"]
 
 
 @pytest.mark.asyncio
