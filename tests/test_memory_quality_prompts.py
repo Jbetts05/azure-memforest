@@ -1,5 +1,6 @@
 from src.build.summary_manager import _max_words_for
 from src.build.summary_manager import _prompt_name_for
+from src.prompt.answer_prompts import ANSWER_SYSTEM_CLOUD
 from src.prompt.extraction_prompt import UNIFIED_MEMORY_EXTRACTION_PROMPT
 from src.prompt.tree_prompts import TREE_SUMMARY_ENTITY_USER, build_tree_prompt_manager
 
@@ -24,6 +25,17 @@ def test_extraction_prompt_allows_marked_assistant_advice_context() -> None:
     assert "screens (phones, tablets, laptops, or TVs)" in prompt
     assert "blue light suppressing melatonin" in prompt
     assert "Do NOT rewrite them as user-authored preferences" in prompt
+
+
+def test_cloud_answer_prompt_preserves_preference_avoidance_examples_without_weakening_abstention() -> None:
+    prompt = ANSWER_SYSTEM_CLOUD
+
+    assert "For preference, recommendation, or activity-suggestion questions" in prompt
+    assert "constraints or avoidances, and stated reasons" in prompt
+    assert "phones, tablets, laptops, or TVs" in prompt
+    assert "This does not lower the evidence bar" in prompt
+    assert "if required evidence is absent, follow the abstention rule" in prompt
+    assert "The information provided is not enough to answer this question." in prompt
 
 
 def test_entity_summary_prompt_blocks_inferred_start_dates_and_filler() -> None:

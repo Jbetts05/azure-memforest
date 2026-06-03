@@ -139,6 +139,20 @@ Remaining caveat:
 
 - One lower-ranked dance-class fact still appeared in the returned context tail, but the answer no longer used it. Combined targeted validation should confirm this does not interfere with the temporal-event and abstention fixes.
 
+Combined targeted validation on image `ccf55b968111`:
+
+- Artifact: `case_results_targeted-fixed-3-context-20260603224910/aggregate.json`
+- Operationally clean: 3/3 cases completed, 31/31 Durable instances completed, 0 DLQ delta, 0 content-filter skips.
+- Pipeline-eligible cases passed:
+  - `gpt4_d6585ce8`: all five musical events in order.
+  - `gpt4_70e84552_abs`: insufficient-information abstention.
+- `195a1a1b` remained modified-input calibration only and had a judge disagreement (`primary=false`, `cross=true`).
+
+Interpretation:
+
+- Context selection now surfaces the right negative-preference facts, but answer wording still collapsed the explicit phone/TV evidence to `screens` and omitted the sleep-quality rationale.
+- The next narrow slice is answer-generation fidelity for preference/recommendation/activity questions: preserve concrete avoidance examples and stated reasons when they are present in memory context, while keeping abstention rules unchanged.
+
 ## Temporal fallback follow-up
 
 Artifacts:
