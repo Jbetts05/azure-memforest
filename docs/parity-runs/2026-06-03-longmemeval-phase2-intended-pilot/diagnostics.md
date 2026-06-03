@@ -114,6 +114,19 @@ Interpretation:
 - Before any full 10-case rerun, reconfirm this result together with the temporal-event and abstention fixes so retrieval/query changes are tested for cross-interactions.
 - Combined targeted validation later passed this case again, but the extracted fact regressed from explicit `phones, tablets, laptops, or TVs` to the broader `screens`. The answer and judges still passed, but the prompt was hardened again to require parenthetical examples and sleep-impact rationale when marked assistant advice includes them.
 
+Hardened-prompt validation on image `29aa470632d6`:
+
+- Artifact: `case_results_negative-pref-hardened-195-20260603214651/04_195a1a1b.json`
+- The run used the intended stack: `gpt-5.4-mini-memory` for ingest and `text-embedding-3-large` for embeddings.
+- Operationally it completed cleanly: 9/9 ingests succeeded, 9/9 Durable instances completed, 0 DLQ delta.
+- Extraction preserved the concrete fact: `avoiding screens (phones, tablets, laptops, or TVs)`.
+- Both judges failed because the final answer included unrelated dance-event suggestions and did not explicitly express the phone/TV avoidance rationale.
+
+Interpretation:
+
+- The remaining `195a1a1b` failure is answer-context selection/composition noise, not extraction coverage or model routing.
+- The next fix should prioritize direct evening/sleep/relaxation/avoid-screen preference facts for forward-looking activity-suggestion questions while keeping this case excluded from unmodified pipeline accuracy.
+
 ## Temporal fallback follow-up
 
 Artifacts:

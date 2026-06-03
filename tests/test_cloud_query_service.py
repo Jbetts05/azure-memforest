@@ -6,7 +6,7 @@ import pytest
 
 from src.cloud.contracts import RecallCandidate, StoredTreeNode
 from src.cloud.cosmos_manifests import ForestManifest
-from src.cloud.query_service import CloudMemoryQueryService, CloudQueryConfig, CloudQueryNotReady, _lexical_fallback_queries, _should_use_lexical_fact_fallback
+from src.cloud.query_service import CloudMemoryQueryService, CloudQueryConfig, CloudQueryNotReady, _is_preference_activity_question, _lexical_fallback_queries, _should_use_lexical_fact_fallback
 from src.service.auth import ActorContext, TenantContext
 from src.service.schemas import QueryRequest
 from src.utils.types import ManagedFact
@@ -237,6 +237,34 @@ class FakeEventListFactStore:
         ][:limit]
 
 
+class FakePreferenceActivityFactStore:
+    def __init__(self):
+        self.facts = {
+            "relax": _managed_fact("relax", "The assistant suggested using relaxation techniques such as reading, meditation, deep breathing exercises, yoga or stretching, or listening to soothing music.", time=5.0),
+            "winddown": _managed_fact("winddown", "The user prefers winding down by 9:30 pm to prepare for a good night's sleep.", time=5.0),
+            "screens": _managed_fact("screens", "The assistant advised avoiding screens (phones, tablets, laptops, or TVs) for at least 30 minutes before bedtime.", time=5.0),
+            "dance": _managed_fact("dance", "The user planned to ask Jamal whether he knows of any upcoming dance events or battles in the area.", time=1.0),
+            "vacation": _managed_fact("vacation", "The user is planning a summer vacation that includes outdoor activities.", time=2.0),
+        }
+
+    async def get_facts(self, fact_ids):
+        return [self.facts[fact_id] for fact_id in fact_ids if fact_id in self.facts]
+
+
+class FakePreferenceTreeStore:
+    def __init__(self):
+        self.nodes = {
+            "root": StoredTreeNode(tree_id="tree-1", node_id="root", level="L1", summary="", child_ids=("leaf",), tenant_id="tenant-1", user_id="user-1", forest_version="v1"),
+            "leaf": StoredTreeNode(tree_id="tree-1", node_id="leaf", level="L0", summary="", fact_ids=("dance", "screens", "vacation", "winddown", "relax"), tenant_id="tenant-1", user_id="user-1", forest_version="v1"),
+        }
+
+    async def get_node(self, tree_id, node_id):
+        return self.nodes.get(node_id)
+
+    async def get_nodes(self, tree_id, node_ids):
+        return [self.nodes[node_id] for node_id in node_ids if node_id in self.nodes]
+
+
 class FakeFactLocationIndex:
     def __init__(self, present):
         self.present = set(present)
@@ -289,13 +317,14 @@ def _managed_fact(fact_id: str, fact_text: str, *, time: float):
     )
 
 
-def _service(manifest=None, recall=None, trace_recorder=None, model=None, fact_store=None, fact_location_index=None, config=None):
+def _service(manifest=None, recall=None, trace_recorder=None, model=None, fact_store=None, tree_store=None, fact_location_index=None, config=None):
     model = model or FakeModel()
     fact_store = fact_store or FakeFactStore()
+    tree_store = tree_store or FakeTreeStore()
     return CloudMemoryQueryService(
         manifest_store_factory=lambda tenant_id, user_id: FakeManifestStore(manifest),
         fact_store_factory=lambda tenant_id, user_id: fact_store,
-        tree_node_store_factory=lambda tenant_id, user_id, forest_version: FakeTreeStore(),
+        tree_node_store_factory=lambda tenant_id, user_id, forest_version: tree_store,
         browse_embedding_store_factory=lambda tenant_id, user_id, forest_version, embedding_model_version: FakeEmbeddingStore(),
         fact_location_index_factory=(lambda tenant_id, user_id, forest_version: FakeFactLocationIndex(fact_location_index)) if fact_location_index is not None else None,
         recall_index=recall or FakeRecallIndex(),
@@ -403,6 +432,12 @@ def test_cloud_query_event_list_expansion_puts_synonyms_first() -> None:
     assert queries[3].startswith("outdoor open-air park local bar")
 
 
+def test_cloud_query_detects_preference_activity_questions() -> None:
+    assert _is_preference_activity_question("Can you suggest some activities that I can do in the evening?")
+    assert _is_preference_activity_question("What can I do before bed to relax?")
+    assert not _is_preference_activity_question("What concerts did I attend in the evening?")
+
+
 @pytest.mark.asyncio
 async def test_cloud_query_answer_prompt_includes_abstention_rule() -> None:
     model = RecordingModel()
@@ -432,6 +467,27 @@ async def test_cloud_query_event_list_prioritizes_all_event_facts_chronologicall
     )
 
     assert [fact.fact_id for fact in response.facts] == ["billie", "outdoor", "brooklyn", "jazz", "queen"]
+
+
+@pytest.mark.asyncio
+async def test_cloud_query_preference_activity_questions_drop_unrelated_event_noise() -> None:
+    response = await _service(
+        _manifest(),
+        recall=FakeRecallIndex(),
+        fact_store=FakePreferenceActivityFactStore(),
+        tree_store=FakePreferenceTreeStore(),
+        config=CloudQueryConfig(embedding_model_version="embed-v1", default_beam_width=2),
+    ).query(
+        ActorContext(actor_id="user-1", tenant=TenantContext("tenant-1")),
+        user_id="user-1",
+        request=QueryRequest(question="Can you suggest some activities that I can do in the evening?", max_facts=5),
+    )
+
+    fact_text = "\n".join(fact.text for fact in response.facts)
+    assert [fact.fact_id for fact in response.facts] == ["screens", "winddown", "relax"]
+    assert "phones, tablets, laptops, or TVs" in fact_text
+    assert "dance events or battles" not in fact_text
+    assert "summer vacation" not in fact_text
 
 
 @pytest.mark.asyncio

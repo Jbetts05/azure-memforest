@@ -214,10 +214,13 @@ class CloudMemoryQueryService:
         facts = [fact for _, fact in scored_facts] if scored_facts else facts
         max_facts = request.max_facts if request.max_facts is not None else self._config.default_max_facts
         temporal_facts = _temporal_event_facts(request.question, facts) if _is_temporal_event_list_question(request.question) else []
+        preference_activity_facts = _preference_activity_facts(request.question, facts) if _is_preference_activity_question(request.question) else []
         if max_facts and max_facts > 0:
             if temporal_facts:
                 effective_max_facts = max(max_facts, min(self._config.default_max_facts, max(12, len(temporal_facts))))
                 facts = _merge_prioritized_facts(temporal_facts, [], max_facts=effective_max_facts)
+            elif preference_activity_facts:
+                facts = _merge_preference_activity_facts(preference_activity_facts, facts, max_facts=max_facts)
             else:
                 facts = facts[:max_facts]
         answer, reason = await self._compose_answer(request.question, facts)
@@ -585,6 +588,45 @@ def _merge_prioritized_facts(priority: list[Any], remaining: list[Any], *, max_f
         if len(merged) >= max_facts:
             break
     return merged
+
+
+def _is_preference_activity_question(question: str) -> bool:
+    text = str(question or "").lower()
+    return bool(
+        re.search(r"\b(suggest|recommend|what can i do|things? to do|ideas?)\b", text)
+        and re.search(r"\b(evening|night|before bed|bedtime|later part of the day|relax|wind(?:ing)? down)\b", text)
+        and not re.search(r"\b(what did|did i|last night|last evening|yesterday)\b", text)
+    )
+
+
+def _preference_activity_facts(question: str, facts: list[Any]) -> list[Any]:
+    scored: list[tuple[float, float, str, Any]] = []
+    for fact in facts:
+        text = str(getattr(fact, "fact_text", "") or "")
+        normalized = text.lower()
+        score = 0.0
+        if re.search(r"\b(prefers?|wants?|likes?|would like|avoid(?:s|ing)?|advised|suggested)\b", normalized):
+            score += 2.0
+        if re.search(r"\b(sleep|bedtime|before bed|wind(?:ing)? down|9:30|9 30|restful)\b", normalized):
+            score += 3.0
+        if re.search(r"\b(screen|screens|phone|phones|tablet|tablets|laptop|laptops|tv|tvs|television|electronic devices)\b", normalized):
+            score += 4.0
+        if re.search(r"\b(relax|relaxation|meditation|headspace|calm|breathing|yoga|stretching|soothing music|read(?:ing)? a book|reading books)\b", normalized):
+            score += 2.0
+        if score <= 0:
+            continue
+        scored.append((-score, _fact_timestamp(fact), str(getattr(fact, "fact_id", "")), fact))
+    scored.sort(key=lambda item: (item[0], item[1], item[2]))
+    return [_fact for _, _, _, _fact in scored]
+
+
+def _merge_preference_activity_facts(priority: list[Any], facts: list[Any], *, max_facts: int) -> list[Any]:
+    direct_context_floor = min(max_facts, 3)
+    if len(priority) >= direct_context_floor:
+        return _merge_prioritized_facts(priority, [], max_facts=max_facts)
+    priority_ids = {str(getattr(fact, "fact_id", "")) for fact in priority}
+    remaining = [fact for fact in facts if str(getattr(fact, "fact_id", "")) not in priority_ids]
+    return _merge_prioritized_facts(priority, remaining, max_facts=max_facts)
 
 
 def _event_terms_for_question(question: str) -> set[str]:
