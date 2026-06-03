@@ -248,8 +248,11 @@ def turns_for_ingest(session: dict, *, case_id: str = "") -> tuple[list[dict], d
     """Store assistant transcript turns, but exclude them from extraction for Phase 1."""
     override = OVERRIDE_BY_SESSION.get((case_id, session.get("source_session_id")))
     retained_ids = set(override.get("retained_content_ids") or []) if override else set()
+    extract_assistant_ids = set(override.get("extract_assistant_content_ids") or []) if override else set()
+    assistant_advice_metadata = dict(override.get("assistant_advice_metadata") or {}) if override else {}
     shaped: list[dict] = []
     assistant_skip_count = 0
+    assistant_extract_count = 0
     user_extract_count = 0
     original_turns = list(session.get("turns") or [])
     source_turns = [
@@ -265,14 +268,21 @@ def turns_for_ingest(session: dict, *, case_id: str = "") -> tuple[list[dict], d
         copied = dict(turn)
         metadata = dict(copied.get("metadata") or {})
         if copied.get("role") == "assistant":
-            metadata["skip_extraction"] = True
-            assistant_skip_count += 1
+            if copied.get("content_id") in extract_assistant_ids:
+                metadata["assistant_advice_context"] = True
+                metadata["override_reason"] = override.get("override_reason", "assistant_advice_context") if override else "assistant_advice_context"
+                metadata.update(assistant_advice_metadata)
+                assistant_extract_count += 1
+            else:
+                metadata["skip_extraction"] = True
+                assistant_skip_count += 1
         elif copied.get("role") == "user":
             user_extract_count += 1
         copied["metadata"] = metadata
         shaped.append(copied)
     return shaped, {
         "assistant_turns_marked_skip_extraction": assistant_skip_count,
+        "assistant_turns_extractable": assistant_extract_count,
         "user_turns_extractable": user_extract_count,
         "original_turn_count": len(original_turns),
         "retained_turn_count": len(source_turns),
@@ -281,6 +291,7 @@ def turns_for_ingest(session: dict, *, case_id: str = "") -> tuple[list[dict], d
         "retained_content_ids": sorted(retained_ids),
         "synthetic_turn_count": len(synthetic_turns),
         "synthetic_content_ids": [turn.get("content_id") for turn in synthetic_turns],
+        "extract_assistant_content_ids": sorted(extract_assistant_ids),
         "retained_turns_sha256": retained_hash,
         "exclude_from_pipeline_accuracy": bool(override and override.get("exclude_from_pipeline_accuracy")),
     }

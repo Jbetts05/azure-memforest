@@ -15,6 +15,14 @@ def test_extraction_prompt_treats_observation_timestamps_as_provenance() -> None
     assert "expanded without definition" in prompt
 
 
+def test_extraction_prompt_allows_marked_assistant_advice_context() -> None:
+    prompt = UNIFIED_MEMORY_EXTRACTION_PROMPT.system
+
+    assert "assistant_advice_context=true" in prompt
+    assert "later user turns accepted or acted on the advice" in prompt
+    assert "Do NOT rewrite them as user-authored preferences" in prompt
+
+
 def test_entity_summary_prompt_blocks_inferred_start_dates_and_filler() -> None:
     system, _ = build_tree_prompt_manager().render(
         TREE_SUMMARY_ENTITY_USER.name,

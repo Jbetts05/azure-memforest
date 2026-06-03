@@ -219,6 +219,29 @@ def test_phase2_restore_override_flags_from_checkpoint(monkeypatch) -> None:
     assert result["exclude_from_pipeline_accuracy"] is True
 
 
+def test_phase2_harness_can_extract_explicit_assistant_advice_override(monkeypatch) -> None:
+    harness = _load_harness(monkeypatch)
+    turns, stats = harness.turns_for_ingest(
+        {
+            "source_session_id": "answer_6dc4305e",
+            "turns": [
+                {"role": "user", "content_id": "answer_6dc4305e:4", "content": "I prefer winding down by 9:30 pm.", "metadata": {}},
+                {"role": "assistant", "content_id": "answer_6dc4305e:5", "content": "Avoid phones and TVs before bed.", "metadata": {}},
+                {"role": "assistant", "content_id": "answer_6dc4305e:7", "content": "Other advice.", "metadata": {}},
+                {"role": "user", "content_id": "answer_6dc4305e:8", "content": "Can I get sleep meditations?", "metadata": {}},
+            ],
+        },
+        case_id="195a1a1b",
+    )
+
+    by_id = {turn["content_id"]: turn for turn in turns}
+    assert by_id["answer_6dc4305e:5"]["metadata"]["assistant_advice_context"] is True
+    assert "skip_extraction" not in by_id["answer_6dc4305e:5"]["metadata"]
+    assert stats["assistant_turns_extractable"] == 1
+    assert stats["exclude_from_pipeline_accuracy"] is True
+    assert stats["extract_assistant_content_ids"] == ["answer_6dc4305e:5"]
+
+
 def test_phase2_judge_uses_non_tiny_token_budget(monkeypatch) -> None:
     harness = _load_harness(monkeypatch)
     captured = {}

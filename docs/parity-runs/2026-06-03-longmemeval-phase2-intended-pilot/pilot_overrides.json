@@ -29,6 +29,21 @@
       "reason": "Combine the two user-authored sibling evidence turns into one answerable fact after repeated Phase 1 ingestion stalls.",
       "metric_scope": "harness_calibration_accuracy_with_manual_overrides",
       "exclude_from_pipeline_accuracy": true
+    },
+    {
+      "case_id": "195a1a1b",
+      "source_session_id": "answer_6dc4305e",
+      "override_type": "assistant_advice_context",
+      "override_reason": "gold_evidence_in_assistant_advice",
+      "retained_content_ids": ["answer_6dc4305e:4", "answer_6dc4305e:5", "answer_6dc4305e:8", "answer_6dc4305e:10", "answer_6dc4305e:12"],
+      "extract_assistant_content_ids": ["answer_6dc4305e:5"],
+      "assistant_advice_metadata": {
+        "derived_from_user_goal_content_ids": ["answer_6dc4305e:4"],
+        "accepted_by_user_content_ids": ["answer_6dc4305e:8", "answer_6dc4305e:10", "answer_6dc4305e:12"]
+      },
+      "reason": "The negative phone/TV sleep constraint appears only in assistant wind-down advice, and the user later acted on the broader sleep/relaxation routine. Retain that assistant advice as assistant-origin calibration evidence rather than synthesizing a user-authored preference.",
+      "metric_scope": "harness_calibration_accuracy_with_manual_overrides",
+      "exclude_from_pipeline_accuracy": true
     }
   ]
 }
