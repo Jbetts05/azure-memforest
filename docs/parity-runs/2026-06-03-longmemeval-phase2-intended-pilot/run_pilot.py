@@ -1,0 +1,632 @@
+from __future__ import annotations
+
+import base64
+import hashlib
+import json
+import os
+import re
+import subprocess
+import time
+import uuid
+from pathlib import Path
+from typing import Any
+
+import requests
+
+
+AZ = r"C:\Program Files\Microsoft SDKs\Azure\CLI2\wbin\az.cmd"
+API = "https://memforest-api.example.invalid"
+MODEL_ENDPOINT = "https://memforest-example-foundry.cognitiveservices.azure.com"
+TENANT = "11111111-1111-4111-8111-111111111111"
+USER = "22222222-2222-4222-8222-222222222222"
+API_SCOPE = "api://33333333-3333-4333-8333-333333333333/access_as_user"
+MODEL_SCOPE = "https://cognitiveservices.azure.com/.default"
+BENCHMARK_SECRET_PATH = Path.home() / "AppData" / "Local" / "Temp" / "azure_memforest_benchmark_secret.txt"
+AUTH_MODE = os.getenv("PHASE2_AUTH_MODE", "benchmark").strip().lower()
+DISPATCH_MODE = os.getenv("PHASE2_DISPATCH_MODE", "servicebus").strip().lower()
+DURABLE_STATUS_KEY = os.getenv("PHASE2_DURABLE_STATUS_KEY", "").strip()
+DURABLE_START_URL = os.getenv("PHASE2_DURABLE_START_URL", "").strip()
+DURABLE_HUB = os.getenv("PHASE2_DURABLE_HUB", "MemForestWrites").strip()
+DURABLE_STATUS_CONNECTION = os.getenv("PHASE2_DURABLE_STATUS_CONNECTION", "Storage").strip()
+DURABLE_STATUS_REQUIRED = os.getenv("PHASE2_DURABLE_STATUS_REQUIRED", "").strip().lower() in {"1", "true", "yes", "on"}
+DURABLE_STATUS_ATTEMPTS = int(os.getenv("PHASE2_DURABLE_STATUS_ATTEMPTS", "60").strip() or "60")
+RUN_SUFFIX = os.getenv("PHASE2_RUN_SUFFIX", "").strip()
+CASE_FILTER = {item.strip() for item in os.getenv("PHASE2_CASE_IDS", "").split(",") if item.strip()}
+
+RUN = Path(__file__).resolve().parent
+CASES = json.loads((RUN / "pilot_cases.json").read_text(encoding="utf-8"))
+OVERRIDES = json.loads((RUN / "pilot_overrides.json").read_text(encoding="utf-8")) if (RUN / "pilot_overrides.json").exists() else {"overrides": []}
+OVERRIDE_BY_SESSION = {
+    (item["case_id"], item["source_session_id"]): item
+    for item in OVERRIDES.get("overrides", [])
+}
+RESULTS = Path(os.getenv("PHASE2_RESULTS_DIR", str(RUN / "case_results")))
+RESULTS.mkdir(exist_ok=True)
+
+_tokens: dict[str, tuple[str, float]] = {}
+
+
+def save(path: Path, value: Any) -> None:
+    path.write_text(json.dumps(value, indent=2), encoding="utf-8")
+
+
+def token(scope: str) -> str:
+    now = time.time()
+    current = _tokens.get(scope)
+    if current and current[1] - now > 300:
+        return current[0]
+    raw = subprocess.check_output(
+        [AZ, "account", "get-access-token", "--tenant", TENANT, "--scope", scope, "--query", "accessToken", "-o", "tsv"],
+        text=True,
+    ).strip()
+    payload = raw.split(".")[1]
+    payload += "=" * (-len(payload) % 4)
+    exp = float(json.loads(base64.urlsafe_b64decode(payload.encode("utf-8"))).get("exp", now + 3000))
+    _tokens[scope] = (raw, exp)
+    return raw
+
+
+def benchmark_secret() -> str:
+    return BENCHMARK_SECRET_PATH.read_text(encoding="utf-8").strip()
+
+
+def api_headers(*, user_id: str = USER, json_body: bool = False, idem: str | None = None) -> dict[str, str]:
+    headers = {
+        "x-tenant-id": TENANT,
+        "x-actor-id": user_id,
+    }
+    if AUTH_MODE == "benchmark":
+        headers["x-benchmark-auth"] = benchmark_secret()
+    elif AUTH_MODE == "dev":
+        headers["x-auth-roles"] = "memory.benchmark"
+    else:
+        raise RuntimeError(f"unsupported PHASE2_AUTH_MODE={AUTH_MODE!r}")
+    if json_body:
+        headers["Content-Type"] = "application/json"
+    if idem:
+        headers["Idempotency-Key"] = idem
+    return headers
+
+
+def model_headers() -> dict[str, str]:
+    return {"Authorization": f"Bearer {token(MODEL_SCOPE)}", "Content-Type": "application/json"}
+
+
+def api_get(path: str, *, user_id: str = USER) -> dict:
+    response = requests.get(API + path, headers=api_headers(user_id=user_id), timeout=120)
+    response.raise_for_status()
+    return response.json()
+
+
+def api_post(path: str, body: dict | None = None, *, user_id: str = USER, idem: str | None = None) -> dict:
+    response = requests.post(API + path, headers=api_headers(user_id=user_id, json_body=True, idem=idem), json=body or {}, timeout=180)
+    response.raise_for_status()
+    return response.json()
+
+
+def progress_fingerprint(status: dict) -> tuple:
+    telemetry = status.get("telemetry") or {}
+    return (
+        status.get("status"),
+        status.get("stage"),
+        len(status.get("stage_history") or []),
+        telemetry.get("total_calls"),
+        telemetry.get("total_started_calls"),
+        telemetry.get("in_flight_calls"),
+        telemetry.get("extract_build_heartbeat_count"),
+        telemetry.get("total_latency_ms"),
+    )
+
+
+def wait_job_progress(job_id: str, *, user_id: str, hard_timeout_seconds: int, idle_timeout_seconds: int) -> tuple[dict, float, dict]:
+    start = time.time()
+    status = api_get(f"/v1/users/{user_id}/jobs/{job_id}", user_id=user_id)
+    last_fingerprint = progress_fingerprint(status)
+    last_progress_at = start
+    progress_events = [{"elapsed_sec": 0.0, "fingerprint": list(last_fingerprint)}]
+    while status["status"] not in {"succeeded", "failed", "cancelled"}:
+        now = time.time()
+        if now - start >= hard_timeout_seconds:
+            return status, now - start, {"timeout_reason": "hard_timeout", "progress_events": progress_events}
+        if now - last_progress_at >= idle_timeout_seconds:
+            return status, now - start, {"timeout_reason": "idle_timeout", "progress_events": progress_events}
+        time.sleep(10)
+        status = api_get(f"/v1/users/{user_id}/jobs/{job_id}", user_id=user_id)
+        fingerprint = progress_fingerprint(status)
+        if fingerprint != last_fingerprint:
+            last_fingerprint = fingerprint
+            last_progress_at = time.time()
+            progress_events.append({"elapsed_sec": last_progress_at - start, "fingerprint": list(fingerprint)})
+    return status, time.time() - start, {"timeout_reason": None, "progress_events": progress_events}
+
+
+def durable_instance_status(job_id: str) -> dict | None:
+    if DISPATCH_MODE != "durable" or not (DURABLE_START_URL and DURABLE_STATUS_KEY):
+        return None
+    base_url = DURABLE_START_URL.split("/api/", 1)[0].rstrip("/")
+    last_error = None
+    for _ in range(max(1, DURABLE_STATUS_ATTEMPTS)):
+        try:
+            response = requests.get(
+                f"{base_url}/runtime/webhooks/durabletask/instances/{job_id}",
+                params={"taskHub": DURABLE_HUB, "connection": DURABLE_STATUS_CONNECTION},
+                headers={"x-functions-key": DURABLE_STATUS_KEY},
+                timeout=120,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            redacted = {key: value for key, value in payload.items() if key != "input"}
+            if redacted.get("runtimeStatus") == "Completed":
+                redacted.pop("output", None)
+            elif isinstance(redacted.get("output"), str) and len(redacted["output"]) > 4000:
+                redacted["output"] = redacted["output"][:4000] + "...<truncated>"
+            if redacted.get("runtimeStatus") in {"Completed", "Failed", "Terminated", "Canceled"}:
+                return redacted
+        except requests.HTTPError as exc:
+            status_code = exc.response.status_code if exc.response is not None else "unknown"
+            last_error = RuntimeError(f"Durable status request failed with HTTP {status_code}")
+        except Exception as exc:
+            last_error = RuntimeError(f"Durable status request failed: {type(exc).__name__}")
+        time.sleep(5)
+    if last_error is not None:
+        raise last_error
+    return None
+
+
+def norm(text: object) -> str:
+    value = str(text or "").lower()
+    value = re.sub(r"[^a-z0-9]+", " ", value)
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def is_content_filter_failure(status: dict) -> bool:
+    text = str(status.get("error") or "")
+    return "content_filter" in text or "ResponsibleAIPolicyViolation" in text
+
+
+def get_anscheck_prompt(task: str, question: str, answer: str, response: str, abstention: bool = False) -> str:
+    if not abstention:
+        if task in ["single-session-user", "single-session-assistant", "multi-session"]:
+            template = "I will give you a question, a correct answer, and a response from a model. Please answer yes if the response contains the correct answer. Otherwise, answer no. If the response is equivalent to the correct answer or contains all the intermediate steps to get the correct answer, you should also answer yes. If the response only contains a subset of the information required by the answer, answer no. \n\nQuestion: {}\n\nCorrect Answer: {}\n\nModel Response: {}\n\nIs the model response correct? Answer yes or no only."
+            return template.format(question, answer, response)
+        if task == "temporal-reasoning":
+            template = "I will give you a question, a correct answer, and a response from a model. Please answer yes if the response contains the correct answer. Otherwise, answer no. If the response is equivalent to the correct answer or contains all the intermediate steps to get the correct answer, you should also answer yes. If the response only contains a subset of the information required by the answer, answer no. In addition, do not penalize off-by-one errors for the number of days. If the question asks for the number of days/weeks/months, etc., and the model makes off-by-one errors (e.g., predicting 19 days when the answer is 18), the model's response is still correct. \n\nQuestion: {}\n\nCorrect Answer: {}\n\nModel Response: {}\n\nIs the model response correct? Answer yes or no only."
+            return template.format(question, answer, response)
+        if task == "knowledge-update":
+            template = "I will give you a question, a correct answer, and a response from a model. Please answer yes if the response contains the correct answer. Otherwise, answer no. If the response contains some previous information along with an updated answer, the response should be considered as correct as long as the updated answer is the required answer.\n\nQuestion: {}\n\nCorrect Answer: {}\n\nModel Response: {}\n\nIs the model response correct? Answer yes or no only."
+            return template.format(question, answer, response)
+        if task == "single-session-preference":
+            template = "I will give you a question, a rubric for desired personalized response, and a response from a model. Please answer yes if the response satisfies the desired response. Otherwise, answer no. The model does not need to reflect all the points in the rubric. The response is correct as long as it recalls and utilizes the user's personal information correctly.\n\nQuestion: {}\n\nRubric: {}\n\nModel Response: {}\n\nIs the model response correct? Answer yes or no only."
+            return template.format(question, answer, response)
+        raise NotImplementedError(task)
+    template = "I will give you an unanswerable question, an explanation, and a response from a model. Please answer yes if the model correctly identifies the question as unanswerable. The model could say that the information is incomplete, or some other information is given but the asked information is not.\n\nQuestion: {}\n\nExplanation: {}\n\nModel Response: {}\n\nDoes the model correctly identify the question as unanswerable? Answer yes or no only."
+    return template.format(question, answer, response)
+
+
+def judge(deployment: str, prompt: str) -> dict:
+    body = {
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0,
+        "max_completion_tokens": 64,
+    }
+    response = requests.post(
+        f"{MODEL_ENDPOINT}/openai/deployments/{deployment}/chat/completions?api-version=2024-10-21",
+        headers=model_headers(),
+        json=body,
+        timeout=180,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    content = payload["choices"][0]["message"].get("content", "").strip()
+    return {"deployment": deployment, "response": content, "label": "yes" in content.lower(), "raw": payload}
+
+
+def queue_state() -> dict:
+    raw = subprocess.check_output(
+        [
+            AZ,
+            "servicebus",
+            "queue",
+            "show",
+            "--resource-group",
+            "azure-memforest",
+            "--namespace-name",
+            "memforestexamplesb",
+            "--name",
+            "memforest-writes",
+            "--query",
+            "{active:countDetails.activeMessageCount,deadletter:countDetails.deadLetterMessageCount,scheduled:countDetails.scheduledMessageCount}",
+            "-o",
+            "json",
+        ],
+        text=True,
+    )
+    return json.loads(raw)
+
+
+def turns_for_ingest(session: dict, *, case_id: str = "") -> tuple[list[dict], dict]:
+    """Store assistant transcript turns, but exclude them from extraction for Phase 1."""
+    override = OVERRIDE_BY_SESSION.get((case_id, session.get("source_session_id")))
+    retained_ids = set(override.get("retained_content_ids") or []) if override else set()
+    shaped: list[dict] = []
+    assistant_skip_count = 0
+    user_extract_count = 0
+    original_turns = list(session.get("turns") or [])
+    source_turns = [
+        turn for turn in original_turns
+        if not retained_ids or turn.get("content_id") in retained_ids
+    ]
+    synthetic_turns = [dict(turn) for turn in (override.get("synthetic_turns") or [])] if override else []
+    source_turns.extend(synthetic_turns)
+    retained_hash = hashlib.sha256(
+        json.dumps(source_turns, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+    for turn in source_turns:
+        copied = dict(turn)
+        metadata = dict(copied.get("metadata") or {})
+        if copied.get("role") == "assistant":
+            metadata["skip_extraction"] = True
+            assistant_skip_count += 1
+        elif copied.get("role") == "user":
+            user_extract_count += 1
+        copied["metadata"] = metadata
+        shaped.append(copied)
+    return shaped, {
+        "assistant_turns_marked_skip_extraction": assistant_skip_count,
+        "user_turns_extractable": user_extract_count,
+        "original_turn_count": len(original_turns),
+        "retained_turn_count": len(source_turns),
+        "evidence_minimized": bool(override),
+        "override_type": override.get("override_type") if override else None,
+        "retained_content_ids": sorted(retained_ids),
+        "synthetic_turn_count": len(synthetic_turns),
+        "synthetic_content_ids": [turn.get("content_id") for turn in synthetic_turns],
+        "retained_turns_sha256": retained_hash,
+        "exclude_from_pipeline_accuracy": bool(override and override.get("exclude_from_pipeline_accuracy")),
+    }
+
+
+def residue_probe(question: str, *, user_id: str) -> dict:
+    try:
+        return api_post(f"/v1/users/{user_id}/query", {"question": question, "top_k": 3, "max_facts": 3, "trace_requested": False}, user_id=user_id)
+    except requests.HTTPError as exc:
+        return {"status": "http_error", "status_code": exc.response.status_code, "body": exc.response.text}
+    except requests.RequestException as exc:
+        return {"status": "request_error", "error": type(exc).__name__}
+
+
+def run_case(case: dict, index: int, previous_probe: str | None) -> dict:
+    case_id = case["case_id"]
+    user_id = f"benchmark-phase2-{index:02d}-{case_id}{('-' + RUN_SUFFIX) if RUN_SUFFIX else ''}"
+    out = RESULTS / f"{index:02d}_{case_id}.json"
+    if out.exists():
+        result = json.loads(out.read_text(encoding="utf-8"))
+        if result.get("status") == "succeeded":
+            print(json.dumps({"case": case_id, "status": "case_checkpoint_succeeded"}), flush=True)
+            return result
+        result["status"] = "running"
+        result.setdefault("events", [])
+        result.setdefault("filtered_skips", [])
+        result.setdefault("modified_input", False)
+        _restore_override_flags(result)
+        result.setdefault("checkpoint_resume_count", 0)
+        result["checkpoint_resume_count"] += 1
+    else:
+        result = {
+            "case_id": case_id,
+            "index": index,
+            "question_type": case["question_type"],
+            "question": case["question"],
+            "gold_answer": case["gold_answer"],
+            "selected_session_count": case["selected_session_count"],
+            "selected_turn_count": case["selected_turn_count"],
+            "events": [],
+            "status": "running",
+            "benchmark_user_id": user_id,
+            "filtered_skips": [],
+            "modified_input": False,
+        }
+    save(out, result)
+    reconcile_existing_ingests(result, user_id=user_id)
+    save(out, result)
+
+    if previous_probe:
+        result["residue_probe"] = {"question": previous_probe, "response": residue_probe(previous_probe, user_id=user_id)}
+        save(out, result)
+
+    completed_indices = {
+        int(event["index"])
+        for event in result.get("events", [])
+        if event.get("step") == "ingest" and (event.get("status") or {}).get("status") == "succeeded"
+    }
+    skipped_source_ids = {skip.get("source_session_id") for skip in result.get("filtered_skips", [])}
+    result["events"].append(
+        {
+            "step": "resume",
+            "completed_indices": sorted(completed_indices),
+            "skipped_source_session_ids": sorted(x for x in skipped_source_ids if x),
+            "timestamp_unix": time.time(),
+        }
+    )
+    save(out, result)
+    case_start = time.time()
+    for session_index, session in enumerate(case["sessions"], start=1):
+        if session_index in completed_indices or session["source_session_id"] in skipped_source_ids:
+            print(json.dumps({"case": case_id, "ingest": session_index, "status": "checkpoint_skipped", "source_session_id": session["source_session_id"]}), flush=True)
+            continue
+        if time.time() - case_start > 90 * 60:
+            result["status"] = "timeout_case"
+            save(out, result)
+            return result
+        attempt = sum(1 for event in result.get("events", []) if event.get("step") == "ingest" and event.get("index") == session_index) + 1
+        ingest_turns, input_shaping = turns_for_ingest(session, case_id=case_id)
+        ingest = api_post(
+            f"/v1/users/{user_id}/sessions/{session['session_id']}-{uuid.uuid4().hex}:ingest",
+            {
+                "turns": ingest_turns,
+                "metadata": {
+                    "source": "phase2-pilot",
+                    "assistant_transcript_extraction_policy": "skip_assistant_turns",
+                    **input_shaping,
+                    **session.get("metadata", {}),
+                },
+            },
+            user_id=user_id,
+            idem=f"phase2-ingest-{case_id}-{session_index}-attempt-{attempt}",
+        )
+        ingest_status, ingest_elapsed, wait_info = wait_job_progress(
+            ingest["job_id"],
+            user_id=user_id,
+            hard_timeout_seconds=30 * 60,
+            idle_timeout_seconds=10 * 60,
+        )
+        job_events = api_get(f"/v1/users/{user_id}/jobs/{ingest['job_id']}/events", user_id=user_id)
+        durable_status = None
+        durable_error = None
+        try:
+            durable_status = durable_instance_status(ingest["job_id"])
+        except Exception as exc:
+            durable_error = f"{type(exc).__name__}: {exc}"
+        result["events"].append(
+            {
+                "step": "ingest",
+                "index": session_index,
+                "source_session_id": session["source_session_id"],
+                "job_id": ingest["job_id"],
+                "input_shaping": input_shaping,
+                "status": ingest_status,
+                "elapsed_sec": ingest_elapsed,
+                "job_events": job_events,
+                "wait_info": wait_info,
+                "durable_instance": durable_status,
+                "durable_status_error": durable_error,
+            }
+        )
+        if input_shaping.get("evidence_minimized") or input_shaping.get("exclude_from_pipeline_accuracy"):
+            result["modified_input"] = True
+            result["exclude_from_pipeline_accuracy"] = True
+        save(out, result)
+        print(json.dumps({"case": case_id, "ingest": session_index, "status": ingest_status["status"], "elapsed": round(ingest_elapsed, 1)}), flush=True)
+        if ingest_status["status"] != "succeeded":
+            if is_content_filter_failure(ingest_status):
+                skip = {
+                    "source_session_id": session["source_session_id"],
+                    "answer_bearing": bool((session.get("metadata") or {}).get("is_answer_session")),
+                    "turn_count": len(session.get("turns") or []),
+                    "reason": "content_filter",
+                    "error": ingest_status.get("error"),
+                }
+                if skip["answer_bearing"]:
+                    result["status"] = "blocked_by_content_filter"
+                    result["filtered_block"] = skip
+                    save(out, result)
+                    return result
+                result["filtered_skips"].append(skip)
+                result["modified_input"] = True
+                save(out, result)
+                print(json.dumps({"case": case_id, "ingest": session_index, "status": "filtered_skipped", "source_session_id": session["source_session_id"]}), flush=True)
+                continue
+            result["status"] = "timeout_ingest" if wait_info.get("timeout_reason") else "failed_ingest"
+            save(out, result)
+            return result
+        if DURABLE_STATUS_REQUIRED and (not durable_status or durable_status.get("runtimeStatus") != "Completed"):
+            result["status"] = "failed_durable_instance"
+            save(out, result)
+            return result
+
+    query_start = time.time()
+    query = api_post(f"/v1/users/{user_id}/query", {"question": case["question"], "top_k": 8, "max_facts": 8, "trace_requested": True}, user_id=user_id)
+    query_elapsed = time.time() - query_start
+    answer = str(query.get("answer") or "")
+    prompt = get_anscheck_prompt(case["question_type"], case["question"], case["gold_answer"], answer, abstention="_abs" in case_id)
+    primary = judge("gpt-5.4", prompt)
+    cross = judge("gpt-5.4-mini-memory", prompt)
+    n_answer = norm(answer)
+    n_gold = norm(case["gold_answer"])
+    proxy = {
+        "normalized_exact": n_answer == n_gold,
+        "contains_gold": bool(n_gold and n_gold in n_answer),
+        "acceptable_answer_match": any(norm(a) and norm(a) in n_answer for a in case.get("phase1_expected", {}).get("acceptable_answers", [])),
+    }
+    result["events"].append({"step": "query", "elapsed_sec": query_elapsed, "response": query})
+    result["judge_prompt"] = prompt
+    result["judges"] = {"primary": primary, "cross_check": cross, "agreement": primary["label"] == cross["label"]}
+    result["proxy_scores"] = proxy
+    result["answer"] = answer
+    result["status"] = "succeeded"
+    save(out, result)
+    return result
+
+
+def reconcile_existing_ingests(result: dict, *, user_id: str) -> None:
+    for event in result.get("events", []):
+        if event.get("step") != "ingest" or not event.get("job_id"):
+            continue
+        status = event.get("status") or {}
+        if status.get("status") == "succeeded":
+            continue
+        try:
+            refreshed = api_get(f"/v1/users/{user_id}/jobs/{event['job_id']}", user_id=user_id)
+        except Exception as exc:
+            event["reconcile_error"] = f"{type(exc).__name__}: {exc}"
+            continue
+        if refreshed.get("status") == "succeeded":
+            event["status"] = refreshed
+            event["reconciled_from_api"] = True
+            event["dlq_settlement_artifact"] = True
+            try:
+                event["durable_instance"] = durable_instance_status(event["job_id"])
+            except Exception as exc:
+                event["durable_status_error"] = f"{type(exc).__name__}: {exc}"
+        elif refreshed.get("status") in {"failed", "cancelled"}:
+            event["status"] = refreshed
+            event["reconciled_from_api"] = True
+
+
+def aggregate(results: list[dict], before: dict, after: dict) -> dict:
+    completed = [r for r in results if r.get("status") == "succeeded"]
+    pipeline_completed = [r for r in completed if not r.get("exclude_from_pipeline_accuracy")]
+    new_dlq = int(after.get("deadletter", 0)) - int(before.get("deadletter", 0))
+    durable_mode = DISPATCH_MODE == "durable"
+    durable_instances = [
+        event.get("durable_instance")
+        for result in results
+        for event in result.get("events", [])
+        if event.get("step") == "ingest" and event.get("durable_instance")
+    ]
+    successful_ingest_events = [
+        event
+        for result in results
+        for event in result.get("events", [])
+        if event.get("step") == "ingest" and (event.get("status") or {}).get("status") == "succeeded"
+    ]
+    durable_completed = sum(1 for item in durable_instances if item.get("runtimeStatus") == "Completed")
+    durable_failed = sum(1 for item in durable_instances if item.get("runtimeStatus") in {"Failed", "Terminated", "Canceled"})
+    dlq_gate_passed = new_dlq == 0
+    durable_gate_passed = not durable_mode or durable_completed == len(successful_ingest_events)
+    calibration_primary_correct = sum(1 for r in completed if r["judges"]["primary"]["label"])
+    calibration_judge_disagreements = sum(1 for r in completed if not r["judges"]["agreement"])
+    pipeline_primary_correct = sum(1 for r in pipeline_completed if r["judges"]["primary"]["label"])
+    pipeline_judge_disagreements = sum(1 for r in pipeline_completed if not r["judges"]["agreement"])
+    filtered_skip_count = sum(len(r.get("filtered_skips") or []) for r in results)
+    blocked_by_content_filter = sum(1 for r in results if r.get("status") == "blocked_by_content_filter")
+    residue_contamination_events = sum(1 for r in results if _residue_contaminated(r.get("residue_probe")))
+    all_gates_passed = (
+        len(results) == len(CASES)
+        and len(completed) == len(CASES)
+        and len(pipeline_completed) >= 9
+        and pipeline_primary_correct >= 7
+        and pipeline_judge_disagreements <= 1
+        and calibration_primary_correct >= 8
+        and calibration_judge_disagreements <= 1
+        and dlq_gate_passed
+        and durable_gate_passed
+        and durable_failed == 0
+        and blocked_by_content_filter == 0
+        and residue_contamination_events == 0
+    )
+    return {
+        "status": "succeeded" if all_gates_passed else "gate_failed",
+        "dispatch_mode": DISPATCH_MODE,
+        "auth_mode": AUTH_MODE,
+        "attempted_cases": len(results),
+        "completed_cases": len(completed),
+        "strict_unmodified_completed_cases": sum(1 for r in completed if not r.get("modified_input")),
+        "best_effort_completed_cases": len(completed),
+        "filtered_skip_count": filtered_skip_count,
+        "blocked_by_content_filter": blocked_by_content_filter,
+        "primary_judge_correct": calibration_primary_correct,
+        "judge_agreements": sum(1 for r in completed if r["judges"]["agreement"]),
+        "judge_disagreements": calibration_judge_disagreements,
+        "pipeline_eligible_cases": len(pipeline_completed),
+        "pipeline_primary_judge_correct": pipeline_primary_correct,
+        "pipeline_judge_disagreements": pipeline_judge_disagreements,
+        "new_dlq_count_delta": new_dlq,
+        "dlq_gate_enforced": True,
+        "dlq_gate_passed": dlq_gate_passed,
+        "durable_instance_count": len(durable_instances),
+        "durable_instance_completed_count": durable_completed,
+        "durable_instance_failed_count": durable_failed,
+        "successful_ingest_event_count": len(successful_ingest_events),
+        "durable_gate_passed": durable_gate_passed,
+        "residue_contamination_events": residue_contamination_events,
+        "advance_to_50_case_subset": all_gates_passed,
+        "queue_before": before,
+        "queue_after": after,
+        "case_statuses": [{"case_id": r["case_id"], "status": r["status"], "answer": r.get("answer"), "primary_label": r.get("judges", {}).get("primary", {}).get("label"), "cross_label": r.get("judges", {}).get("cross_check", {}).get("label")} for r in results],
+    }
+
+
+def _residue_contaminated(probe: dict | None) -> bool:
+    if not probe:
+        return False
+    response = probe.get("response") or {}
+    if response.get("status") == "http_error":
+        return False
+    answer = str(response.get("answer") or "").strip()
+    facts = response.get("facts") or []
+    refusal_markers = (
+        "don't know",
+        "do not know",
+        "don't have information",
+        "not enough",
+        "no information",
+        "not have information",
+        "sorry",
+        "cannot",
+        "unable",
+        "no relevant",
+        "no record",
+    )
+    refusal = any(marker in answer.lower() for marker in refusal_markers)
+    return bool(facts or (answer and not refusal))
+
+
+def _restore_override_flags(result: dict) -> None:
+    if any(
+        event.get("step") == "ingest"
+        and (
+            (event.get("input_shaping") or {}).get("evidence_minimized")
+            or (event.get("input_shaping") or {}).get("exclude_from_pipeline_accuracy")
+        )
+        for event in result.get("events", [])
+    ):
+        result["modified_input"] = True
+        result["exclude_from_pipeline_accuracy"] = True
+
+
+def main() -> None:
+    metadata = {
+        "api_version": api_get("/version", user_id="benchmark-phase2-metadata"),
+        "queue_before": queue_state(),
+        "decisions": json.loads((RUN / "manifest.json").read_text(encoding="utf-8")),
+        "isolation": f"fresh benchmark synthetic user per case using auth_mode={AUTH_MODE}; dispatch_mode={DISPATCH_MODE}; no clear-per-case",
+        "auth_mode": AUTH_MODE,
+        "dispatch_mode": DISPATCH_MODE,
+        "durable_hub": DURABLE_HUB if DISPATCH_MODE == "durable" else None,
+        "run_suffix": RUN_SUFFIX,
+        "results_dir": str(RESULTS),
+        "case_filter": sorted(CASE_FILTER),
+    }
+    save(RUN / "run_metadata.json", metadata)
+    previous_probe = None
+    results = []
+    for index, case in enumerate(CASES, start=1):
+        if CASE_FILTER and case["case_id"] not in CASE_FILTER:
+            continue
+        print(json.dumps({"case": case["case_id"], "index": index, "type": case["question_type"]}), flush=True)
+        result = run_case(case, index, previous_probe)
+        results.append(result)
+        previous_probe = case["question"]
+        save(RUN / "results_partial.json", results)
+        if result["status"] != "succeeded":
+            break
+    queue_after = queue_state()
+    save(RUN / "queue_after.json", queue_after)
+    save(RUN / "results.json", results)
+    save(RUN / "aggregate.json", aggregate(results, metadata["queue_before"], queue_after))
+    print(json.dumps(json.loads((RUN / "aggregate.json").read_text(encoding="utf-8")), indent=2), flush=True)
+
+
+if __name__ == "__main__":
+    main()
