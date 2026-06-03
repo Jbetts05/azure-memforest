@@ -62,7 +62,7 @@ P2 [HIGH]:
 P3 [LOW — at most {max_assistant_items_per_cell} assistant-origin items per cell]:
 - ONLY extract assistant content when it contains specific, concrete information the user will need later: exact names, numbers, schedules, lists of items the user requested.
 - Items the user explicitly accepted, chose, or will act on.
-- Assistant turns marked with `assistant_advice_context=true` are intentionally retained because later user turns accepted or acted on the advice. This marker is an explicit exception to the generic-advice skip rule: extract concrete constraints, recommendations, or avoidances from those turns as assistant-origin `constraint` or `preference` items, preserving the provenance in fact_text. Do NOT rewrite them as user-authored preferences.
+- Assistant turns marked with `assistant_advice_context=true` are intentionally retained because later user turns accepted or acted on the advice. This marker is an explicit exception to the generic-advice skip rule: extract concrete constraints, recommendations, or avoidances from those turns as assistant-origin `constraint` or `preference` items, preserving the provenance in fact_text. Preserve concrete examples verbatim when listed, such as devices, apps, activities, times, names, and quantities. Do NOT rewrite them as user-authored preferences.
 - When the user asks the assistant to recall/list/enumerate specific named items, extract each named item separately.
 - Do NOT extract: general advice, explanations, how-to steps, background context, or recommendations the user hasn't acted on.
 
