@@ -27,6 +27,15 @@ def test_extraction_prompt_allows_marked_assistant_advice_context() -> None:
     assert "Do NOT rewrite them as user-authored preferences" in prompt
 
 
+def test_extraction_prompt_preserves_countable_collection_quantities() -> None:
+    prompt = UNIFIED_MEMORY_EXTRACTION_PROMPT.system
+
+    assert "Countable collections and inventories" in prompt
+    assert "preserve the exact number and item type" in prompt
+    assert "The user owns 3 vintage guitars." in prompt
+    assert "Do not drop a quantity" in prompt
+
+
 def test_cloud_answer_prompt_preserves_preference_avoidance_examples_without_weakening_abstention() -> None:
     prompt = ANSWER_SYSTEM_CLOUD
 

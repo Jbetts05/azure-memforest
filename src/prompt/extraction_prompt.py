@@ -76,6 +76,7 @@ P4 [SKIP — do not extract]:
 Item rules:
 - Target 5-8 P1+P2 items. Expand to {max_items_per_cell} only for genuine P1/P2 facts. Never pad with P3/P4.
 - Aggregation: when user does the same action on N≥3 similar targets, emit ONE item with count + 2-3 examples instead of N items.
+- Countable collections and inventories: when the user states an explicit count for possessions, collections, inventory, or other countable item groups, preserve the exact number and item type in fact_text. GOOD: "The user owns 3 vintage guitars." BAD: "The user collects vintage guitars." Do not drop a quantity just because the sentence also describes a habit or collection.
 - Concreteness — always embed directly in fact_text:
   - Dates: include dates in fact_text only when the user explicitly states them or the item is a concrete event whose occurrence date is part of the memory.
   - Observation timestamps are provenance, not fact validity. For stable states/preferences/constraints, do NOT rewrite the cell timestamp as "started on", "joined on", "as of", or "since" unless the user explicitly said that.
