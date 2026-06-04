@@ -178,6 +178,41 @@ Decision:
 - The three diagnosed Phase 2 quality failures are now fixed in targeted validation.
 - Next step is rubber-duck review of readiness for a full 10-case intended-stack pilot rerun.
 
+## Full rerun abort: `full-intended-rerun-20260604003854`
+
+Artifact:
+
+- `case_results_full-intended-rerun-20260604003854/`
+
+Outcome:
+
+- The run is operationally invalid and must not be counted as a Phase 2 quality result.
+- Case `4b24c848` completed and passed before the abort.
+- Case `8e91e7d9` reached its final answer-bearing ingest but did not complete the case.
+- Cases 3-10 were not reached.
+
+Root causes:
+
+1. Cosmos firewall blocked the Container Apps egress IP `192.0.2.8`, causing a 500 during checkpoint resume.
+2. A mid-run Durable package deployment introduced a changed orchestrator while a run checkpoint was still active. The final case-2 ingest then failed with Durable replay nondeterminism:
+
+```text
+Non-Deterministic workflow detected: A previous execution of this orchestration scheduled an activity task with sequence ID 0 and name 'materialize_write_job'...
+```
+
+Follow-up fix:
+
+- Added an idempotent retry for transient API-to-Durable start timeouts in `DurableJobStarter`; retries reuse the same Durable `instance_id`, so a duplicate start conflict remains safe.
+- Cosmos is configured to allow the current Container Apps egress IP `192.0.2.8`.
+- Storage public network access was temporarily opened for Function/Kudu deployment; the next run must record the exact storage network posture used.
+
+Next rerun requirements:
+
+- Start a fresh 10-case run; do not resume `full-intended-rerun-20260604003854`.
+- Use stable image/package `f732d22d8239` with no mid-run deployments.
+- Use a fresh Durable task hub for the rerun so old orchestration history cannot replay under changed code.
+- Keep reporting headline unmodified-pipeline accuracy separately from modified-input calibration.
+
 ## Temporal fallback follow-up
 
 Artifacts:
