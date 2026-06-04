@@ -213,6 +213,33 @@ Next rerun requirements:
 - Use a fresh Durable task hub for the rerun so old orchestration history cannot replay under changed code.
 - Keep reporting headline unmodified-pipeline accuracy separately from modified-input calibration.
 
+## Fresh rerun abort: `full-intended-clean-20260604030439`
+
+Artifact:
+
+- `case_results_full-intended-clean-20260604030439/`
+
+Outcome:
+
+- The run is operationally invalid and must not be counted as a Phase 2 quality result.
+- The run used a captured environment preflight with:
+  - API image `f732d22d8239`;
+  - fresh Durable hub `MemForestWritesP2Rerun20260604A`;
+  - intended model/search stack;
+  - Cosmos public access restricted to `192.0.2.8`;
+  - Storage public/default allow documented as a dev-run caveat.
+- It failed on the first ingest with Durable replay nondeterminism before materialization progressed.
+
+Additional smoke after deterministic orchestrator change:
+
+- Code change `efbe4df544e7` simplified `write_orchestrator` to a single `materialize_write_job` activity and made transient handler errors terminal inside the activity.
+- A one-ingest smoke on fresh hub `MemForestWritesSmoke20260604B` still failed immediately with the same Durable replay nondeterminism.
+
+Interpretation:
+
+- The remaining blocker is Function/Durable host/package state, not Phase 2 quality logic.
+- Do not run another full Phase 2 pilot until the Durable host state is reset/recreated or replaced, and a one-ingest fresh-hub smoke completes successfully.
+
 ## Temporal fallback follow-up
 
 Artifacts:

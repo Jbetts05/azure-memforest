@@ -1,0 +1,59 @@
+{
+  "suffix": "full-intended-clean-20260604030439",
+  "git_sha": "03903cec4f78",
+  "deployed_api_version": {
+    "name": "azure-memforest-api",
+    "version": "0.1.0",
+    "git_sha": "f732d22d8239",
+    "image_dirty": "false"
+  },
+  "durable_hub": "MemForestWritesP2Rerun20260604A",
+  "containerapp_outbound_ips": "192.0.2.8",
+  "cosmos": {
+    "ipRules": [
+      "192.0.2.8"
+    ],
+    "provisioningState": "Succeeded",
+    "publicNetworkAccess": "Enabled"
+  },
+  "storage": {
+    "bypass": "AzureServices",
+    "defaultAction": "Allow",
+    "ipRules": [
+      "192.0.2.8"
+    ],
+    "publicNetworkAccess": "Enabled"
+  },
+  "function_settings": [
+    {
+      "name": "AZURE_SEARCH_RECALL_INDEX_NAME",
+      "value": "memforest-recall-large"
+    },
+    {
+      "name": "AZURE_OPENAI_CHAT_DEPLOYMENT",
+      "value": "gpt-5.4-mini-memory"
+    },
+    {
+      "name": "AZURE_OPENAI_EMBEDDING_DEPLOYMENT",
+      "value": "text-embedding-3-large"
+    },
+    {
+      "name": "AZURE_OPENAI_EMBEDDING_DIMENSION",
+      "value": "3072"
+    },
+    {
+      "name": "AZURE_OPENAI_ANSWER_DEPLOYMENT",
+      "value": "gpt-5.4"
+    },
+    {
+      "name": "AzureFunctionsJobHost__extensions__durableTask__hubName",
+      "value": "MemForestWritesP2Rerun20260604A"
+    }
+  ],
+  "queue_before": {
+    "active": 0,
+    "deadletter": 19,
+    "scheduled": 0
+  },
+  "note": "Storage public/default Allow is a documented dev-run caveat required for Function/Kudu storage access in this environment."
+}
