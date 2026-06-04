@@ -313,6 +313,7 @@ def _response_from_document(document: dict[str, Any]) -> JobStatusResponse:
         stage_history=list(document.get("stage_history") or []),
         telemetry=dict(document.get("telemetry") or {}),
         progress_signature=dict(document.get("progress_signature") or {}),
+        progress_budget=dict(document.get("progress_budget") or {}),
         last_progress_at=document.get("last_progress_at"),
     )
 

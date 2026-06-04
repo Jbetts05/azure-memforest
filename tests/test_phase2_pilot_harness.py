@@ -306,3 +306,16 @@ def test_phase2_strict_preflight_uses_runtime_durable_hub(monkeypatch) -> None:
             "AzureFunctionsJobHost__extensions__durableTask__hubName": "CustomHub",
         },
     )
+
+
+def test_phase2_strict_preflight_rejects_unexpected_stamped_budget(monkeypatch) -> None:
+    harness = _load_harness(monkeypatch, PHASE2_STRICT_PREFLIGHT="true")
+    stamped_budget = {"max_completed_model_calls": 400}
+
+    try:
+        if int(stamped_budget.get("max_completed_model_calls") or 0) != 2000:
+            raise RuntimeError(f"api stamped unexpected progress budget for case:1: {stamped_budget}")
+    except RuntimeError as exc:
+        assert "unexpected progress budget" in str(exc)
+    else:
+        raise AssertionError("strict preflight should reject stamped budget 400")

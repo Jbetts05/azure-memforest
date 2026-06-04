@@ -94,6 +94,8 @@ async def test_cosmos_job_store_creates_and_reads_accepted_job() -> None:
     assert created.job_id == envelope.job_id
     assert created.status == "accepted"
     assert read.job_id == envelope.job_id
+    assert read.progress_budget["job_type"] == "ingest_session"
+    assert read.progress_budget["max_completed_model_calls"] > 0
     stored = store.container.items[("tenant-1", envelope.job_id)]
     assert stored["payload_digest"]
     assert stored["payload_size_bytes"] > 0

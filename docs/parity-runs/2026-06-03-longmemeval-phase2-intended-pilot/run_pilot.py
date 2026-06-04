@@ -490,6 +490,10 @@ def run_case(case: dict, index: int, previous_probe: str | None) -> dict:
             user_id=user_id,
             idem=f"phase2-ingest-{case_id}-{session_index}-attempt-{attempt}",
         )
+        if STRICT_PREFLIGHT:
+            stamped_budget = dict(ingest.get("progress_budget") or {})
+            if int(stamped_budget.get("max_completed_model_calls") or 0) != 2000:
+                raise RuntimeError(f"api stamped unexpected progress budget for {case_id}:{session_index}: {stamped_budget}")
         ingest_status, ingest_elapsed, wait_info = wait_job_progress(
             ingest["job_id"],
             user_id=user_id,

@@ -29,6 +29,7 @@ class IngestSessionResponse(BaseModel):
     tenant_id: str
     user_id: str
     session_id: str
+    progress_budget: dict[str, Any] = Field(default_factory=dict)
 
 
 class QueryRequest(BaseModel):
@@ -99,6 +100,7 @@ class JobStatusResponse(BaseModel):
     stage_history: list[dict[str, Any]] = Field(default_factory=list)
     telemetry: dict[str, Any] = Field(default_factory=dict)
     progress_signature: dict[str, Any] = Field(default_factory=dict)
+    progress_budget: dict[str, Any] = Field(default_factory=dict)
     last_progress_at: float | None = None
 
 

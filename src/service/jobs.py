@@ -503,6 +503,7 @@ class JobRecordingCommandService(MemoryCommandService):
                 tenant_id=recorded.tenant_id,
                 user_id=recorded.user_id,
                 session_id=session_id,
+                progress_budget=recorded.progress_budget,
             )
         await self._inner.submit_ingest_session(
             actor,
@@ -517,6 +518,7 @@ class JobRecordingCommandService(MemoryCommandService):
             tenant_id=recorded.tenant_id,
             user_id=recorded.user_id,
             session_id=session_id,
+            progress_budget=recorded.progress_budget,
         )
 
     async def submit_delete_session(
