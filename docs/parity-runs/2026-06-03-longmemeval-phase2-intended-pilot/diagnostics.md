@@ -281,6 +281,33 @@ Decision:
 - Do not raise the cap again blindly.
 - Diagnose whether this is legitimate unique work or a retry/counter storm before resuming the full run.
 
+Follow-up stable rerun:
+
+- Artifact: `case_results_full-intended-stable-20260604102708/`
+- Stable runtime posture:
+  - default Durable hub `MemForestWrites`;
+  - Cosmos local auth disabled with `0.0.0.0` Azure datacenter rule and `networkAclBypass=AzureServices` as a temporary dev-run unblocker;
+  - Storage public/default allow as documented dev-run caveat;
+  - `AZURE_MEMFOREST_MODEL_CALL_BUDGET_MAX=2000`;
+  - Durable Flex memory temporarily raised to 4096 MB for the run.
+- Outcome:
+  - 10/10 cases completed.
+  - 98/98 Durable instances completed; 0 Durable failures.
+  - 0 DLQ delta, 0 residue contamination, 0 answer-bearing content-filter blocks.
+  - 1 soft-skipped non-answer ingest in `b320f3f8`, correctly accounted for.
+  - Calibration primary-correct: 8/10, meeting threshold.
+  - Pipeline primary-correct: 6/8, below the 7/8 threshold.
+
+Remaining quality misses:
+
+- `e3038f8c`: answered `94 rare items` vs gold `99`; retrieved facts included 12 figurines + 57 records + 25 coins but missed/failed to count the remaining rare-item evidence.
+- `e66b632c`: answered `26 minutes and 30 seconds` vs gold `27 minutes and 45 seconds`; retrieved facts included both times, but answer selected the older/incorrect personal-best fact.
+
+Decision:
+
+- Do not advance to the 50-case subset yet.
+- Next work is targeted quality diagnosis for `e3038f8c` and `e66b632c`.
+
 ## Temporal fallback follow-up
 
 Artifacts:
