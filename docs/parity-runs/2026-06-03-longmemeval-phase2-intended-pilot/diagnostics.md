@@ -244,6 +244,43 @@ Interpretation:
 - Do not run another full Phase 2 pilot until Function access to Cosmos is stable enough for a one-ingest fresh-hub smoke to complete successfully.
 - Further orchestrator syntax changes or host recreation are not justified unless the network issue is first eliminated.
 
+## Network-unblocked rerun: `full-intended-defaulthub-20260604070305`
+
+Artifact:
+
+- `case_results_full-intended-defaulthub-20260604070305/`
+
+Network posture:
+
+- Cosmos local auth was verified disabled.
+- Cosmos kept public network access enabled and added the special `0.0.0.0` Azure datacenter rule, with `networkAclBypass=AzureServices`, as a temporary dev-run unblocker.
+- Storage remained public/default allow as a documented dev-run caveat.
+
+Progress:
+
+- A one-ingest default-hub smoke passed after the Cosmos network unblock.
+- The full run progressed past the previous Durable/network blockers.
+- Case `4b24c848` passed.
+- Case `8e91e7d9` passed after resuming with `AZURE_MEMFOREST_MODEL_CALL_BUDGET_MAX=1000`; it remains modified/excluded from unmodified pipeline accuracy.
+- Case `fea54f57` passed.
+- Case `195a1a1b` stopped at ingest 8 (`source_session_id=4b4b5695`).
+
+Current blocker:
+
+- Ingest 8 of `195a1a1b` failed with:
+
+```text
+ingest_session exceeded model-call budget: 1269>1000
+```
+
+- The session is a regular non-answer-bearing 12-turn source session, not the assistant-advice override answer session.
+- Stored job telemetry showed completed/started counts much lower than the failure detail (`total_calls=550`, `total_started_calls=571`, `in_flight_calls=21`), so the budget counter and stored telemetry need reconciliation before raising the cap again.
+
+Decision:
+
+- Do not raise the cap again blindly.
+- Diagnose whether this is legitimate unique work or a retry/counter storm before resuming the full run.
+
 ## Temporal fallback follow-up
 
 Artifacts:
