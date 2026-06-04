@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from typing import Any, Protocol
 
 from src.extraction.chunker import chunk_session
@@ -145,7 +146,7 @@ class ChunkExtractionPipeline:
             )
         except TypeError:
             payload = self.backend.generate_json(system_prompt=system_prompt, user_prompt=user_prompt)
-        return _parse_cell_response(
+        result = _parse_cell_response(
             cell,
             payload,
             max_items_per_cell=eff_max_items,
@@ -155,6 +156,7 @@ class ChunkExtractionPipeline:
             max_domain_keys_per_item=self.max_domain_keys_per_item,
             max_collection_keys_per_item=self.max_collection_keys_per_item,
         )
+        return _supplement_countable_collection_items(cell, result, max_items=eff_max_items)
 
 
 def _parse_cell_response(
@@ -277,6 +279,97 @@ def _fallback_extract_cell(cell: MemCell) -> CellExtractionResult:
         cell_summary=summary,
         memory_items=items,
     )
+
+
+_COUNTABLE_COLLECTION_PATTERN = re.compile(
+    r"\b(?:have|has|own|owns|owned|collect(?:ing)?|collection of)\b"
+    r"(?P<prefix>.{0,80}?)"
+    r"\b(?P<count>\d{1,5})\s+"
+    r"(?P<items>[a-z][a-z0-9 -]{1,60}?)"
+    r"(?=[\.,;:\)]|$)",
+    re.IGNORECASE,
+)
+
+
+def _supplement_countable_collection_items(cell: MemCell, result: CellExtractionResult, *, max_items: int) -> CellExtractionResult:
+    if len(result.memory_items) >= max_items:
+        return result
+    existing_text = "\n".join(item.fact_text.lower() for item in result.memory_items)
+    additions: list[MemoryItem] = []
+    for turn_index, turn in enumerate(cell.turns):
+        if str(turn.speaker_tag).strip().lower() != "user":
+            continue
+        for match_index, match in enumerate(_COUNTABLE_COLLECTION_PATTERN.finditer(turn.text)):
+            matched_text = match.group(0).strip()
+            if not re.search(r"\b(collection|inventory|set|collect(?:ing)?)\b", matched_text, re.IGNORECASE):
+                continue
+            count = str(match.group("count")).strip()
+            item_type = _countable_item_type(matched_text, match.group("items"))
+            if not item_type:
+                continue
+            if _has_existing_countable_fact(existing_text, count=count, item_type=item_type):
+                continue
+            fact_text = f"The user has {count} {item_type}."
+            item_id = _stable_id("item", cell.cell_id, 9000 + turn_index * 100 + match_index, fact_text)
+            additions.append(
+                MemoryItem(
+                    item_id=item_id,
+                    session_id=cell.session_id,
+                    cell_id=cell.cell_id,
+                    fact_text=fact_text,
+                    source_turn_ids=[turn.turn_id],
+                    source_spans=[matched_text],
+                    participants=_normalize_list([turn.speaker_name]),
+                    origin="user",
+                    semantic_role="state",
+                    entities=[],
+                    topics=["collection"],
+                    time_text=turn.timestamp_text,
+                    time_start=float(turn.timestamp_unix),
+                    time_end=float(turn.timestamp_unix),
+                    attribute_keys=[],
+                    domain_keys=[],
+                    collection_keys=_normalize_keys([item_type], limit=2),
+                    detail_level="specific",
+                    confidence=0.7,
+                    metadata={"source": "countable_collection_fallback"},
+                )
+            )
+            existing_text += "\n" + fact_text.lower()
+            if len(result.memory_items) + len(additions) >= max_items:
+                break
+        if len(result.memory_items) + len(additions) >= max_items:
+            break
+    if not additions:
+        return result
+    return CellExtractionResult(
+        cell_id=result.cell_id,
+        session_id=result.session_id,
+        cell_summary=result.cell_summary,
+        memory_items=[*result.memory_items, *additions],
+    )
+
+
+def _countable_item_type(matched_text: str, raw_items: str) -> str:
+    item_type = re.sub(r"\s+", " ", str(raw_items or "")).strip(" -")
+    if not item_type:
+        return ""
+    item_type = re.sub(r"\b(?:in|with|that|which|who|and|but|or)\b.*$", "", item_type, flags=re.IGNORECASE).strip(" -")
+    if not item_type:
+        return ""
+    lowered = matched_text.lower()
+    singular = item_type[:-1] if item_type.endswith("s") else item_type
+    if f"rare {item_type.lower()}" in lowered or (singular and f"rare {singular.lower()}" in lowered):
+        item_type = f"rare {item_type}"
+    return item_type
+
+
+def _has_existing_countable_fact(existing_text: str, *, count: str, item_type: str) -> bool:
+    item_tokens = [re.escape(token) for token in re.findall(r"[a-z0-9]+", item_type.lower())]
+    if not item_tokens:
+        return False
+    item_pattern = r"\b" + r"\s+".join(item_tokens) + r"\b"
+    return bool(re.search(rf"\b{re.escape(count)}\b.*{item_pattern}", existing_text, re.IGNORECASE | re.DOTALL))
 
 
 def _normalize_list(values: Any) -> list[str]:
