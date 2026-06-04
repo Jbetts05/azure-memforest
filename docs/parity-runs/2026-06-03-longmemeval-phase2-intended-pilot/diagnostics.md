@@ -308,6 +308,25 @@ Decision:
 - Do not advance to the 50-case subset yet.
 - Next work is targeted quality diagnosis for `e3038f8c` and `e66b632c`.
 
+### `e3038f8c` follow-up
+
+Root cause:
+
+- Source turn `answer_b6018747_4:0` states the user has a small but valuable collection of `5 books`.
+- Extraction dropped the quantity and produced only a generic rare-books collection/appraisal fact, so answer composition could only sum 12 figurines + 57 records + 25 coins = 94.
+
+Fix:
+
+- Added a countable-collection extraction supplement that preserves explicit counts for user collection/inventory facts when the LLM drops the quantity.
+- Added tests for the positive case and false-positive guards.
+
+Validation:
+
+- Artifact: `case_results_targeted-rare-count-fallback-20260604135813/07_e3038f8c.json`
+- Answer: `99 rare items in total.`
+- Facts included `The user has a small but valuable collection of 5 rare books.`
+- Primary/cross judges both passed.
+
 ## Temporal fallback follow-up
 
 Artifacts:
