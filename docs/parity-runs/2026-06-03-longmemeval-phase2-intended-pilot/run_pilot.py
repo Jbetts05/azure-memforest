@@ -30,6 +30,10 @@ DURABLE_HUB = os.getenv("PHASE2_DURABLE_HUB", "MemForestWrites").strip()
 DURABLE_STATUS_CONNECTION = os.getenv("PHASE2_DURABLE_STATUS_CONNECTION", "Storage").strip()
 DURABLE_STATUS_REQUIRED = os.getenv("PHASE2_DURABLE_STATUS_REQUIRED", "").strip().lower() in {"1", "true", "yes", "on"}
 DURABLE_STATUS_ATTEMPTS = int(os.getenv("PHASE2_DURABLE_STATUS_ATTEMPTS", "60").strip() or "60")
+STRICT_PREFLIGHT = os.getenv("PHASE2_STRICT_PREFLIGHT", "").strip().lower() in {"1", "true", "yes", "on"}
+AZURE_RESOURCE_GROUP = os.getenv("PHASE2_AZURE_RESOURCE_GROUP", "azure-memforest").strip()
+API_CONTAINERAPP = os.getenv("PHASE2_API_CONTAINERAPP", "memforest-example-api").strip()
+DURABLE_FUNCTION_APP = os.getenv("PHASE2_DURABLE_FUNCTION_APP", "memforest-example-durable").strip()
 RUN_SUFFIX = os.getenv("PHASE2_RUN_SUFFIX", "").strip()
 CASE_FILTER = {item.strip() for item in os.getenv("PHASE2_CASE_IDS", "").split(",") if item.strip()}
 
@@ -44,6 +48,28 @@ RESULTS = Path(os.getenv("PHASE2_RESULTS_DIR", str(RUN / "case_results")))
 RESULTS.mkdir(exist_ok=True)
 
 _tokens: dict[str, tuple[str, float]] = {}
+
+INTENDED_API_SETTINGS = {
+    "AZURE_MEMFOREST_DISPATCH_MODE": "durable",
+    "AZURE_MEMFOREST_MODEL_CALL_BUDGET_MULTIPLIER": "20",
+    "AZURE_MEMFOREST_MODEL_CALL_BUDGET_MAX": "2000",
+    "AZURE_OPENAI_CHAT_DEPLOYMENT": "gpt-5.4-mini-memory",
+    "AZURE_OPENAI_ANSWER_DEPLOYMENT": "gpt-5.4",
+    "AZURE_OPENAI_EMBEDDING_DEPLOYMENT": "text-embedding-3-large",
+    "AZURE_OPENAI_EMBEDDING_DIMENSION": "3072",
+    "AZURE_SEARCH_RECALL_INDEX_NAME": "memforest-recall-large",
+}
+
+INTENDED_DURABLE_SETTINGS = {
+    "AzureFunctionsJobHost__extensions__durableTask__hubName": "MemForestWrites",
+    "AZURE_MEMFOREST_MODEL_CALL_BUDGET_MULTIPLIER": "20",
+    "AZURE_MEMFOREST_MODEL_CALL_BUDGET_MAX": "2000",
+    "AZURE_OPENAI_CHAT_DEPLOYMENT": "gpt-5.4-mini-memory",
+    "AZURE_OPENAI_ANSWER_DEPLOYMENT": "gpt-5.4",
+    "AZURE_OPENAI_EMBEDDING_DEPLOYMENT": "text-embedding-3-large",
+    "AZURE_OPENAI_EMBEDDING_DIMENSION": "3072",
+    "AZURE_SEARCH_RECALL_INDEX_NAME": "memforest-recall-large",
+}
 
 
 def save(path: Path, value: Any) -> None:
@@ -242,6 +268,85 @@ def queue_state() -> dict:
         text=True,
     )
     return json.loads(raw)
+
+
+def _settings_dict(items: list[dict[str, Any]]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for item in items:
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        value = item.get("value")
+        if value is None and item.get("secretRef"):
+            value = "<secret>"
+        out[name] = str(value if value is not None else "")
+    return out
+
+
+def api_containerapp_settings() -> dict[str, str]:
+    raw = subprocess.check_output(
+        [
+            AZ,
+            "containerapp",
+            "show",
+            "--resource-group",
+            AZURE_RESOURCE_GROUP,
+            "--name",
+            API_CONTAINERAPP,
+            "--query",
+            "properties.template.containers[0].env",
+            "-o",
+            "json",
+        ],
+        text=True,
+    )
+    return _settings_dict(json.loads(raw))
+
+
+def durable_function_settings() -> dict[str, str]:
+    raw = subprocess.check_output(
+        [
+            AZ,
+            "functionapp",
+            "config",
+            "appsettings",
+            "list",
+            "--resource-group",
+            AZURE_RESOURCE_GROUP,
+            "--name",
+            DURABLE_FUNCTION_APP,
+            "-o",
+            "json",
+        ],
+        text=True,
+    )
+    return _settings_dict(json.loads(raw))
+
+
+def _require_settings(label: str, actual: dict[str, str], expected: dict[str, str]) -> None:
+    mismatches = {
+        key: {"expected": expected_value, "actual": actual.get(key)}
+        for key, expected_value in expected.items()
+        if actual.get(key) != expected_value
+    }
+    if mismatches:
+        raise RuntimeError(f"{label} strict preflight failed: {json.dumps(mismatches, sort_keys=True)}")
+
+
+def strict_preflight_snapshot() -> dict[str, Any]:
+    api_settings = api_containerapp_settings()
+    durable_settings = durable_function_settings() if DISPATCH_MODE == "durable" else {}
+    _require_settings("api_containerapp", api_settings, INTENDED_API_SETTINGS)
+    if DISPATCH_MODE == "durable":
+        expected_durable = dict(INTENDED_DURABLE_SETTINGS)
+        expected_durable["AzureFunctionsJobHost__extensions__durableTask__hubName"] = DURABLE_HUB
+        _require_settings("durable_function_app", durable_settings, expected_durable)
+    keys = sorted(set(INTENDED_API_SETTINGS) | set(INTENDED_DURABLE_SETTINGS))
+    return {
+        "strict": True,
+        "api_containerapp": {key: api_settings.get(key) for key in keys if key in api_settings},
+        "durable_function_app": {key: durable_settings.get(key) for key in keys if key in durable_settings},
+    }
 
 
 def turns_for_ingest(session: dict, *, case_id: str = "") -> tuple[list[dict], dict]:
@@ -631,6 +736,7 @@ def _restore_override_flags(result: dict) -> None:
 
 
 def main() -> None:
+    preflight = strict_preflight_snapshot() if STRICT_PREFLIGHT else {"strict": False}
     metadata = {
         "api_version": api_get("/version", user_id="benchmark-phase2-metadata"),
         "queue_before": queue_state(),
@@ -642,6 +748,7 @@ def main() -> None:
         "run_suffix": RUN_SUFFIX,
         "results_dir": str(RESULTS),
         "case_filter": sorted(CASE_FILTER),
+        "preflight": preflight,
     }
     save(RUN / "run_metadata.json", metadata)
     previous_probe = None

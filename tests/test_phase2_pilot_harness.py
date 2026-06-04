@@ -278,3 +278,31 @@ def test_phase2_durable_status_attempts_are_configurable(monkeypatch) -> None:
     harness = _load_harness(monkeypatch, PHASE2_DURABLE_STATUS_ATTEMPTS="77")
 
     assert harness.DURABLE_STATUS_ATTEMPTS == 77
+
+
+def test_phase2_strict_preflight_rejects_api_budget_mismatch(monkeypatch) -> None:
+    harness = _load_harness(monkeypatch)
+    api_settings = dict(harness.INTENDED_API_SETTINGS)
+    api_settings["AZURE_MEMFOREST_MODEL_CALL_BUDGET_MULTIPLIER"] = "4"
+
+    try:
+        harness._require_settings("api", api_settings, harness.INTENDED_API_SETTINGS)
+    except RuntimeError as exc:
+        assert "AZURE_MEMFOREST_MODEL_CALL_BUDGET_MULTIPLIER" in str(exc)
+    else:
+        raise AssertionError("strict preflight should reject API budget mismatch")
+
+
+def test_phase2_strict_preflight_uses_runtime_durable_hub(monkeypatch) -> None:
+    harness = _load_harness(monkeypatch, PHASE2_DURABLE_HUB="CustomHub")
+    durable_settings = dict(harness.INTENDED_DURABLE_SETTINGS)
+    durable_settings["AzureFunctionsJobHost__extensions__durableTask__hubName"] = "CustomHub"
+
+    harness._require_settings(
+        "durable",
+        durable_settings,
+        {
+            **harness.INTENDED_DURABLE_SETTINGS,
+            "AzureFunctionsJobHost__extensions__durableTask__hubName": "CustomHub",
+        },
+    )
