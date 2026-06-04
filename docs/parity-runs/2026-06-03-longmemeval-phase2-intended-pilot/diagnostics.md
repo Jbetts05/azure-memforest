@@ -356,6 +356,28 @@ Decision:
   - 20/20 Durable instances completed, 0 DLQ delta, 0 residue contamination.
 - Next step is a fresh full 10-case rerun under the stable runtime posture.
 
+### Final gate policy correction
+
+Issue:
+
+- The original Phase 2 gate required at least 9 pipeline-eligible cases.
+- The final pilot has two calibration-only cases:
+  - `8e91e7d9`, which uses evidence minimization plus synthetic sibling-total evidence and must not count as unmodified pipeline accuracy.
+  - `195a1a1b`, which uses assistant-advice context extraction for evidence that appears in assistant advice accepted by the user.
+- With both cases excluded, a perfect run can only reach 8 pipeline-eligible cases, so the 9-case denominator made the green-light gate unsatisfiable by construction.
+
+Correction:
+
+- The manifest and harness gate now require 8 pipeline-eligible cases with at least 7 primary-correct pipeline answers.
+- Calibration accuracy still includes all 10 cases and still requires at least 8 primary-correct answers.
+- This keeps the two intervention-dependent cases out of unmodified pipeline accuracy instead of silently counting synthetic or assistant-advice override evidence as unmodified pipeline behavior.
+
+Residue gate correction:
+
+- The `case_results_full-intended-strict100-20260604183414` residue event was traced to a resumed case returning its own facts with an `I don't know` answer, not previous-user leakage.
+- The harness now treats refusal answers as non-contamination even if retrieval returns facts, and it does not re-probe residue on checkpoint-resumed cases where the user may already be populated.
+- A fresh final rerun is still required under the current budget/preflight configuration.
+
 ## Temporal fallback follow-up
 
 Artifacts:

@@ -75,6 +75,40 @@ def test_ingest_budget_can_be_floored_with_environment() -> None:
     assert budget.max_completed_model_calls == 2000
 
 
+def test_ingest_budget_rejects_min_above_max() -> None:
+    envelope = _envelope(turns=[{"role": "user", "content": "hello"}])
+
+    try:
+        budget_for_envelope(
+            envelope,
+            environ={
+                "AZURE_MEMFOREST_MODEL_CALL_BUDGET_MIN": "3000",
+                "AZURE_MEMFOREST_MODEL_CALL_BUDGET_MAX": "2000",
+            },
+        )
+    except ValueError as exc:
+        assert "BUDGET_MIN cannot exceed" in str(exc)
+    else:
+        raise AssertionError("inverted budget min/max should fail")
+
+
+def test_ingest_budget_rejects_inverted_low_bounds_before_clamping() -> None:
+    envelope = _envelope(turns=[{"role": "user", "content": "hello"}])
+
+    try:
+        budget_for_envelope(
+            envelope,
+            environ={
+                "AZURE_MEMFOREST_MODEL_CALL_BUDGET_MIN": "100",
+                "AZURE_MEMFOREST_MODEL_CALL_BUDGET_MAX": "50",
+            },
+        )
+    except ValueError as exc:
+        assert "BUDGET_MIN cannot exceed" in str(exc)
+    else:
+        raise AssertionError("low inverted budget min/max should fail before clamping")
+
+
 def test_classify_job_progress_detects_stall_without_heartbeat_progress() -> None:
     classification = classify_job_progress(
         {

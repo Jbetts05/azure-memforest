@@ -30,7 +30,7 @@ DURABLE_HUB = os.getenv("PHASE2_DURABLE_HUB", "MemForestWrites").strip()
 DURABLE_STATUS_CONNECTION = os.getenv("PHASE2_DURABLE_STATUS_CONNECTION", "Storage").strip()
 DURABLE_STATUS_REQUIRED = os.getenv("PHASE2_DURABLE_STATUS_REQUIRED", "").strip().lower() in {"1", "true", "yes", "on"}
 DURABLE_STATUS_ATTEMPTS = int(os.getenv("PHASE2_DURABLE_STATUS_ATTEMPTS", "60").strip() or "60")
-STRICT_PREFLIGHT = os.getenv("PHASE2_STRICT_PREFLIGHT", "").strip().lower() in {"1", "true", "yes", "on"}
+STRICT_PREFLIGHT = os.getenv("PHASE2_STRICT_PREFLIGHT", "true").strip().lower() not in {"0", "false", "no", "off"}
 AZURE_RESOURCE_GROUP = os.getenv("PHASE2_AZURE_RESOURCE_GROUP", "azure-memforest").strip()
 API_CONTAINERAPP = os.getenv("PHASE2_API_CONTAINERAPP", "memforest-example-api").strip()
 DURABLE_FUNCTION_APP = os.getenv("PHASE2_DURABLE_FUNCTION_APP", "memforest-example-durable").strip()
@@ -72,6 +72,12 @@ INTENDED_DURABLE_SETTINGS = {
     "AZURE_OPENAI_EMBEDDING_DIMENSION": "3072",
     "AZURE_SEARCH_RECALL_INDEX_NAME": "memforest-recall-large",
 }
+
+PIPELINE_ELIGIBLE_CASES_MIN = 8
+PIPELINE_PRIMARY_JUDGE_CORRECT_MIN = 7
+PIPELINE_JUDGE_DISAGREEMENTS_MAX = 1
+CALIBRATION_PRIMARY_JUDGE_CORRECT_MIN = 8
+CALIBRATION_JUDGE_DISAGREEMENTS_MAX = 1
 
 
 def save(path: Path, value: Any) -> None:
@@ -290,19 +296,33 @@ def api_containerapp_settings() -> dict[str, str]:
         [
             AZ,
             "containerapp",
-            "show",
+            "revision",
+            "list",
             "--resource-group",
             AZURE_RESOURCE_GROUP,
             "--name",
             API_CONTAINERAPP,
             "--query",
-            "properties.template.containers[0].env",
+            "[?properties.active && properties.trafficWeight>`0`].properties.template.containers[0].env",
             "-o",
             "json",
         ],
         text=True,
     )
-    return _settings_dict(json.loads(raw))
+    values = json.loads(raw)
+    if not values:
+        raise RuntimeError("api_containerapp strict preflight failed: no active traffic revision env found")
+    revisions = [_settings_dict(env) for env in values]
+    baseline = revisions[0]
+    intended_keys = set(INTENDED_API_SETTINGS)
+    mismatched_revisions = [
+        index
+        for index, settings in enumerate(revisions, start=1)
+        if {key: settings.get(key) for key in intended_keys} != {key: baseline.get(key) for key in intended_keys}
+    ]
+    if mismatched_revisions:
+        raise RuntimeError(f"api_containerapp strict preflight failed: active traffic revisions disagree on intended settings: {mismatched_revisions}")
+    return baseline
 
 
 def durable_function_settings() -> dict[str, str]:
@@ -335,14 +355,30 @@ def _require_settings(label: str, actual: dict[str, str], expected: dict[str, st
         raise RuntimeError(f"{label} strict preflight failed: {json.dumps(mismatches, sort_keys=True)}")
 
 
+def _expected_stamped_budget() -> int:
+    _assert_budget_settings_consistent(INTENDED_API_SETTINGS)
+    return int(INTENDED_API_SETTINGS["AZURE_MEMFOREST_MODEL_CALL_BUDGET_MIN"])
+
+
+def _assert_budget_settings_consistent(settings: dict[str, str]) -> None:
+    floor = int(settings["AZURE_MEMFOREST_MODEL_CALL_BUDGET_MIN"])
+    cap = int(settings["AZURE_MEMFOREST_MODEL_CALL_BUDGET_MAX"])
+    if floor > cap:
+        raise RuntimeError(f"budget strict preflight failed: min {floor} exceeds max {cap}")
+    if floor != cap:
+        raise RuntimeError(f"budget strict preflight failed: fixed stamped budget requires min {floor} to equal max {cap}")
+
+
 def strict_preflight_snapshot() -> dict[str, Any]:
     api_settings = api_containerapp_settings()
     durable_settings = durable_function_settings() if DISPATCH_MODE == "durable" else {}
     _require_settings("api_containerapp", api_settings, INTENDED_API_SETTINGS)
+    _assert_budget_settings_consistent(api_settings)
     if DISPATCH_MODE == "durable":
         expected_durable = dict(INTENDED_DURABLE_SETTINGS)
         expected_durable["AzureFunctionsJobHost__extensions__durableTask__hubName"] = DURABLE_HUB
         _require_settings("durable_function_app", durable_settings, expected_durable)
+        _assert_budget_settings_consistent(durable_settings)
     keys = sorted(set(INTENDED_API_SETTINGS) | set(INTENDED_DURABLE_SETTINGS))
     return {
         "strict": True,
@@ -445,12 +481,17 @@ def run_case(case: dict, index: int, previous_probe: str | None) -> dict:
             "modified_input": False,
         }
     save(out, result)
+    if previous_probe and "residue_probe" not in result:
+        if result.get("checkpoint_resume_count", 0) > 0:
+            result["residue_probe"] = {
+                "question": previous_probe,
+                "skipped": "checkpoint_resume_user_may_already_be_populated",
+            }
+        else:
+            result["residue_probe"] = {"question": previous_probe, "response": residue_probe(previous_probe, user_id=user_id)}
+        save(out, result)
     reconcile_existing_ingests(result, user_id=user_id)
     save(out, result)
-
-    if previous_probe:
-        result["residue_probe"] = {"question": previous_probe, "response": residue_probe(previous_probe, user_id=user_id)}
-        save(out, result)
 
     completed_indices = {
         int(event["index"])
@@ -494,7 +535,7 @@ def run_case(case: dict, index: int, previous_probe: str | None) -> dict:
         )
         if STRICT_PREFLIGHT:
             stamped_budget = dict(ingest.get("progress_budget") or {})
-            if int(stamped_budget.get("max_completed_model_calls") or 0) != 2000:
+            if int(stamped_budget.get("max_completed_model_calls") or 0) != _expected_stamped_budget():
                 raise RuntimeError(f"api stamped unexpected progress budget for {case_id}:{session_index}: {stamped_budget}")
         ingest_status, ingest_elapsed, wait_info = wait_job_progress(
             ingest["job_id"],
@@ -645,11 +686,11 @@ def aggregate(results: list[dict], before: dict, after: dict) -> dict:
     all_gates_passed = (
         len(results) == len(CASES)
         and len(completed) == len(CASES)
-        and len(pipeline_completed) >= 9
-        and pipeline_primary_correct >= 7
-        and pipeline_judge_disagreements <= 1
-        and calibration_primary_correct >= 8
-        and calibration_judge_disagreements <= 1
+        and len(pipeline_completed) >= PIPELINE_ELIGIBLE_CASES_MIN
+        and pipeline_primary_correct >= PIPELINE_PRIMARY_JUDGE_CORRECT_MIN
+        and pipeline_judge_disagreements <= PIPELINE_JUDGE_DISAGREEMENTS_MAX
+        and calibration_primary_correct >= CALIBRATION_PRIMARY_JUDGE_CORRECT_MIN
+        and calibration_judge_disagreements <= CALIBRATION_JUDGE_DISAGREEMENTS_MAX
         and dlq_gate_passed
         and durable_gate_passed
         and durable_failed == 0
@@ -712,7 +753,9 @@ def _residue_contaminated(probe: dict | None) -> bool:
         "no record",
     )
     refusal = any(marker in answer.lower() for marker in refusal_markers)
-    return bool(facts or (answer and not refusal))
+    if refusal:
+        return False
+    return bool(facts or answer)
 
 
 def _is_skipped_non_answer_ingest(result: dict, event: dict) -> bool:

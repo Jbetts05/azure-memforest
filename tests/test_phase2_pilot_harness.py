@@ -52,6 +52,7 @@ def test_phase2_manifest_matches_pilot_cases() -> None:
     assert manifest["intended_stack"]["default_chat"] == "gpt-5.4-mini-memory"
     assert manifest["intended_stack"]["answer"] == "gpt-5.4"
     assert manifest["intended_stack"]["embedding_dimension"] == 3072
+    assert manifest["gate"]["advance_to_50_case_subset_if"]["pipeline_eligible_cases_min"] == 8
     assert manifest["gate"]["advance_to_50_case_subset_if"]["pipeline_primary_judge_correct_min"] == 7
     assert manifest["gate"]["advance_to_50_case_subset_if"]["calibration_primary_judge_correct_min"] == 8
 
@@ -97,6 +98,19 @@ def test_phase2_aggregate_excludes_override_from_pipeline_quality(monkeypatch) -
     assert aggregate["pipeline_eligible_cases"] == 9
     assert aggregate["primary_judge_correct"] == 10
     assert aggregate["pipeline_primary_judge_correct"] == 9
+
+
+def test_phase2_aggregate_allows_two_documented_calibration_only_cases(monkeypatch) -> None:
+    harness = _load_harness(monkeypatch, PHASE2_DISPATCH_MODE="durable")
+    results = [_result(case["case_id"]) for case in harness.CASES]
+    for case_id in ("8e91e7d9", "195a1a1b"):
+        next(result for result in results if result["case_id"] == case_id)["exclude_from_pipeline_accuracy"] = True
+
+    aggregate = harness.aggregate(results, {"deadletter": 19}, {"deadletter": 19})
+
+    assert aggregate["status"] == "succeeded"
+    assert aggregate["pipeline_eligible_cases"] == 8
+    assert aggregate["pipeline_primary_judge_correct"] == 8
 
 
 def test_phase2_aggregate_rejects_low_unmodified_pipeline_quality(monkeypatch) -> None:
@@ -180,6 +194,37 @@ def test_phase2_aggregate_allows_broader_residue_refusal(monkeypatch) -> None:
     harness = _load_harness(monkeypatch, PHASE2_DISPATCH_MODE="durable")
     results = [_result(case["case_id"]) for case in harness.CASES]
     results[1]["residue_probe"] = {"response": {"status": "succeeded", "answer": "Sorry, I cannot find any relevant memory."}}
+
+    aggregate = harness.aggregate(results, {"deadletter": 19}, {"deadletter": 19})
+
+    assert aggregate["status"] == "succeeded"
+    assert aggregate["residue_contamination_events"] == 0
+
+
+def test_phase2_aggregate_allows_residue_refusal_with_retrieved_facts(monkeypatch) -> None:
+    harness = _load_harness(monkeypatch, PHASE2_DISPATCH_MODE="durable")
+    results = [_result(case["case_id"]) for case in harness.CASES]
+    results[1]["residue_probe"] = {
+        "response": {
+            "status": "succeeded",
+            "answer": "I don't know",
+            "facts": [{"text": "The current user likes minimalist necklaces."}],
+        }
+    }
+
+    aggregate = harness.aggregate(results, {"deadletter": 19}, {"deadletter": 19})
+
+    assert aggregate["status"] == "succeeded"
+    assert aggregate["residue_contamination_events"] == 0
+
+
+def test_phase2_aggregate_allows_skipped_resume_residue_probe(monkeypatch) -> None:
+    harness = _load_harness(monkeypatch, PHASE2_DISPATCH_MODE="durable")
+    results = [_result(case["case_id"]) for case in harness.CASES]
+    results[1]["residue_probe"] = {
+        "question": "previous question",
+        "skipped": "checkpoint_resume_user_may_already_be_populated",
+    }
 
     aggregate = harness.aggregate(results, {"deadletter": 19}, {"deadletter": 19})
 
@@ -280,6 +325,12 @@ def test_phase2_durable_status_attempts_are_configurable(monkeypatch) -> None:
     assert harness.DURABLE_STATUS_ATTEMPTS == 77
 
 
+def test_phase2_strict_preflight_defaults_on(monkeypatch) -> None:
+    harness = _load_harness(monkeypatch)
+
+    assert harness.STRICT_PREFLIGHT is True
+
+
 def test_phase2_strict_preflight_rejects_api_budget_mismatch(monkeypatch) -> None:
     harness = _load_harness(monkeypatch)
     api_settings = dict(harness.INTENDED_API_SETTINGS)
@@ -291,6 +342,27 @@ def test_phase2_strict_preflight_rejects_api_budget_mismatch(monkeypatch) -> Non
         assert "AZURE_MEMFOREST_MODEL_CALL_BUDGET_MULTIPLIER" in str(exc)
     else:
         raise AssertionError("strict preflight should reject API budget mismatch")
+
+
+def test_phase2_strict_preflight_rejects_split_revision_budget_mismatch(monkeypatch) -> None:
+    harness = _load_harness(monkeypatch)
+    first_revision = [{"name": key, "value": value} for key, value in harness.INTENDED_API_SETTINGS.items()]
+    second_settings = dict(harness.INTENDED_API_SETTINGS)
+    second_settings["AZURE_MEMFOREST_MODEL_CALL_BUDGET_MULTIPLIER"] = "4"
+    second_revision = [{"name": key, "value": value} for key, value in second_settings.items()]
+
+    monkeypatch.setattr(
+        harness.subprocess,
+        "check_output",
+        lambda *args, **kwargs: json.dumps([first_revision, second_revision]),
+    )
+
+    try:
+        harness.api_containerapp_settings()
+    except RuntimeError as exc:
+        assert "active traffic revisions disagree" in str(exc)
+    else:
+        raise AssertionError("strict preflight should reject split active revision mismatches")
 
 
 def test_phase2_strict_preflight_uses_runtime_durable_hub(monkeypatch) -> None:
@@ -308,12 +380,46 @@ def test_phase2_strict_preflight_uses_runtime_durable_hub(monkeypatch) -> None:
     )
 
 
+def test_phase2_expected_stamped_budget_comes_from_intended_settings(monkeypatch) -> None:
+    harness = _load_harness(monkeypatch)
+
+    assert harness._expected_stamped_budget() == int(
+        harness.INTENDED_API_SETTINGS["AZURE_MEMFOREST_MODEL_CALL_BUDGET_MIN"]
+    )
+
+
+def test_phase2_strict_preflight_rejects_inverted_budget(monkeypatch) -> None:
+    harness = _load_harness(monkeypatch)
+    settings = dict(harness.INTENDED_API_SETTINGS)
+    settings["AZURE_MEMFOREST_MODEL_CALL_BUDGET_MIN"] = "3000"
+
+    try:
+        harness._assert_budget_settings_consistent(settings)
+    except RuntimeError as exc:
+        assert "min 3000 exceeds max 2000" in str(exc)
+    else:
+        raise AssertionError("strict preflight should reject inverted min/max")
+
+
+def test_phase2_strict_preflight_requires_fixed_stamped_budget(monkeypatch) -> None:
+    harness = _load_harness(monkeypatch)
+    settings = dict(harness.INTENDED_API_SETTINGS)
+    settings["AZURE_MEMFOREST_MODEL_CALL_BUDGET_MAX"] = "3000"
+
+    try:
+        harness._assert_budget_settings_consistent(settings)
+    except RuntimeError as exc:
+        assert "requires min 2000 to equal max 3000" in str(exc)
+    else:
+        raise AssertionError("strict preflight should require a fixed stamped budget")
+
+
 def test_phase2_strict_preflight_rejects_unexpected_stamped_budget(monkeypatch) -> None:
     harness = _load_harness(monkeypatch, PHASE2_STRICT_PREFLIGHT="true")
     stamped_budget = {"max_completed_model_calls": 400}
 
     try:
-        if int(stamped_budget.get("max_completed_model_calls") or 0) != 2000:
+        if int(stamped_budget.get("max_completed_model_calls") or 0) != harness._expected_stamped_budget():
             raise RuntimeError(f"api stamped unexpected progress budget for case:1: {stamped_budget}")
     except RuntimeError as exc:
         assert "unexpected progress budget" in str(exc)

@@ -119,11 +119,13 @@ def _last_progress_at(document: dict[str, Any]) -> float:
 
 def _resolve_max_completed_model_calls(expected_calls: int, values: dict[str, str] | os._Environ[str]) -> int:
     multiplier = _float_setting(values, "AZURE_MEMFOREST_MODEL_CALL_BUDGET_MULTIPLIER", default=4.0)
-    floor = _int_setting(values, "AZURE_MEMFOREST_MODEL_CALL_BUDGET_MIN", default=150)
-    cap = _int_setting(values, "AZURE_MEMFOREST_MODEL_CALL_BUDGET_MAX", default=2000)
+    raw_floor = _int_setting(values, "AZURE_MEMFOREST_MODEL_CALL_BUDGET_MIN", default=150)
+    raw_cap = _int_setting(values, "AZURE_MEMFOREST_MODEL_CALL_BUDGET_MAX", default=2000)
+    if raw_floor > raw_cap:
+        raise ValueError("AZURE_MEMFOREST_MODEL_CALL_BUDGET_MIN cannot exceed AZURE_MEMFOREST_MODEL_CALL_BUDGET_MAX")
     multiplier = max(1.0, multiplier)
-    floor = max(150, floor)
-    cap = max(150, cap)
+    floor = max(150, raw_floor)
+    cap = max(150, raw_cap)
     return min(cap, max(floor, int(expected_calls * multiplier)))
 
 
