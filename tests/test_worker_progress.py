@@ -60,6 +60,21 @@ def test_ingest_budget_cap_still_bounds_environment_multiplier() -> None:
     assert budget.max_completed_model_calls == 1000
 
 
+def test_ingest_budget_can_be_floored_with_environment() -> None:
+    envelope = _envelope(turns=[{"role": "user", "content": "hello"}])
+
+    budget = budget_for_envelope(
+        envelope,
+        environ={
+            "AZURE_MEMFOREST_MODEL_CALL_BUDGET_MULTIPLIER": "20",
+            "AZURE_MEMFOREST_MODEL_CALL_BUDGET_MIN": "2000",
+            "AZURE_MEMFOREST_MODEL_CALL_BUDGET_MAX": "2000",
+        },
+    )
+
+    assert budget.max_completed_model_calls == 2000
+
+
 def test_classify_job_progress_detects_stall_without_heartbeat_progress() -> None:
     classification = classify_job_progress(
         {
