@@ -66,6 +66,18 @@ class FakeHttpClient:
         self.closed = True
 
 
+class TimeoutThenSuccessHttpClient(FakeHttpClient):
+    def __init__(self, *, failures: int = 1) -> None:
+        super().__init__()
+        self.failures = failures
+
+    async def post(self, url, *, json, headers, timeout):
+        self.posts.append({"url": url, "json": json, "headers": headers, "timeout": timeout})
+        if len(self.posts) <= self.failures:
+            raise TimeoutError("durable start timed out")
+        return self.response
+
+
 def _actor() -> ActorContext:
     return ActorContext(
         actor_id="user-1",
@@ -245,6 +257,45 @@ async def test_durable_starter_tolerates_duplicate_instance_conflict() -> None:
     await starter.submit_job(envelope)
 
     assert http_client.posts[0]["json"]["instance_id"] == envelope.job_id
+
+
+@pytest.mark.asyncio
+async def test_durable_starter_retries_transient_start_timeouts() -> None:
+    http_client = TimeoutThenSuccessHttpClient(failures=1)
+    starter = DurableJobStarter(start_url="https://functions.example/start", http_client=http_client)
+    envelope = build_write_job_envelope(
+        _actor(),
+        user_id="user-1",
+        session_id="session-1",
+        job_type="ingest_session",
+        idempotency_key="idem-1",
+        payload={"turns": []},
+    )
+
+    await starter.submit_job(envelope)
+
+    assert len(http_client.posts) == 2
+    assert {post["json"]["instance_id"] for post in http_client.posts} == {envelope.job_id}
+    assert all(post["timeout"] == 60 for post in http_client.posts)
+
+
+@pytest.mark.asyncio
+async def test_durable_starter_surfaces_repeated_start_timeouts() -> None:
+    http_client = TimeoutThenSuccessHttpClient(failures=3)
+    starter = DurableJobStarter(start_url="https://functions.example/start", http_client=http_client)
+    envelope = build_write_job_envelope(
+        _actor(),
+        user_id="user-1",
+        session_id="session-1",
+        job_type="ingest_session",
+        idempotency_key="idem-1",
+        payload={"turns": []},
+    )
+
+    with pytest.raises(TimeoutError):
+        await starter.submit_job(envelope)
+
+    assert len(http_client.posts) == 3
 
 
 @pytest.mark.asyncio

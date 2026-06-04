@@ -21,6 +21,8 @@ from src.service.schemas import (
 JobType = Literal["ingest_session", "delete_session", "clear_memory"]
 MAX_SERVICE_BUS_MESSAGE_BYTES = 240 * 1024
 MAX_DURABLE_START_PAYLOAD_BYTES = 60 * 1024
+DURABLE_START_TIMEOUT_SECONDS = 60
+DURABLE_START_ATTEMPTS = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,16 +212,35 @@ class DurableJobStarter:
             if self.bearer_token:
                 headers["x-functions-key"] = self.bearer_token
             if self._http_client is not None:
-                response = await _maybe_await(
-                    self._http_client.post(self.start_url, json=payload, headers=headers, timeout=30)
-                )
+                response = await self._post_with_retries(self._http_client, payload, headers)
                 _raise_for_status(response)
                 return
             import httpx
 
-            async with httpx.AsyncClient(timeout=30) as client:
-                response = await client.post(self.start_url, json=payload, headers=headers)
+            async with httpx.AsyncClient(timeout=DURABLE_START_TIMEOUT_SECONDS) as client:
+                response = await self._post_with_retries(client, payload, headers)
                 _raise_for_status(response)
+
+        async def _post_with_retries(self, client: Any, payload: dict[str, Any], headers: dict[str, str]) -> Any:
+            last_exc: Exception | None = None
+            for attempt in range(1, DURABLE_START_ATTEMPTS + 1):
+                try:
+                    return await _maybe_await(
+                        client.post(
+                            self.start_url,
+                            json=payload,
+                            headers=headers,
+                            timeout=DURABLE_START_TIMEOUT_SECONDS,
+                        )
+                    )
+                except Exception as exc:
+                    if not _is_transient_durable_start_error(exc) or attempt >= DURABLE_START_ATTEMPTS:
+                        raise
+                    last_exc = exc
+                    await asyncio.sleep(min(2 ** (attempt - 1), 5))
+            if last_exc is not None:
+                raise last_exc
+            raise RuntimeError("durable job start failed")
 
         async def close(self) -> None:
             close = getattr(self._http_client, "aclose", None) or getattr(self._http_client, "close", None)
@@ -443,6 +464,11 @@ def _raise_for_status(response: Any) -> None:
             raise_for_status()
         except Exception as exc:
             raise RuntimeError("durable job start failed") from None
+
+
+def _is_transient_durable_start_error(exc: Exception) -> bool:
+    name = type(exc).__name__.lower()
+    return "timeout" in name or isinstance(exc, TimeoutError)
 
 
 class JobRecordingCommandService(MemoryCommandService):
