@@ -602,8 +602,10 @@ async def test_materialization_handler_stops_when_model_call_budget_exceeded(mon
         )
 
     monkeypatch.setattr("src.worker.materialization.budget_for_envelope", tiny_budget)
+    job_store = FakeJobStore()
     handler = _handler(
         core=FakeIngestCore(_snapshot(), ingest_delay=0.2, model_calls=1),
+        job_store=job_store,
         config=MaterializationHandlerConfig(
             owner_id="worker-1",
             embedding_model_version="embed-v1",
@@ -616,6 +618,9 @@ async def test_materialization_handler_stops_when_model_call_budget_exceeded(mon
 
     with pytest.raises(TransientHandlerError, match="model-call budget"):
         await handler.handle(_envelope(), {"fencing_token": 1})
+    final_update = job_store.stage_updates[-1]
+    assert final_update["stage"] == "extract_build"
+    assert final_update["telemetry"]["total_calls"] > 0
 
 
 @pytest.mark.asyncio

@@ -365,11 +365,21 @@ class MemForestMaterializationHandler:
                     last_progress_at = time.monotonic()
                 completed_calls = int(signature.get("completed_model_calls") or 0)
                 if completed_calls > budget.max_completed_model_calls:
+                    await self._record_extract_budget_stop(
+                        envelope,
+                        fencing_token=fencing_token,
+                        telemetry=telemetry,
+                    )
                     raise TransientHandlerError(
                         f"ingest_session exceeded model-call budget: {completed_calls}>{budget.max_completed_model_calls}",
                         exit_code=75 if self._config.exit_on_ingest_timeout else None,
                     )
                 if time.monotonic() - last_progress_at >= budget.stall_timeout_seconds:
+                    await self._record_extract_budget_stop(
+                        envelope,
+                        fencing_token=fencing_token,
+                        telemetry=telemetry,
+                    )
                     raise TransientHandlerError(
                         f"ingest_session stalled with no real progress for {budget.stall_timeout_seconds:.0f}s",
                         exit_code=75 if self._config.exit_on_ingest_timeout else None,
@@ -388,6 +398,24 @@ class MemForestMaterializationHandler:
                     detail="Extracting facts, deduping, and rebuilding MemTrees.",
                     telemetry=_record_extract_heartbeat(telemetry),
                 )
+
+    async def _record_extract_budget_stop(
+        self,
+        envelope: WriteJobEnvelope,
+        *,
+        fencing_token: int,
+        telemetry: dict[str, Any],
+    ) -> None:
+        try:
+            await self._update_job_stage(
+                envelope,
+                fencing_token=fencing_token,
+                stage="extract_build",
+                detail="Extracting facts, deduping, and rebuilding MemTrees.",
+                telemetry=_record_extract_heartbeat(telemetry),
+            )
+        except Exception:
+            log.exception("failed to record extract-build budget stop telemetry", extra={"job_id": envelope.job_id})
 
     async def _handle_delete(self, envelope: WriteJobEnvelope) -> None:
         if not envelope.session_id:
