@@ -327,6 +327,30 @@ Validation:
 - Facts included `The user has a small but valuable collection of 5 rare books.`
 - Primary/cross judges both passed.
 
+### `e66b632c` follow-up
+
+Root cause:
+
+- The query asks for the user's previous charity 5K personal best.
+- Retrieved facts included both the later improved 26:30 result and the earlier 27:45 personal best.
+- The answerer interpreted `previous` as the latest historical record rather than the record before the later improvement.
+
+Fix:
+
+- Added a cloud answer rule for performance-record questions asking for previous/prior personal bests or records: when a later fact says the user beat/improved/lowered a record, answer with the older prior record rather than the newer improved result.
+- The rule is explicitly scoped so current/latest personal-best questions still use the latest improved result.
+
+Validation:
+
+- Artifact: `case_results_targeted-previous-pb-20260604143414/08_e66b632c.json`
+- Answer: `27 minutes and 45 seconds.`
+- Primary/cross judges both passed.
+
+Decision:
+
+- Both remaining stable-run quality misses now pass targeted validation.
+- Next step is a targeted combined rerun for `e3038f8c` and `e66b632c`, then a fresh full 10-case rerun if both remain green.
+
 ## Temporal fallback follow-up
 
 Artifacts:
