@@ -2,6 +2,8 @@
 
 Diagnostic image: `memforestexampleacr.azurecr.io/azure-memforest-api:11cd808d1249`
 
+Current final-rerun candidate image: `memforestexampleacr.azurecr.io/azure-memforest-api:0c235c1a36c8` (`sha256:d0091a343bdf20248def3fa4485225d2274a22e866e763d557a80453a0c6b26a`)
+
 Query-only artifact: `query_only_diagnostics_11cd808d1249.json`
 
 ## Durable/event accounting
