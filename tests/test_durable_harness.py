@@ -39,6 +39,14 @@ def test_durable_orchestrator_requirements_are_curated() -> None:
     assert "pytest" not in requirements
 
 
+def test_durable_orchestrator_uses_single_deterministic_activity() -> None:
+    source = Path("durable_write_orchestrator/function_app.py").read_text(encoding="utf-8")
+
+    assert 'context.call_activity("materialize_write_job"' in source
+    assert "call_activity_with_retry" not in source
+    assert 'context.call_activity("fail_write_job"' not in source
+
+
 def test_durable_activity_import_does_not_load_api_or_faiss_stack() -> None:
     code = """
 import sys
