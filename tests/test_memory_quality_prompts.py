@@ -47,6 +47,16 @@ def test_cloud_answer_prompt_preserves_preference_avoidance_examples_without_wea
     assert "The information provided is not enough to answer this question." in prompt
 
 
+def test_cloud_answer_prompt_distinguishes_previous_personal_best_from_current_best() -> None:
+    prompt = ANSWER_SYSTEM_CLOUD
+
+    assert "previous/prior personal best" in prompt
+    assert "beat, improved, lowered, or shaved time off" in prompt
+    assert "older prior record rather than the newer improved result" in prompt
+    assert "Do not apply this rule to current/latest personal-best questions" in prompt
+    assert "latest/improved result" in prompt
+
+
 def test_entity_summary_prompt_blocks_inferred_start_dates_and_filler() -> None:
     system, _ = build_tree_prompt_manager().render(
         TREE_SUMMARY_ENTITY_USER.name,
