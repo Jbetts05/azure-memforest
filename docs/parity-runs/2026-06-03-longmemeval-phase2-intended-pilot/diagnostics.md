@@ -234,11 +234,14 @@ Additional smoke after deterministic orchestrator change:
 
 - Code change `efbe4df544e7` simplified `write_orchestrator` to a single `materialize_write_job` activity and made transient handler errors terminal inside the activity.
 - A one-ingest smoke on fresh hub `MemForestWritesSmoke20260604B` still failed immediately with the same Durable replay nondeterminism.
+- The deployed Flex package was inspected directly from the `durable-package-memforestexample/released-package.zip` blob and confirmed to contain the simplified single-activity orchestrator.
+- A follow-up canonical-yield syntax change (`result = yield ...; return result`) was deployed and smoke-tested on fresh hub `MemForestWritesSmoke20260604C`; it also failed immediately with the same Durable replay nondeterminism and was reverted.
 
 Interpretation:
 
 - The remaining blocker is Function/Durable host/package state, not Phase 2 quality logic.
 - Do not run another full Phase 2 pilot until the Durable host state is reset/recreated or replaced, and a one-ingest fresh-hub smoke completes successfully.
+- Further orchestrator syntax changes are not justified without host-level reset/recreation evidence.
 
 ## Temporal fallback follow-up
 
