@@ -48,7 +48,8 @@ def write_orchestrator(context: df.DurableOrchestrationContext):
         "owner_id": f"durable:{context.instance_id}",
         "instance_id": context.instance_id,
     }
-    return (yield context.call_activity("materialize_write_job", activity_input))
+    result = yield context.call_activity("materialize_write_job", activity_input)
+    return result
 
 
 @app.activity_trigger(input_name="payload")
