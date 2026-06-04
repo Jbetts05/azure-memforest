@@ -236,12 +236,13 @@ Additional smoke after deterministic orchestrator change:
 - A one-ingest smoke on fresh hub `MemForestWritesSmoke20260604B` still failed immediately with the same Durable replay nondeterminism.
 - The deployed Flex package was inspected directly from the `durable-package-memforestexample/released-package.zip` blob and confirmed to contain the simplified single-activity orchestrator.
 - A follow-up canonical-yield syntax change (`result = yield ...; return result`) was deployed and smoke-tested on fresh hub `MemForestWritesSmoke20260604C`; it also failed immediately with the same Durable replay nondeterminism and was reverted.
+- Application Insights showed the underlying activity failures were Cosmos firewall denials from changing Function outbound IPs, including `135.222.140.49`, `192.0.2.7`, and `20.15.73.80`.
 
 Interpretation:
 
-- The remaining blocker is Function/Durable host/package state, not Phase 2 quality logic.
-- Do not run another full Phase 2 pilot until the Durable host state is reset/recreated or replaced, and a one-ingest fresh-hub smoke completes successfully.
-- Further orchestrator syntax changes are not justified without host-level reset/recreation evidence.
+- The remaining blocker is Function/Cosmos network egress stability, not Phase 2 quality logic.
+- Do not run another full Phase 2 pilot until Function access to Cosmos is stable enough for a one-ingest fresh-hub smoke to complete successfully.
+- Further orchestrator syntax changes or host recreation are not justified unless the network issue is first eliminated.
 
 ## Temporal fallback follow-up
 
