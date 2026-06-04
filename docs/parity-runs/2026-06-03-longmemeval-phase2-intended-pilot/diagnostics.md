@@ -349,7 +349,12 @@ Validation:
 Decision:
 
 - Both remaining stable-run quality misses now pass targeted validation.
-- Next step is a targeted combined rerun for `e3038f8c` and `e66b632c`, then a fresh full 10-case rerun if both remain green.
+- Combined targeted artifact: `case_results_targeted-final-two-20260604144937/aggregate.json`
+- Combined targeted outcome:
+  - `e3038f8c`: `99 rare items`, primary/cross true.
+  - `e66b632c`: `27 minutes and 45 seconds`, primary/cross true.
+  - 20/20 Durable instances completed, 0 DLQ delta, 0 residue contamination.
+- Next step is a fresh full 10-case rerun under the stable runtime posture.
 
 ## Temporal fallback follow-up
 
