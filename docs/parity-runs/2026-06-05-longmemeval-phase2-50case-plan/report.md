@@ -54,6 +54,7 @@ Before any live run:
 6. Rubber-duck 4.8 must validate the launch plan.
 7. The smoke-tested `gpt-5.4-pro-judge` Responses API judge path must be integrated into the harness.
 8. A `gpt-5.4-pro-judge` sample policy must be defined.
+9. Runtime model calls must use bounded transient protection: `AZURE_MEMFOREST_MODEL_MAX_RETRIES=2` and `AZURE_MEMFOREST_MODEL_TIMEOUT_SECONDS=240`.
 
 ## Held-out pass gate
 
