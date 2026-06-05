@@ -117,7 +117,26 @@
     "primary_judge": "gpt-5.4",
     "cross_check": "gpt-5.4-mini-memory",
     "same_family_bias_caveat": true,
-    "additional_control_required_before_live_run": "Define either a cross-family judge or human adjudication sample for all disagreements plus a pre-registered random sample of agreements."
+    "judge_control": {
+      "deployment": "gpt-5.4-pro-judge",
+      "model": "gpt-5.4-pro",
+      "model_version": "2026-03-05",
+      "resource": "memforestexampleopenai",
+      "resource_group": "azure-memforest",
+      "region": "eastus2",
+      "endpoint": "https://memforestexampleopenai.openai.azure.com/",
+      "sku": "GlobalStandard",
+      "capacity": 160,
+      "token_rate_limit_per_minute": 160000,
+      "request_rate_limit_per_minute": 160,
+      "quota_headroom_after_deploy": 0,
+      "api_surface": "responses",
+      "responses_api_version": "TBD by smoke test",
+      "capability_note": "Deployment reports responses=true and chatCompletion=false; the 50-case harness must call the Responses API for this judge.",
+      "bias_note": "This is still a GPT-5.4-family judge. It is a stronger same-family control, not a substitute for cross-family or human adjudication."
+    },
+    "control_usage": "Use gpt-5.4-pro-judge as an additional same-family judge for all judge disagreements plus a pre-registered random sample of agreed answers. Expand to all 50 held-out answers only after shard 1 confirms latency and quota are acceptable.",
+    "additional_control_required_before_live_run": "Implement and smoke-test the Responses API judge path for gpt-5.4-pro-judge, define the random adjudication sample size, and define either a cross-family judge or human adjudication sample before launch."
   },
   "near_miss_policy": {
     "definition": "Held-out result below 40/50 primary-correct or above 5/50 disagreements.",
@@ -137,7 +156,9 @@
       "Cosmos and Storage public dev-run posture is verified immediately before launch.",
       "Fresh suffix/results directory is generated per shard.",
       "DLQ baseline is snapshotted and attributed.",
-      "Cross-family judge or human-adjudication sample is defined.",
+      "gpt-5.4-pro-judge Responses API judge path is implemented and smoke-tested with non-empty parseable yes/no output, adequate max_output_tokens, and verified temperature handling.",
+      "gpt-5.4-pro-judge Responses API version is pinned in judge_policy.",
+      "Cross-family judge sample policy is defined.",
       "Rubber-duck 4.8 validates the live-run plan."
     ],
     "expected_stack": {
@@ -145,6 +166,7 @@
       "answer": "gpt-5.4",
       "judge_primary": "gpt-5.4",
       "judge_cross_check": "gpt-5.4-mini-memory",
+      "judge_control": "gpt-5.4-pro-judge",
       "embedding": "text-embedding-3-large",
       "search_index": "memforest-recall-large",
       "budget_min": 2000,

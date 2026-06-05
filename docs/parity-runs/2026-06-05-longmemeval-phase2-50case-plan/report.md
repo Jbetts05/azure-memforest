@@ -52,7 +52,8 @@ Before any live run:
 4. Durable memory and budget settings must be captured.
 5. DLQ baseline must be snapshotted and attributed.
 6. Rubber-duck 4.8 must validate the launch plan.
-7. A cross-family judge or human-adjudication sample must be defined.
+7. The `gpt-5.4-pro-judge` Responses API judge path must be implemented and smoke-tested with parseable yes/no output.
+8. A cross-family judge or human-adjudication sample policy must be defined; `gpt-5.4-pro-judge` is same-family and does not replace this requirement.
 
 ## Held-out pass gate
 
@@ -69,6 +70,27 @@ For the held-out 50:
 - 0 Durable failed instances.
 - Durable accounting gate passes.
 - 0 provenance residue contamination events.
+
+## Judge-control model
+
+`gpt-5.4-pro-judge` is deployed for judge control:
+
+| Field | Value |
+| --- | --- |
+| Resource | `memforestexampleopenai` |
+| Resource group | `azure-memforest` |
+| Region | `eastus2` |
+| Endpoint | `https://memforestexampleopenai.openai.azure.com/` |
+| Model | `gpt-5.4-pro` |
+| Version | `2026-03-05` |
+| SKU | `GlobalStandard` |
+| Capacity | `160` |
+| Token rate limit | `160000 TPM` |
+| Request rate limit | `160 RPM` |
+
+The deployment reports `responses=true` and `chatCompletion=false`, so the 50-case harness must call the Responses API for this judge. Use it first for all judge disagreements plus a pre-registered random sample of agreed answers. Expand to all 50 held-out answers only after shard 1 confirms latency and quota are acceptable.
+
+This deployment consumes the available East US 2 `gpt-5.4-pro` GlobalStandard quota (`160K TPM`), leaving no quota headroom for capacity increases without a quota request. Because it is still a GPT-5.4-family model, it is a stronger same-family check, not an independent judge-family control. The live-run plan must still define either a cross-family judge or human adjudication sample.
 
 A near miss below `40/50` primary-correct, or above `5/50` disagreements, is a no-go for scaling. Preserve the failed artifact and perform root-cause analysis; do not renegotiate caps, thresholds, selection, or denominator after seeing results.
 
