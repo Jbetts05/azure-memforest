@@ -86,11 +86,13 @@ def _run_ingest_smoke_session(
     session_id = f"durable-smoke-session-{run_id}-{index}"
     idempotency_key = f"durable-smoke-{run_id}-{index}"
     code = f"{run_id}-{index}"
+    timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     ingest_payload = {
         "turns": [
             {
                 "role": "user",
                 "content": f"Durable smoke memory marker {code}. My durable smoke code number {index} is {code}.",
+                "timestamp": timestamp,
                 "metadata": {"source": "durable-smoke", "run_id": run_id, "session_index": index, "code": code},
             }
         ],
