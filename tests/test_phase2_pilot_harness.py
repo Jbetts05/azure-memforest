@@ -243,6 +243,55 @@ def test_phase2_residue_probe_returns_request_errors(monkeypatch) -> None:
     assert harness.residue_probe("previous question", user_id="user-1") == {"status": "request_error", "error": "Timeout"}
 
 
+def test_phase2_reconciles_durable_completed_timeout(monkeypatch) -> None:
+    harness = _load_harness(monkeypatch)
+    refreshed_status = {"job_id": "job-1", "status": "succeeded", "stage": "commit"}
+    captured = {}
+
+    def fake_api_get(path, *, user_id):
+        captured["path"] = path
+        captured["user_id"] = user_id
+        return refreshed_status
+
+    monkeypatch.setattr(harness, "api_get", fake_api_get)
+
+    status, wait_info = harness.reconcile_durable_completed_job(
+        "job-1",
+        user_id="user-1",
+        status={"job_id": "job-1", "status": "running", "stage": "write_projection"},
+        wait_info={"timeout_reason": "idle_timeout", "progress_events": []},
+        durable_status={"runtimeStatus": "Completed"},
+    )
+
+    assert status is refreshed_status
+    assert wait_info["timeout_reason"] is None
+    assert wait_info["original_timeout_reason"] == "idle_timeout"
+    assert wait_info["durable_completed_reconciled"] is True
+    assert captured == {"path": "/v1/users/user-1/jobs/job-1", "user_id": "user-1"}
+
+
+def test_phase2_does_not_reconcile_noncompleted_durable_timeout(monkeypatch) -> None:
+    harness = _load_harness(monkeypatch)
+
+    def fail_api_get(*_args, **_kwargs):
+        raise AssertionError("API should not be refreshed unless Durable completed")
+
+    monkeypatch.setattr(harness, "api_get", fail_api_get)
+    original_status = {"job_id": "job-1", "status": "running", "stage": "write_projection"}
+    original_wait = {"timeout_reason": "idle_timeout", "progress_events": []}
+
+    status, wait_info = harness.reconcile_durable_completed_job(
+        "job-1",
+        user_id="user-1",
+        status=original_status,
+        wait_info=original_wait,
+        durable_status={"runtimeStatus": "Running"},
+    )
+
+    assert status is original_status
+    assert wait_info is original_wait
+
+
 def test_phase2_restore_override_flags_from_checkpoint(monkeypatch) -> None:
     harness = _load_harness(monkeypatch)
     result = {

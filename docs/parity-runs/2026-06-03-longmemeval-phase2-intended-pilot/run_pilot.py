@@ -207,6 +207,19 @@ def durable_instance_status(job_id: str) -> dict | None:
     return None
 
 
+def reconcile_durable_completed_job(job_id: str, *, user_id: str, status: dict, wait_info: dict, durable_status: dict | None) -> tuple[dict, dict]:
+    if status.get("status") == "succeeded" or (durable_status or {}).get("runtimeStatus") != "Completed":
+        return status, wait_info
+    refreshed = api_get(f"/v1/users/{user_id}/jobs/{job_id}", user_id=user_id)
+    if refreshed.get("status") == "succeeded":
+        updated_wait = dict(wait_info)
+        updated_wait["durable_completed_reconciled"] = True
+        updated_wait["original_timeout_reason"] = wait_info.get("timeout_reason")
+        updated_wait["timeout_reason"] = None
+        return refreshed, updated_wait
+    return status, wait_info
+
+
 def norm(text: object) -> str:
     value = str(text or "").lower()
     value = re.sub(r"[^a-z0-9]+", " ", value)
@@ -550,6 +563,14 @@ def run_case(case: dict, index: int, previous_probe: str | None) -> dict:
             durable_status = durable_instance_status(ingest["job_id"])
         except Exception as exc:
             durable_error = f"{type(exc).__name__}: {exc}"
+        if durable_error is None:
+            ingest_status, wait_info = reconcile_durable_completed_job(
+                ingest["job_id"],
+                user_id=user_id,
+                status=ingest_status,
+                wait_info=wait_info,
+                durable_status=durable_status,
+            )
         result["events"].append(
             {
                 "step": "ingest",

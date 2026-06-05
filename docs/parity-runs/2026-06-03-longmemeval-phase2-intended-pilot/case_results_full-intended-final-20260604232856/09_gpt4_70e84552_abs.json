@@ -1,0 +1,2594 @@
+{
+  "case_id": "gpt4_70e84552_abs",
+  "index": 9,
+  "question_type": "temporal-reasoning",
+  "question": "Which task did I complete first, fixing the fence or purchasing three cows from Peter?",
+  "gold_answer": "The information provided is not enough. You mentioned fixing the fence but did not mention purchasing cows from Peter.",
+  "selected_session_count": 10,
+  "selected_turn_count": 118,
+  "events": [
+    {
+      "step": "resume",
+      "completed_indices": [],
+      "skipped_source_session_ids": [],
+      "timestamp_unix": 1780630556.0009396
+    },
+    {
+      "step": "ingest",
+      "index": 1,
+      "source_session_id": "001cefa7_2",
+      "job_id": "job_8470bcd78e155abb4a4e1f994d1765d17b7c1c1975f0d2b36bde5ecf7f247a69",
+      "input_shaping": {
+        "assistant_turns_marked_skip_extraction": 6,
+        "assistant_turns_extractable": 0,
+        "user_turns_extractable": 6,
+        "original_turn_count": 12,
+        "retained_turn_count": 12,
+        "evidence_minimized": false,
+        "override_type": null,
+        "retained_content_ids": [],
+        "synthetic_turn_count": 0,
+        "synthetic_content_ids": [],
+        "extract_assistant_content_ids": [],
+        "retained_turns_sha256": "b2076536c899b3f0c0236b216e0bb9cbd289bace49984704f91ef12ab473dceb",
+        "exclude_from_pipeline_accuracy": false
+      },
+      "status": {
+        "job_id": "job_8470bcd78e155abb4a4e1f994d1765d17b7c1c1975f0d2b36bde5ecf7f247a69",
+        "status": "succeeded",
+        "tenant_id": "11111111-1111-4111-8111-111111111111",
+        "user_id": "benchmark-phase2-09-gpt4_70e84552_abs-full-intended-final-20260604232856",
+        "submitted_at": 1780630556.9587219,
+        "completed_at": 1780630578.3061683,
+        "error": null,
+        "stage": "commit",
+        "stage_started_at": 1780630578.1577282,
+        "stage_history": [
+          {
+            "stage": "hydrate",
+            "started_at": 1780630558.422167,
+            "completed_at": 1780630559.23319,
+            "detail": "Loading latest committed forest."
+          },
+          {
+            "stage": "extract_build",
+            "started_at": 1780630559.23319,
+            "completed_at": 1780630573.5746222,
+            "detail": "Extracting facts, deduping, and rebuilding MemTrees."
+          },
+          {
+            "stage": "manifest_pending",
+            "started_at": 1780630573.5746222,
+            "completed_at": 1780630573.6992548,
+            "detail": "Creating pending forest manifest."
+          },
+          {
+            "stage": "project",
+            "started_at": 1780630573.6992548,
+            "completed_at": 1780630573.750698,
+            "detail": "Projecting forest snapshot to durable stores."
+          },
+          {
+            "stage": "write_projection",
+            "started_at": 1780630573.750698,
+            "completed_at": 1780630578.1577282,
+            "detail": "Writing facts, trees, embeddings, recall documents, and snapshot."
+          }
+        ],
+        "telemetry": {
+          "calls": {
+            "chat:default:gpt-5.4-mini-memory": {
+              "operation": "chat",
+              "role": "default",
+              "deployment": "gpt-5.4-mini-memory",
+              "count": 7,
+              "item_count": 7,
+              "total_latency_ms": 13649.430028999632,
+              "max_latency_ms": 4556.440074999955,
+              "started_count": 7,
+              "in_flight": 0,
+              "started_item_count": 7,
+              "last_started_at_monotonic": 5502.452360076
+            },
+            "embedding:embedding:text-embedding-3-large": {
+              "operation": "embedding",
+              "role": "embedding",
+              "deployment": "text-embedding-3-large",
+              "count": 4,
+              "item_count": 56,
+              "total_latency_ms": 1689.778364000631,
+              "max_latency_ms": 519.7950550000314,
+              "started_count": 4,
+              "in_flight": 0,
+              "started_item_count": 56,
+              "last_started_at_monotonic": 5503.970442319
+            }
+          },
+          "total_calls": 11,
+          "total_latency_ms": 15339.208393000263,
+          "extract_build_heartbeat_count": 1,
+          "extract_build_last_heartbeat_unix": 1780630559.2494054,
+          "total_started_calls": 11,
+          "in_flight_calls": 0
+        },
+        "progress_signature": {
+          "stage": "commit",
+          "completed_model_calls": 11,
+          "embedded_items": 56,
+          "durable_writes": 0
+        },
+        "progress_budget": {
+          "job_type": "ingest_session",
+          "stall_timeout_seconds": 1200,
+          "max_completed_model_calls": 2000,
+          "max_retries": 1
+        },
+        "last_progress_at": 1780630578.1577282
+      },
+      "elapsed_sec": 23.107566833496094,
+      "job_events": [
+        {
+          "event_type": "accepted",
+          "timestamp_unix": 1780630556.9587219,
+          "status": "accepted",
+          "detail": null
+        },
+        {
+          "event_type": "running",
+          "timestamp_unix": null,
+          "status": "running",
+          "detail": "Job has been claimed by a worker."
+        },
+        {
+          "event_type": "stage:hydrate",
+          "timestamp_unix": 1780630558.422167,
+          "status": "completed",
+          "detail": "Loading latest committed forest."
+        },
+        {
+          "event_type": "stage:extract_build",
+          "timestamp_unix": 1780630559.23319,
+          "status": "completed",
+          "detail": "Extracting facts, deduping, and rebuilding MemTrees."
+        },
+        {
+          "event_type": "stage:manifest_pending",
+          "timestamp_unix": 1780630573.5746222,
+          "status": "completed",
+          "detail": "Creating pending forest manifest."
+        },
+        {
+          "event_type": "stage:project",
+          "timestamp_unix": 1780630573.6992548,
+          "status": "completed",
+          "detail": "Projecting forest snapshot to durable stores."
+        },
+        {
+          "event_type": "stage:write_projection",
+          "timestamp_unix": 1780630573.750698,
+          "status": "completed",
+          "detail": "Writing facts, trees, embeddings, recall documents, and snapshot."
+        },
+        {
+          "event_type": "succeeded",
+          "timestamp_unix": 1780630578.3061683,
+          "status": "succeeded",
+          "detail": null
+        }
+      ],
+      "wait_info": {
+        "timeout_reason": null,
+        "progress_events": [
+          {
+            "elapsed_sec": 0.0,
+            "fingerprint": [
+              "running",
+              null,
+              0,
+              null,
+              null,
+              null,
+              null,
+              null
+            ]
+          },
+          {
+            "elapsed_sec": 12.12671971321106,
+            "fingerprint": [
+              "running",
+              "extract_build",
+              1,
+              0,
+              1,
+              1,
+              1,
+              0
+            ]
+          },
+          {
+            "elapsed_sec": 23.107557773590088,
+            "fingerprint": [
+              "succeeded",
+              "commit",
+              5,
+              11,
+              11,
+              0,
+              1,
+              15339.208393000263
+            ]
+          }
+        ]
+      },
+      "durable_instance": {
+        "name": "write_orchestrator",
+        "instanceId": "job_8470bcd78e155abb4a4e1f994d1765d17b7c1c1975f0d2b36bde5ecf7f247a69",
+        "runtimeStatus": "Completed",
+        "customStatus": null,
+        "createdTime": "2026-06-05T03:35:57Z",
+        "lastUpdatedTime": "2026-06-05T03:36:18Z"
+      },
+      "durable_status_error": null
+    },
+    {
+      "step": "ingest",
+      "index": 2,
+      "source_session_id": "e2b58a46_1",
+      "job_id": "job_a17612d2781ce810c1760f587008a127dd06efe763c390970a39421dc0745796",
+      "input_shaping": {
+        "assistant_turns_marked_skip_extraction": 6,
+        "assistant_turns_extractable": 0,
+        "user_turns_extractable": 6,
+        "original_turn_count": 12,
+        "retained_turn_count": 12,
+        "evidence_minimized": false,
+        "override_type": null,
+        "retained_content_ids": [],
+        "synthetic_turn_count": 0,
+        "synthetic_content_ids": [],
+        "extract_assistant_content_ids": [],
+        "retained_turns_sha256": "e12990ade171883234ff2ff19dff58fef7a11ccf8f55f60b42364d9b33df3fc1",
+        "exclude_from_pipeline_accuracy": false
+      },
+      "status": {
+        "job_id": "job_a17612d2781ce810c1760f587008a127dd06efe763c390970a39421dc0745796",
+        "status": "succeeded",
+        "tenant_id": "11111111-1111-4111-8111-111111111111",
+        "user_id": "benchmark-phase2-09-gpt4_70e84552_abs-full-intended-final-20260604232856",
+        "submitted_at": 1780630589.81202,
+        "completed_at": 1780630625.0279734,
+        "error": null,
+        "stage": "commit",
+        "stage_started_at": 1780630624.879971,
+        "stage_history": [
+          {
+            "stage": "hydrate",
+            "started_at": 1780630596.5536673,
+            "completed_at": 1780630597.4982307,
+            "detail": "Loading latest committed forest."
+          },
+          {
+            "stage": "extract_build",
+            "started_at": 1780630597.4982307,
+            "completed_at": 1780630612.556471,
+            "detail": "Extracting facts, deduping, and rebuilding MemTrees."
+          },
+          {
+            "stage": "manifest_pending",
+            "started_at": 1780630612.556471,
+            "completed_at": 1780630612.669291,
+            "detail": "Creating pending forest manifest."
+          },
+          {
+            "stage": "project",
+            "started_at": 1780630612.669291,
+            "completed_at": 1780630612.7251236,
+            "detail": "Projecting forest snapshot to durable stores."
+          },
+          {
+            "stage": "write_projection",
+            "started_at": 1780630612.7251236,
+            "completed_at": 1780630624.879971,
+            "detail": "Writing facts, trees, embeddings, recall documents, and snapshot."
+          }
+        ],
+        "telemetry": {
+          "calls": {
+            "chat:default:gpt-5.4-mini-memory": {
+              "operation": "chat",
+              "role": "default",
+              "deployment": "gpt-5.4-mini-memory",
+              "count": 12,
+              "item_count": 12,
+              "total_latency_ms": 17593.343134999486,
+              "max_latency_ms": 3276.1037259997465,
+              "started_count": 12,
+              "in_flight": 0,
+              "started_item_count": 12,
+              "last_started_at_monotonic": 5541.354696464
+            },
+            "embedding:embedding:text-embedding-3-large": {
+              "operation": "embedding",
+              "role": "embedding",
+              "deployment": "text-embedding-3-large",
+              "count": 4,
+              "item_count": 81,
+              "total_latency_ms": 1540.857462000531,
+              "max_latency_ms": 591.5724579999733,
+              "started_count": 4,
+              "in_flight": 0,
+              "started_item_count": 81,
+              "last_started_at_monotonic": 5542.860341492
+            }
+          },
+          "total_calls": 16,
+          "total_latency_ms": 19134.200597000017,
+          "extract_build_heartbeat_count": 1,
+          "extract_build_last_heartbeat_unix": 1780630597.520805,
+          "total_started_calls": 16,
+          "in_flight_calls": 0
+        },
+        "progress_signature": {
+          "stage": "commit",
+          "completed_model_calls": 16,
+          "embedded_items": 81,
+          "durable_writes": 0
+        },
+        "progress_budget": {
+          "job_type": "ingest_session",
+          "stall_timeout_seconds": 1200,
+          "max_completed_model_calls": 2000,
+          "max_retries": 1
+        },
+        "last_progress_at": 1780630624.879971
+      },
+      "elapsed_sec": 34.06089425086975,
+      "job_events": [
+        {
+          "event_type": "accepted",
+          "timestamp_unix": 1780630589.81202,
+          "status": "accepted",
+          "detail": null
+        },
+        {
+          "event_type": "running",
+          "timestamp_unix": null,
+          "status": "running",
+          "detail": "Job has been claimed by a worker."
+        },
+        {
+          "event_type": "stage:hydrate",
+          "timestamp_unix": 1780630596.5536673,
+          "status": "completed",
+          "detail": "Loading latest committed forest."
+        },
+        {
+          "event_type": "stage:extract_build",
+          "timestamp_unix": 1780630597.4982307,
+          "status": "completed",
+          "detail": "Extracting facts, deduping, and rebuilding MemTrees."
+        },
+        {
+          "event_type": "stage:manifest_pending",
+          "timestamp_unix": 1780630612.556471,
+          "status": "completed",
+          "detail": "Creating pending forest manifest."
+        },
+        {
+          "event_type": "stage:project",
+          "timestamp_unix": 1780630612.669291,
+          "status": "completed",
+          "detail": "Projecting forest snapshot to durable stores."
+        },
+        {
+          "event_type": "stage:write_projection",
+          "timestamp_unix": 1780630612.7251236,
+          "status": "completed",
+          "detail": "Writing facts, trees, embeddings, recall documents, and snapshot."
+        },
+        {
+          "event_type": "succeeded",
+          "timestamp_unix": 1780630625.0279734,
+          "status": "succeeded",
+          "detail": null
+        }
+      ],
+      "wait_info": {
+        "timeout_reason": null,
+        "progress_events": [
+          {
+            "elapsed_sec": 0.0,
+            "fingerprint": [
+              "running",
+              "hydrate",
+              0,
+              null,
+              null,
+              null,
+              null,
+              null
+            ]
+          },
+          {
+            "elapsed_sec": 12.058164596557617,
+            "fingerprint": [
+              "running",
+              "extract_build",
+              1,
+              0,
+              1,
+              1,
+              1,
+              0
+            ]
+          },
+          {
+            "elapsed_sec": 23.044097661972046,
+            "fingerprint": [
+              "running",
+              "write_projection",
+              4,
+              16,
+              16,
+              0,
+              1,
+              19134.200597000017
+            ]
+          },
+          {
+            "elapsed_sec": 34.06088924407959,
+            "fingerprint": [
+              "succeeded",
+              "commit",
+              5,
+              16,
+              16,
+              0,
+              1,
+              19134.200597000017
+            ]
+          }
+        ]
+      },
+      "durable_instance": {
+        "name": "write_orchestrator",
+        "instanceId": "job_a17612d2781ce810c1760f587008a127dd06efe763c390970a39421dc0745796",
+        "runtimeStatus": "Completed",
+        "customStatus": null,
+        "createdTime": "2026-06-05T03:36:35Z",
+        "lastUpdatedTime": "2026-06-05T03:37:05Z"
+      },
+      "durable_status_error": null
+    },
+    {
+      "step": "ingest",
+      "index": 3,
+      "source_session_id": "sharegpt_Xj7QShV_0",
+      "job_id": "job_d0e1278e01b2565a59273f80b748d216bcf91dd6c11384cbd14e64d241e3f9b0",
+      "input_shaping": {
+        "assistant_turns_marked_skip_extraction": 11,
+        "assistant_turns_extractable": 0,
+        "user_turns_extractable": 11,
+        "original_turn_count": 22,
+        "retained_turn_count": 22,
+        "evidence_minimized": false,
+        "override_type": null,
+        "retained_content_ids": [],
+        "synthetic_turn_count": 0,
+        "synthetic_content_ids": [],
+        "extract_assistant_content_ids": [],
+        "retained_turns_sha256": "00204666fb3e54a226b8b90af9bbf69fabc3085520141ed3116b794770bab898",
+        "exclude_from_pipeline_accuracy": false
+      },
+      "status": {
+        "job_id": "job_d0e1278e01b2565a59273f80b748d216bcf91dd6c11384cbd14e64d241e3f9b0",
+        "status": "succeeded",
+        "tenant_id": "11111111-1111-4111-8111-111111111111",
+        "user_id": "benchmark-phase2-09-gpt4_70e84552_abs-full-intended-final-20260604232856",
+        "submitted_at": 1780630632.8986728,
+        "completed_at": 1780630684.757073,
+        "error": null,
+        "stage": "commit",
+        "stage_started_at": 1780630684.5751357,
+        "stage_history": [
+          {
+            "stage": "hydrate",
+            "started_at": 1780630634.0531056,
+            "completed_at": 1780630635.4620495,
+            "detail": "Loading latest committed forest."
+          },
+          {
+            "stage": "extract_build",
+            "started_at": 1780630635.4620495,
+            "completed_at": 1780630664.370793,
+            "detail": "Extracting facts, deduping, and rebuilding MemTrees."
+          },
+          {
+            "stage": "manifest_pending",
+            "started_at": 1780630664.370793,
+            "completed_at": 1780630664.4607184,
+            "detail": "Creating pending forest manifest."
+          },
+          {
+            "stage": "project",
+            "started_at": 1780630664.4607184,
+            "completed_at": 1780630664.5246964,
+            "detail": "Projecting forest snapshot to durable stores."
+          },
+          {
+            "stage": "write_projection",
+            "started_at": 1780630664.5246964,
+            "completed_at": 1780630684.5751357,
+            "detail": "Writing facts, trees, embeddings, recall documents, and snapshot."
+          }
+        ],
+        "telemetry": {
+          "calls": {
+            "chat:default:gpt-5.4-mini-memory": {
+              "operation": "chat",
+              "role": "default",
+              "deployment": "gpt-5.4-mini-memory",
+              "count": 35,
+              "item_count": 35,
+              "total_latency_ms": 44439.00247300098,
+              "max_latency_ms": 3914.6782320003695,
+              "started_count": 35,
+              "in_flight": 0,
+              "started_item_count": 35,
+              "last_started_at_monotonic": 5591.707670292
+            },
+            "embedding:embedding:text-embedding-3-large": {
+              "operation": "embedding",
+              "role": "embedding",
+              "deployment": "text-embedding-3-large",
+              "count": 4,
+              "item_count": 128,
+              "total_latency_ms": 2910.1202330002707,
+              "max_latency_ms": 1489.3120329998055,
+              "started_count": 4,
+              "in_flight": 0,
+              "started_item_count": 128,
+              "last_started_at_monotonic": 5593.636877651
+            }
+          },
+          "total_calls": 39,
+          "total_latency_ms": 47349.12270600125,
+          "extract_build_heartbeat_count": 1,
+          "extract_build_last_heartbeat_unix": 1780630635.4812849,
+          "total_started_calls": 39,
+          "in_flight_calls": 0
+        },
+        "progress_signature": {
+          "stage": "commit",
+          "completed_model_calls": 39,
+          "embedded_items": 128,
+          "durable_writes": 0
+        },
+        "progress_budget": {
+          "job_type": "ingest_session",
+          "stall_timeout_seconds": 1200,
+          "max_completed_model_calls": 2000,
+          "max_retries": 1
+        },
+        "last_progress_at": 1780630684.5751357
+      },
+      "elapsed_sec": 56.57770299911499,
+      "job_events": [
+        {
+          "event_type": "accepted",
+          "timestamp_unix": 1780630632.8986728,
+          "status": "accepted",
+          "detail": null
+        },
+        {
+          "event_type": "running",
+          "timestamp_unix": null,
+          "status": "running",
+          "detail": "Job has been claimed by a worker."
+        },
+        {
+          "event_type": "stage:hydrate",
+          "timestamp_unix": 1780630634.0531056,
+          "status": "completed",
+          "detail": "Loading latest committed forest."
+        },
+        {
+          "event_type": "stage:extract_build",
+          "timestamp_unix": 1780630635.4620495,
+          "status": "completed",
+          "detail": "Extracting facts, deduping, and rebuilding MemTrees."
+        },
+        {
+          "event_type": "stage:manifest_pending",
+          "timestamp_unix": 1780630664.370793,
+          "status": "completed",
+          "detail": "Creating pending forest manifest."
+        },
+        {
+          "event_type": "stage:project",
+          "timestamp_unix": 1780630664.4607184,
+          "status": "completed",
+          "detail": "Projecting forest snapshot to durable stores."
+        },
+        {
+          "event_type": "stage:write_projection",
+          "timestamp_unix": 1780630664.5246964,
+          "status": "completed",
+          "detail": "Writing facts, trees, embeddings, recall documents, and snapshot."
+        },
+        {
+          "event_type": "succeeded",
+          "timestamp_unix": 1780630684.757073,
+          "status": "succeeded",
+          "detail": null
+        }
+      ],
+      "wait_info": {
+        "timeout_reason": null,
+        "progress_events": [
+          {
+            "elapsed_sec": 0.0,
+            "fingerprint": [
+              "running",
+              "hydrate",
+              0,
+              null,
+              null,
+              null,
+              null,
+              null
+            ]
+          },
+          {
+            "elapsed_sec": 12.268173694610596,
+            "fingerprint": [
+              "running",
+              "extract_build",
+              1,
+              0,
+              1,
+              1,
+              1,
+              0
+            ]
+          },
+          {
+            "elapsed_sec": 34.2476110458374,
+            "fingerprint": [
+              "running",
+              "write_projection",
+              4,
+              39,
+              39,
+              0,
+              1,
+              47349.12270600125
+            ]
+          },
+          {
+            "elapsed_sec": 56.57769703865051,
+            "fingerprint": [
+              "succeeded",
+              "commit",
+              5,
+              39,
+              39,
+              0,
+              1,
+              47349.12270600125
+            ]
+          }
+        ]
+      },
+      "durable_instance": {
+        "name": "write_orchestrator",
+        "instanceId": "job_d0e1278e01b2565a59273f80b748d216bcf91dd6c11384cbd14e64d241e3f9b0",
+        "runtimeStatus": "Completed",
+        "customStatus": null,
+        "createdTime": "2026-06-05T03:37:13Z",
+        "lastUpdatedTime": "2026-06-05T03:38:04Z"
+      },
+      "durable_status_error": null
+    },
+    {
+      "step": "ingest",
+      "index": 4,
+      "source_session_id": "sharegpt_P5L3sLZ_0",
+      "job_id": "job_71643b077e59cc40d5112a9ca8dc26c30f38aaaca0f50d199120e33fd7870eaf",
+      "input_shaping": {
+        "assistant_turns_marked_skip_extraction": 3,
+        "assistant_turns_extractable": 0,
+        "user_turns_extractable": 3,
+        "original_turn_count": 6,
+        "retained_turn_count": 6,
+        "evidence_minimized": false,
+        "override_type": null,
+        "retained_content_ids": [],
+        "synthetic_turn_count": 0,
+        "synthetic_content_ids": [],
+        "extract_assistant_content_ids": [],
+        "retained_turns_sha256": "31204a7ee5a8e58cab4c0b5d036959744a4c1869fca6fc9e04cbc0a8302db8b0",
+        "exclude_from_pipeline_accuracy": false
+      },
+      "status": {
+        "job_id": "job_71643b077e59cc40d5112a9ca8dc26c30f38aaaca0f50d199120e33fd7870eaf",
+        "status": "succeeded",
+        "tenant_id": "11111111-1111-4111-8111-111111111111",
+        "user_id": "benchmark-phase2-09-gpt4_70e84552_abs-full-intended-final-20260604232856",
+        "submitted_at": 1780630692.6469474,
+        "completed_at": 1780630721.5101707,
+        "error": null,
+        "stage": "commit",
+        "stage_started_at": 1780630721.3694704,
+        "stage_history": [
+          {
+            "stage": "hydrate",
+            "started_at": 1780630693.8240662,
+            "completed_at": 1780630694.6529517,
+            "detail": "Loading latest committed forest."
+          },
+          {
+            "stage": "extract_build",
+            "started_at": 1780630694.6529517,
+            "completed_at": 1780630702.1139517,
+            "detail": "Extracting facts, deduping, and rebuilding MemTrees."
+          },
+          {
+            "stage": "manifest_pending",
+            "started_at": 1780630702.1139517,
+            "completed_at": 1780630702.197045,
+            "detail": "Creating pending forest manifest."
+          },
+          {
+            "stage": "project",
+            "started_at": 1780630702.197045,
+            "completed_at": 1780630702.2554054,
+            "detail": "Projecting forest snapshot to durable stores."
+          },
+          {
+            "stage": "write_projection",
+            "started_at": 1780630702.2554054,
+            "completed_at": 1780630721.3694704,
+            "detail": "Writing facts, trees, embeddings, recall documents, and snapshot."
+          }
+        ],
+        "telemetry": {
+          "calls": {
+            "chat:default:gpt-5.4-mini-memory": {
+              "operation": "chat",
+              "role": "default",
+              "deployment": "gpt-5.4-mini-memory",
+              "count": 7,
+              "item_count": 7,
+              "total_latency_ms": 7956.588858999567,
+              "max_latency_ms": 1788.6026919995857,
+              "started_count": 7,
+              "in_flight": 0,
+              "started_item_count": 7,
+              "last_started_at_monotonic": 5630.896843925
+            },
+            "embedding:embedding:text-embedding-3-large": {
+              "operation": "embedding",
+              "role": "embedding",
+              "deployment": "text-embedding-3-large",
+              "count": 4,
+              "item_count": 75,
+              "total_latency_ms": 770.9056309995503,
+              "max_latency_ms": 284.60562899999786,
+              "started_count": 4,
+              "in_flight": 0,
+              "started_item_count": 75,
+              "last_started_at_monotonic": 5632.641018376
+            }
+          },
+          "total_calls": 11,
+          "total_latency_ms": 8727.494489999117,
+          "extract_build_heartbeat_count": 1,
+          "extract_build_last_heartbeat_unix": 1780630694.6670823,
+          "total_started_calls": 11,
+          "in_flight_calls": 0
+        },
+        "progress_signature": {
+          "stage": "commit",
+          "completed_model_calls": 11,
+          "embedded_items": 75,
+          "durable_writes": 0
+        },
+        "progress_budget": {
+          "job_type": "ingest_session",
+          "stall_timeout_seconds": 600,
+          "max_completed_model_calls": 2000,
+          "max_retries": 1
+        },
+        "last_progress_at": 1780630721.3694704
+      },
+      "elapsed_sec": 34.613054513931274,
+      "job_events": [
+        {
+          "event_type": "accepted",
+          "timestamp_unix": 1780630692.6469474,
+          "status": "accepted",
+          "detail": null
+        },
+        {
+          "event_type": "running",
+          "timestamp_unix": null,
+          "status": "running",
+          "detail": "Job has been claimed by a worker."
+        },
+        {
+          "event_type": "stage:hydrate",
+          "timestamp_unix": 1780630693.8240662,
+          "status": "completed",
+          "detail": "Loading latest committed forest."
+        },
+        {
+          "event_type": "stage:extract_build",
+          "timestamp_unix": 1780630694.6529517,
+          "status": "completed",
+          "detail": "Extracting facts, deduping, and rebuilding MemTrees."
+        },
+        {
+          "event_type": "stage:manifest_pending",
+          "timestamp_unix": 1780630702.1139517,
+          "status": "completed",
+          "detail": "Creating pending forest manifest."
+        },
+        {
+          "event_type": "stage:project",
+          "timestamp_unix": 1780630702.197045,
+          "status": "completed",
+          "detail": "Projecting forest snapshot to durable stores."
+        },
+        {
+          "event_type": "stage:write_projection",
+          "timestamp_unix": 1780630702.2554054,
+          "status": "completed",
+          "detail": "Writing facts, trees, embeddings, recall documents, and snapshot."
+        },
+        {
+          "event_type": "succeeded",
+          "timestamp_unix": 1780630721.5101707,
+          "status": "succeeded",
+          "detail": null
+        }
+      ],
+      "wait_info": {
+        "timeout_reason": null,
+        "progress_events": [
+          {
+            "elapsed_sec": 0.0,
+            "fingerprint": [
+              "running",
+              "hydrate",
+              0,
+              null,
+              null,
+              null,
+              null,
+              null
+            ]
+          },
+          {
+            "elapsed_sec": 12.406428575515747,
+            "fingerprint": [
+              "running",
+              "write_projection",
+              4,
+              11,
+              11,
+              0,
+              1,
+              8727.494489999117
+            ]
+          },
+          {
+            "elapsed_sec": 34.613043546676636,
+            "fingerprint": [
+              "succeeded",
+              "commit",
+              5,
+              11,
+              11,
+              0,
+              1,
+              8727.494489999117
+            ]
+          }
+        ]
+      },
+      "durable_instance": {
+        "name": "write_orchestrator",
+        "instanceId": "job_71643b077e59cc40d5112a9ca8dc26c30f38aaaca0f50d199120e33fd7870eaf",
+        "runtimeStatus": "Completed",
+        "customStatus": null,
+        "createdTime": "2026-06-05T03:38:12Z",
+        "lastUpdatedTime": "2026-06-05T03:38:41Z"
+      },
+      "durable_status_error": null
+    },
+    {
+      "step": "ingest",
+      "index": 5,
+      "source_session_id": "e2cd250e_2",
+      "job_id": "job_d46553b82ccfa5eb3e10c044b7cd8cf943cfd4c57c26691a2328b1eabc02d185",
+      "input_shaping": {
+        "assistant_turns_marked_skip_extraction": 6,
+        "assistant_turns_extractable": 0,
+        "user_turns_extractable": 6,
+        "original_turn_count": 12,
+        "retained_turn_count": 12,
+        "evidence_minimized": false,
+        "override_type": null,
+        "retained_content_ids": [],
+        "synthetic_turn_count": 0,
+        "synthetic_content_ids": [],
+        "extract_assistant_content_ids": [],
+        "retained_turns_sha256": "e2a06877560fbaef179f9c1c6ceae8aabc2f6a380f887a1fd856965c50da7359",
+        "exclude_from_pipeline_accuracy": false
+      },
+      "status": {
+        "job_id": "job_d46553b82ccfa5eb3e10c044b7cd8cf943cfd4c57c26691a2328b1eabc02d185",
+        "status": "succeeded",
+        "tenant_id": "11111111-1111-4111-8111-111111111111",
+        "user_id": "benchmark-phase2-09-gpt4_70e84552_abs-full-intended-final-20260604232856",
+        "submitted_at": 1780630731.287175,
+        "completed_at": 1780630803.9134817,
+        "error": null,
+        "stage": "commit",
+        "stage_started_at": 1780630803.7514052,
+        "stage_history": [
+          {
+            "stage": "hydrate",
+            "started_at": 1780630751.0757833,
+            "completed_at": 1780630752.3854818,
+            "detail": "Loading latest committed forest."
+          },
+          {
+            "stage": "extract_build",
+            "started_at": 1780630752.3854818,
+            "completed_at": 1780630771.941949,
+            "detail": "Extracting facts, deduping, and rebuilding MemTrees."
+          },
+          {
+            "stage": "manifest_pending",
+            "started_at": 1780630771.941949,
+            "completed_at": 1780630772.1461365,
+            "detail": "Creating pending forest manifest."
+          },
+          {
+            "stage": "project",
+            "started_at": 1780630772.1461365,
+            "completed_at": 1780630772.2108445,
+            "detail": "Projecting forest snapshot to durable stores."
+          },
+          {
+            "stage": "write_projection",
+            "started_at": 1780630772.2108445,
+            "completed_at": 1780630803.7514052,
+            "detail": "Writing facts, trees, embeddings, recall documents, and snapshot."
+          }
+        ],
+        "telemetry": {
+          "calls": {
+            "chat:default:gpt-5.4-mini-memory": {
+              "operation": "chat",
+              "role": "default",
+              "deployment": "gpt-5.4-mini-memory",
+              "count": 17,
+              "item_count": 17,
+              "total_latency_ms": 22485.249185998327,
+              "max_latency_ms": 4457.323046999591,
+              "started_count": 17,
+              "in_flight": 0,
+              "started_item_count": 17,
+              "last_started_at_monotonic": 5086.851904656
+            },
+            "embedding:embedding:text-embedding-3-large": {
+              "operation": "embedding",
+              "role": "embedding",
+              "deployment": "text-embedding-3-large",
+              "count": 4,
+              "item_count": 135,
+              "total_latency_ms": 3061.4078310009063,
+              "max_latency_ms": 1719.0518690003955,
+              "started_count": 4,
+              "in_flight": 0,
+              "started_item_count": 135,
+              "last_started_at_monotonic": 5088.082196475
+            }
+          },
+          "total_calls": 21,
+          "total_latency_ms": 25546.657016999234,
+          "extract_build_heartbeat_count": 1,
+          "extract_build_last_heartbeat_unix": 1780630752.4079955,
+          "total_started_calls": 21,
+          "in_flight_calls": 0
+        },
+        "progress_signature": {
+          "stage": "commit",
+          "completed_model_calls": 21,
+          "embedded_items": 135,
+          "durable_writes": 0
+        },
+        "progress_budget": {
+          "job_type": "ingest_session",
+          "stall_timeout_seconds": 1200,
+          "max_completed_model_calls": 2000,
+          "max_retries": 1
+        },
+        "last_progress_at": 1780630803.7514052
+      },
+      "elapsed_sec": 67.95847535133362,
+      "job_events": [
+        {
+          "event_type": "accepted",
+          "timestamp_unix": 1780630731.287175,
+          "status": "accepted",
+          "detail": null
+        },
+        {
+          "event_type": "running",
+          "timestamp_unix": null,
+          "status": "running",
+          "detail": "Job has been claimed by a worker."
+        },
+        {
+          "event_type": "stage:hydrate",
+          "timestamp_unix": 1780630751.0757833,
+          "status": "completed",
+          "detail": "Loading latest committed forest."
+        },
+        {
+          "event_type": "stage:extract_build",
+          "timestamp_unix": 1780630752.3854818,
+          "status": "completed",
+          "detail": "Extracting facts, deduping, and rebuilding MemTrees."
+        },
+        {
+          "event_type": "stage:manifest_pending",
+          "timestamp_unix": 1780630771.941949,
+          "status": "completed",
+          "detail": "Creating pending forest manifest."
+        },
+        {
+          "event_type": "stage:project",
+          "timestamp_unix": 1780630772.1461365,
+          "status": "completed",
+          "detail": "Projecting forest snapshot to durable stores."
+        },
+        {
+          "event_type": "stage:write_projection",
+          "timestamp_unix": 1780630772.2108445,
+          "status": "completed",
+          "detail": "Writing facts, trees, embeddings, recall documents, and snapshot."
+        },
+        {
+          "event_type": "succeeded",
+          "timestamp_unix": 1780630803.9134817,
+          "status": "succeeded",
+          "detail": null
+        }
+      ],
+      "wait_info": {
+        "timeout_reason": null,
+        "progress_events": [
+          {
+            "elapsed_sec": 0.0,
+            "fingerprint": [
+              "accepted",
+              null,
+              0,
+              null,
+              null,
+              null,
+              null,
+              null
+            ]
+          },
+          {
+            "elapsed_sec": 22.958610773086548,
+            "fingerprint": [
+              "running",
+              "extract_build",
+              1,
+              0,
+              1,
+              1,
+              1,
+              0
+            ]
+          },
+          {
+            "elapsed_sec": 45.25909900665283,
+            "fingerprint": [
+              "running",
+              "write_projection",
+              4,
+              21,
+              21,
+              0,
+              1,
+              25546.657016999234
+            ]
+          },
+          {
+            "elapsed_sec": 67.95847177505493,
+            "fingerprint": [
+              "succeeded",
+              "commit",
+              5,
+              21,
+              21,
+              0,
+              1,
+              25546.657016999234
+            ]
+          }
+        ]
+      },
+      "durable_instance": {
+        "name": "write_orchestrator",
+        "instanceId": "job_d46553b82ccfa5eb3e10c044b7cd8cf943cfd4c57c26691a2328b1eabc02d185",
+        "runtimeStatus": "Completed",
+        "customStatus": null,
+        "createdTime": "2026-06-05T03:38:56Z",
+        "lastUpdatedTime": "2026-06-05T03:40:04Z"
+      },
+      "durable_status_error": null
+    },
+    {
+      "step": "ingest",
+      "index": 6,
+      "source_session_id": "0d8f420c",
+      "job_id": "job_cb3707e07ea0a54b815d566e202e51b90363485864a55d3d6f66e716c06eca70",
+      "input_shaping": {
+        "assistant_turns_marked_skip_extraction": 6,
+        "assistant_turns_extractable": 0,
+        "user_turns_extractable": 6,
+        "original_turn_count": 12,
+        "retained_turn_count": 12,
+        "evidence_minimized": false,
+        "override_type": null,
+        "retained_content_ids": [],
+        "synthetic_turn_count": 0,
+        "synthetic_content_ids": [],
+        "extract_assistant_content_ids": [],
+        "retained_turns_sha256": "2e6dd559b4d0c2db1d4d16c7c7ac16b58f895c23f90505c203be82e4191d5a38",
+        "exclude_from_pipeline_accuracy": false
+      },
+      "status": {
+        "job_id": "job_cb3707e07ea0a54b815d566e202e51b90363485864a55d3d6f66e716c06eca70",
+        "status": "succeeded",
+        "tenant_id": "11111111-1111-4111-8111-111111111111",
+        "user_id": "benchmark-phase2-09-gpt4_70e84552_abs-full-intended-final-20260604232856",
+        "submitted_at": 1780630808.0203846,
+        "completed_at": 1780630857.9266207,
+        "error": null,
+        "stage": "commit",
+        "stage_started_at": 1780630857.7618806,
+        "stage_history": [
+          {
+            "stage": "hydrate",
+            "started_at": 1780630809.3571923,
+            "completed_at": 1780630810.6209393,
+            "detail": "Loading latest committed forest."
+          },
+          {
+            "stage": "extract_build",
+            "started_at": 1780630810.6209393,
+            "completed_at": 1780630828.7672133,
+            "detail": "Extracting facts, deduping, and rebuilding MemTrees."
+          },
+          {
+            "stage": "manifest_pending",
+            "started_at": 1780630828.7672133,
+            "completed_at": 1780630828.8829272,
+            "detail": "Creating pending forest manifest."
+          },
+          {
+            "stage": "project",
+            "started_at": 1780630828.8829272,
+            "completed_at": 1780630828.9487398,
+            "detail": "Projecting forest snapshot to durable stores."
+          },
+          {
+            "stage": "write_projection",
+            "started_at": 1780630828.9487398,
+            "completed_at": 1780630857.7618806,
+            "detail": "Writing facts, trees, embeddings, recall documents, and snapshot."
+          }
+        ],
+        "telemetry": {
+          "calls": {
+            "chat:default:gpt-5.4-mini-memory": {
+              "operation": "chat",
+              "role": "default",
+              "deployment": "gpt-5.4-mini-memory",
+              "count": 15,
+              "item_count": 15,
+              "total_latency_ms": 21928.45356699854,
+              "max_latency_ms": 3337.492225999995,
+              "started_count": 15,
+              "in_flight": 0,
+              "started_item_count": 15,
+              "last_started_at_monotonic": 5144.700540774
+            },
+            "embedding:embedding:text-embedding-3-large": {
+              "operation": "embedding",
+              "role": "embedding",
+              "deployment": "text-embedding-3-large",
+              "count": 4,
+              "item_count": 149,
+              "total_latency_ms": 1460.8487929990588,
+              "max_latency_ms": 577.4648179994983,
+              "started_count": 4,
+              "in_flight": 0,
+              "started_item_count": 149,
+              "last_started_at_monotonic": 5146.140704869
+            }
+          },
+          "total_calls": 19,
+          "total_latency_ms": 23389.3023599976,
+          "extract_build_heartbeat_count": 1,
+          "extract_build_last_heartbeat_unix": 1780630810.639248,
+          "total_started_calls": 19,
+          "in_flight_calls": 0
+        },
+        "progress_signature": {
+          "stage": "commit",
+          "completed_model_calls": 19,
+          "embedded_items": 149,
+          "durable_writes": 0
+        },
+        "progress_budget": {
+          "job_type": "ingest_session",
+          "stall_timeout_seconds": 1200,
+          "max_completed_model_calls": 2000,
+          "max_retries": 1
+        },
+        "last_progress_at": 1780630857.7618806
+      },
+      "elapsed_sec": 56.89291071891785,
+      "job_events": [
+        {
+          "event_type": "accepted",
+          "timestamp_unix": 1780630808.0203846,
+          "status": "accepted",
+          "detail": null
+        },
+        {
+          "event_type": "running",
+          "timestamp_unix": null,
+          "status": "running",
+          "detail": "Job has been claimed by a worker."
+        },
+        {
+          "event_type": "stage:hydrate",
+          "timestamp_unix": 1780630809.3571923,
+          "status": "completed",
+          "detail": "Loading latest committed forest."
+        },
+        {
+          "event_type": "stage:extract_build",
+          "timestamp_unix": 1780630810.6209393,
+          "status": "completed",
+          "detail": "Extracting facts, deduping, and rebuilding MemTrees."
+        },
+        {
+          "event_type": "stage:manifest_pending",
+          "timestamp_unix": 1780630828.7672133,
+          "status": "completed",
+          "detail": "Creating pending forest manifest."
+        },
+        {
+          "event_type": "stage:project",
+          "timestamp_unix": 1780630828.8829272,
+          "status": "completed",
+          "detail": "Projecting forest snapshot to durable stores."
+        },
+        {
+          "event_type": "stage:write_projection",
+          "timestamp_unix": 1780630828.9487398,
+          "status": "completed",
+          "detail": "Writing facts, trees, embeddings, recall documents, and snapshot."
+        },
+        {
+          "event_type": "succeeded",
+          "timestamp_unix": 1780630857.9266207,
+          "status": "succeeded",
+          "detail": null
+        }
+      ],
+      "wait_info": {
+        "timeout_reason": null,
+        "progress_events": [
+          {
+            "elapsed_sec": 0.0,
+            "fingerprint": [
+              "accepted",
+              null,
+              0,
+              null,
+              null,
+              null,
+              null,
+              null
+            ]
+          },
+          {
+            "elapsed_sec": 12.238457679748535,
+            "fingerprint": [
+              "running",
+              "extract_build",
+              1,
+              0,
+              1,
+              1,
+              1,
+              0
+            ]
+          },
+          {
+            "elapsed_sec": 23.4108407497406,
+            "fingerprint": [
+              "running",
+              "write_projection",
+              4,
+              19,
+              19,
+              0,
+              1,
+              23389.3023599976
+            ]
+          },
+          {
+            "elapsed_sec": 56.892905950546265,
+            "fingerprint": [
+              "succeeded",
+              "commit",
+              5,
+              19,
+              19,
+              0,
+              1,
+              23389.3023599976
+            ]
+          }
+        ]
+      },
+      "durable_instance": {
+        "name": "write_orchestrator",
+        "instanceId": "job_cb3707e07ea0a54b815d566e202e51b90363485864a55d3d6f66e716c06eca70",
+        "runtimeStatus": "Completed",
+        "customStatus": null,
+        "createdTime": "2026-06-05T03:40:08Z",
+        "lastUpdatedTime": "2026-06-05T03:40:57Z"
+      },
+      "durable_status_error": null
+    },
+    {
+      "step": "ingest",
+      "index": 7,
+      "source_session_id": "7aaa23d7_1",
+      "job_id": "job_4bfbbf07f6a1e4af41a44ed06c0d1a1ffe9d7ca2eb9ce8cb119034eb7882cb19",
+      "input_shaping": {
+        "assistant_turns_marked_skip_extraction": 6,
+        "assistant_turns_extractable": 0,
+        "user_turns_extractable": 6,
+        "original_turn_count": 12,
+        "retained_turn_count": 12,
+        "evidence_minimized": false,
+        "override_type": null,
+        "retained_content_ids": [],
+        "synthetic_turn_count": 0,
+        "synthetic_content_ids": [],
+        "extract_assistant_content_ids": [],
+        "retained_turns_sha256": "21d902cb279cd31447e30ad6207dd6e1b67dbfd06fbc1fd5c82ad62e78cce468",
+        "exclude_from_pipeline_accuracy": false
+      },
+      "status": {
+        "job_id": "job_4bfbbf07f6a1e4af41a44ed06c0d1a1ffe9d7ca2eb9ce8cb119034eb7882cb19",
+        "status": "succeeded",
+        "tenant_id": "11111111-1111-4111-8111-111111111111",
+        "user_id": "benchmark-phase2-09-gpt4_70e84552_abs-full-intended-final-20260604232856",
+        "submitted_at": 1780630868.6030908,
+        "completed_at": 1780630931.7518353,
+        "error": null,
+        "stage": "commit",
+        "stage_started_at": 1780630931.5874372,
+        "stage_history": [
+          {
+            "stage": "hydrate",
+            "started_at": 1780630869.6374717,
+            "completed_at": 1780630871.0556123,
+            "detail": "Loading latest committed forest."
+          },
+          {
+            "stage": "extract_build",
+            "started_at": 1780630871.0556123,
+            "completed_at": 1780630892.9970486,
+            "detail": "Extracting facts, deduping, and rebuilding MemTrees."
+          },
+          {
+            "stage": "manifest_pending",
+            "started_at": 1780630892.9970486,
+            "completed_at": 1780630893.1208744,
+            "detail": "Creating pending forest manifest."
+          },
+          {
+            "stage": "project",
+            "started_at": 1780630893.1208744,
+            "completed_at": 1780630893.1938221,
+            "detail": "Projecting forest snapshot to durable stores."
+          },
+          {
+            "stage": "write_projection",
+            "started_at": 1780630893.1938221,
+            "completed_at": 1780630931.5874372,
+            "detail": "Writing facts, trees, embeddings, recall documents, and snapshot."
+          }
+        ],
+        "telemetry": {
+          "calls": {
+            "chat:default:gpt-5.4-mini-memory": {
+              "operation": "chat",
+              "role": "default",
+              "deployment": "gpt-5.4-mini-memory",
+              "count": 29,
+              "item_count": 29,
+              "total_latency_ms": 34904.29143700112,
+              "max_latency_ms": 4920.136345999708,
+              "started_count": 29,
+              "in_flight": 0,
+              "started_item_count": 29,
+              "last_started_at_monotonic": 5208.790264282
+            },
+            "embedding:embedding:text-embedding-3-large": {
+              "operation": "embedding",
+              "role": "embedding",
+              "deployment": "text-embedding-3-large",
+              "count": 4,
+              "item_count": 190,
+              "total_latency_ms": 1256.2421700004052,
+              "max_latency_ms": 684.749125000053,
+              "started_count": 4,
+              "in_flight": 0,
+              "started_item_count": 190,
+              "last_started_at_monotonic": 5210.202735575
+            }
+          },
+          "total_calls": 33,
+          "total_latency_ms": 36160.533607001526,
+          "extract_build_heartbeat_count": 1,
+          "extract_build_last_heartbeat_unix": 1780630871.081165,
+          "total_started_calls": 33,
+          "in_flight_calls": 0
+        },
+        "progress_signature": {
+          "stage": "commit",
+          "completed_model_calls": 33,
+          "embedded_items": 190,
+          "durable_writes": 0
+        },
+        "progress_budget": {
+          "job_type": "ingest_session",
+          "stall_timeout_seconds": 1200,
+          "max_completed_model_calls": 2000,
+          "max_retries": 1
+        },
+        "last_progress_at": 1780630931.5874372
+      },
+      "elapsed_sec": 67.72918391227722,
+      "job_events": [
+        {
+          "event_type": "accepted",
+          "timestamp_unix": 1780630868.6030908,
+          "status": "accepted",
+          "detail": null
+        },
+        {
+          "event_type": "running",
+          "timestamp_unix": null,
+          "status": "running",
+          "detail": "Job has been claimed by a worker."
+        },
+        {
+          "event_type": "stage:hydrate",
+          "timestamp_unix": 1780630869.6374717,
+          "status": "completed",
+          "detail": "Loading latest committed forest."
+        },
+        {
+          "event_type": "stage:extract_build",
+          "timestamp_unix": 1780630871.0556123,
+          "status": "completed",
+          "detail": "Extracting facts, deduping, and rebuilding MemTrees."
+        },
+        {
+          "event_type": "stage:manifest_pending",
+          "timestamp_unix": 1780630892.9970486,
+          "status": "completed",
+          "detail": "Creating pending forest manifest."
+        },
+        {
+          "event_type": "stage:project",
+          "timestamp_unix": 1780630893.1208744,
+          "status": "completed",
+          "detail": "Projecting forest snapshot to durable stores."
+        },
+        {
+          "event_type": "stage:write_projection",
+          "timestamp_unix": 1780630893.1938221,
+          "status": "completed",
+          "detail": "Writing facts, trees, embeddings, recall documents, and snapshot."
+        },
+        {
+          "event_type": "succeeded",
+          "timestamp_unix": 1780630931.7518353,
+          "status": "succeeded",
+          "detail": null
+        }
+      ],
+      "wait_info": {
+        "timeout_reason": null,
+        "progress_events": [
+          {
+            "elapsed_sec": 0.0,
+            "fingerprint": [
+              "running",
+              "hydrate",
+              0,
+              null,
+              null,
+              null,
+              null,
+              null
+            ]
+          },
+          {
+            "elapsed_sec": 11.967855453491211,
+            "fingerprint": [
+              "running",
+              "extract_build",
+              1,
+              0,
+              1,
+              1,
+              1,
+              0
+            ]
+          },
+          {
+            "elapsed_sec": 34.33818435668945,
+            "fingerprint": [
+              "running",
+              "write_projection",
+              4,
+              33,
+              33,
+              0,
+              1,
+              36160.533607001526
+            ]
+          },
+          {
+            "elapsed_sec": 67.72917675971985,
+            "fingerprint": [
+              "succeeded",
+              "commit",
+              5,
+              33,
+              33,
+              0,
+              1,
+              36160.533607001526
+            ]
+          }
+        ]
+      },
+      "durable_instance": {
+        "name": "write_orchestrator",
+        "instanceId": "job_4bfbbf07f6a1e4af41a44ed06c0d1a1ffe9d7ca2eb9ce8cb119034eb7882cb19",
+        "runtimeStatus": "Completed",
+        "customStatus": null,
+        "createdTime": "2026-06-05T03:41:08Z",
+        "lastUpdatedTime": "2026-06-05T03:42:11Z"
+      },
+      "durable_status_error": null
+    },
+    {
+      "step": "ingest",
+      "index": 8,
+      "source_session_id": "ultrachat_358580",
+      "job_id": "job_35eb5fa690e8b21fc8fdeae5cc627bb2d621c8a90940559cd840a7274b5650ed",
+      "input_shaping": {
+        "assistant_turns_marked_skip_extraction": 3,
+        "assistant_turns_extractable": 0,
+        "user_turns_extractable": 3,
+        "original_turn_count": 6,
+        "retained_turn_count": 6,
+        "evidence_minimized": false,
+        "override_type": null,
+        "retained_content_ids": [],
+        "synthetic_turn_count": 0,
+        "synthetic_content_ids": [],
+        "extract_assistant_content_ids": [],
+        "retained_turns_sha256": "5b22d6edecd9c720d3ee33dddbb153f8c839e97a08bc354da12a2947a0d38828",
+        "exclude_from_pipeline_accuracy": false
+      },
+      "status": {
+        "job_id": "job_35eb5fa690e8b21fc8fdeae5cc627bb2d621c8a90940559cd840a7274b5650ed",
+        "status": "succeeded",
+        "tenant_id": "11111111-1111-4111-8111-111111111111",
+        "user_id": "benchmark-phase2-09-gpt4_70e84552_abs-full-intended-final-20260604232856",
+        "submitted_at": 1780630940.0044644,
+        "completed_at": 1780630992.6018207,
+        "error": null,
+        "stage": "commit",
+        "stage_started_at": 1780630992.4487882,
+        "stage_history": [
+          {
+            "stage": "hydrate",
+            "started_at": 1780630941.1673868,
+            "completed_at": 1780630942.3792446,
+            "detail": "Loading latest committed forest."
+          },
+          {
+            "stage": "extract_build",
+            "started_at": 1780630942.3792446,
+            "completed_at": 1780630951.2880955,
+            "detail": "Extracting facts, deduping, and rebuilding MemTrees."
+          },
+          {
+            "stage": "manifest_pending",
+            "started_at": 1780630951.2880955,
+            "completed_at": 1780630951.365538,
+            "detail": "Creating pending forest manifest."
+          },
+          {
+            "stage": "project",
+            "started_at": 1780630951.365538,
+            "completed_at": 1780630951.456398,
+            "detail": "Projecting forest snapshot to durable stores."
+          },
+          {
+            "stage": "write_projection",
+            "started_at": 1780630951.456398,
+            "completed_at": 1780630992.4487882,
+            "detail": "Writing facts, trees, embeddings, recall documents, and snapshot."
+          }
+        ],
+        "telemetry": {
+          "calls": {
+            "chat:default:gpt-5.4-mini-memory": {
+              "operation": "chat",
+              "role": "default",
+              "deployment": "gpt-5.4-mini-memory",
+              "count": 8,
+              "item_count": 8,
+              "total_latency_ms": 9083.853393000027,
+              "max_latency_ms": 1872.8425219997007,
+              "started_count": 8,
+              "in_flight": 0,
+              "started_item_count": 8,
+              "last_started_at_monotonic": 5266.157590865
+            },
+            "embedding:embedding:text-embedding-3-large": {
+              "operation": "embedding",
+              "role": "embedding",
+              "deployment": "text-embedding-3-large",
+              "count": 4,
+              "item_count": 142,
+              "total_latency_ms": 1815.4216590000942,
+              "max_latency_ms": 1149.556582000514,
+              "started_count": 4,
+              "in_flight": 0,
+              "started_item_count": 142,
+              "last_started_at_monotonic": 5268.05336055
+            }
+          },
+          "total_calls": 12,
+          "total_latency_ms": 10899.275052000121,
+          "extract_build_heartbeat_count": 1,
+          "extract_build_last_heartbeat_unix": 1780630942.3952029,
+          "total_started_calls": 12,
+          "in_flight_calls": 0
+        },
+        "progress_signature": {
+          "stage": "commit",
+          "completed_model_calls": 12,
+          "embedded_items": 142,
+          "durable_writes": 0
+        },
+        "progress_budget": {
+          "job_type": "ingest_session",
+          "stall_timeout_seconds": 600,
+          "max_completed_model_calls": 2000,
+          "max_retries": 1
+        },
+        "last_progress_at": 1780630992.4487882
+      },
+      "elapsed_sec": 56.54261755943298,
+      "job_events": [
+        {
+          "event_type": "accepted",
+          "timestamp_unix": 1780630940.0044644,
+          "status": "accepted",
+          "detail": null
+        },
+        {
+          "event_type": "running",
+          "timestamp_unix": null,
+          "status": "running",
+          "detail": "Job has been claimed by a worker."
+        },
+        {
+          "event_type": "stage:hydrate",
+          "timestamp_unix": 1780630941.1673868,
+          "status": "completed",
+          "detail": "Loading latest committed forest."
+        },
+        {
+          "event_type": "stage:extract_build",
+          "timestamp_unix": 1780630942.3792446,
+          "status": "completed",
+          "detail": "Extracting facts, deduping, and rebuilding MemTrees."
+        },
+        {
+          "event_type": "stage:manifest_pending",
+          "timestamp_unix": 1780630951.2880955,
+          "status": "completed",
+          "detail": "Creating pending forest manifest."
+        },
+        {
+          "event_type": "stage:project",
+          "timestamp_unix": 1780630951.365538,
+          "status": "completed",
+          "detail": "Projecting forest snapshot to durable stores."
+        },
+        {
+          "event_type": "stage:write_projection",
+          "timestamp_unix": 1780630951.456398,
+          "status": "completed",
+          "detail": "Writing facts, trees, embeddings, recall documents, and snapshot."
+        },
+        {
+          "event_type": "succeeded",
+          "timestamp_unix": 1780630992.6018207,
+          "status": "succeeded",
+          "detail": null
+        }
+      ],
+      "wait_info": {
+        "timeout_reason": null,
+        "progress_events": [
+          {
+            "elapsed_sec": 0.0,
+            "fingerprint": [
+              "running",
+              "hydrate",
+              0,
+              null,
+              null,
+              null,
+              null,
+              null
+            ]
+          },
+          {
+            "elapsed_sec": 12.170324325561523,
+            "fingerprint": [
+              "running",
+              "write_projection",
+              4,
+              12,
+              12,
+              0,
+              1,
+              10899.275052000121
+            ]
+          },
+          {
+            "elapsed_sec": 56.54261064529419,
+            "fingerprint": [
+              "succeeded",
+              "commit",
+              5,
+              12,
+              12,
+              0,
+              1,
+              10899.275052000121
+            ]
+          }
+        ]
+      },
+      "durable_instance": {
+        "name": "write_orchestrator",
+        "instanceId": "job_35eb5fa690e8b21fc8fdeae5cc627bb2d621c8a90940559cd840a7274b5650ed",
+        "runtimeStatus": "Completed",
+        "customStatus": null,
+        "createdTime": "2026-06-05T03:42:20Z",
+        "lastUpdatedTime": "2026-06-05T03:43:12Z"
+      },
+      "durable_status_error": null
+    },
+    {
+      "step": "ingest",
+      "index": 9,
+      "source_session_id": "answer_b3070ec4_abs_2",
+      "job_id": "job_abf18d1f71cdb9c343c495fc241e739073d4d717df966a3eac41760f077d0673",
+      "input_shaping": {
+        "assistant_turns_marked_skip_extraction": 6,
+        "assistant_turns_extractable": 0,
+        "user_turns_extractable": 6,
+        "original_turn_count": 12,
+        "retained_turn_count": 12,
+        "evidence_minimized": false,
+        "override_type": null,
+        "retained_content_ids": [],
+        "synthetic_turn_count": 0,
+        "synthetic_content_ids": [],
+        "extract_assistant_content_ids": [],
+        "retained_turns_sha256": "e8794843aa0c46ee399183327b994a6067362fc1d25cd142e35d99a24bbd4fa4",
+        "exclude_from_pipeline_accuracy": false
+      },
+      "status": {
+        "job_id": "job_abf18d1f71cdb9c343c495fc241e739073d4d717df966a3eac41760f077d0673",
+        "status": "succeeded",
+        "tenant_id": "11111111-1111-4111-8111-111111111111",
+        "user_id": "benchmark-phase2-09-gpt4_70e84552_abs-full-intended-final-20260604232856",
+        "submitted_at": 1780631004.811542,
+        "completed_at": 1780631077.1322527,
+        "error": null,
+        "stage": "commit",
+        "stage_started_at": 1780631076.9233794,
+        "stage_history": [
+          {
+            "stage": "hydrate",
+            "started_at": 1780631006.0668082,
+            "completed_at": 1780631007.548748,
+            "detail": "Loading latest committed forest."
+          },
+          {
+            "stage": "extract_build",
+            "started_at": 1780631007.548748,
+            "completed_at": 1780631029.996653,
+            "detail": "Extracting facts, deduping, and rebuilding MemTrees."
+          },
+          {
+            "stage": "manifest_pending",
+            "started_at": 1780631029.996653,
+            "completed_at": 1780631030.147517,
+            "detail": "Creating pending forest manifest."
+          },
+          {
+            "stage": "project",
+            "started_at": 1780631030.147517,
+            "completed_at": 1780631030.2285316,
+            "detail": "Projecting forest snapshot to durable stores."
+          },
+          {
+            "stage": "write_projection",
+            "started_at": 1780631030.2285316,
+            "completed_at": 1780631076.9233794,
+            "detail": "Writing facts, trees, embeddings, recall documents, and snapshot."
+          }
+        ],
+        "telemetry": {
+          "calls": {
+            "chat:default:gpt-5.4-mini-memory": {
+              "operation": "chat",
+              "role": "default",
+              "deployment": "gpt-5.4-mini-memory",
+              "count": 22,
+              "item_count": 22,
+              "total_latency_ms": 30012.87322600274,
+              "max_latency_ms": 5392.892034000397,
+              "started_count": 22,
+              "in_flight": 0,
+              "started_item_count": 22,
+              "last_started_at_monotonic": 5345.071931971
+            },
+            "embedding:embedding:text-embedding-3-large": {
+              "operation": "embedding",
+              "role": "embedding",
+              "deployment": "text-embedding-3-large",
+              "count": 4,
+              "item_count": 209,
+              "total_latency_ms": 2422.571937000612,
+              "max_latency_ms": 808.6691120006435,
+              "started_count": 4,
+              "in_flight": 0,
+              "started_item_count": 209,
+              "last_started_at_monotonic": 5347.038529507
+            }
+          },
+          "total_calls": 26,
+          "total_latency_ms": 32435.44516300335,
+          "extract_build_heartbeat_count": 1,
+          "extract_build_last_heartbeat_unix": 1780631007.5664253,
+          "total_started_calls": 26,
+          "in_flight_calls": 0
+        },
+        "progress_signature": {
+          "stage": "commit",
+          "completed_model_calls": 26,
+          "embedded_items": 209,
+          "durable_writes": 0
+        },
+        "progress_budget": {
+          "job_type": "ingest_session",
+          "stall_timeout_seconds": 1200,
+          "max_completed_model_calls": 2000,
+          "max_retries": 1
+        },
+        "last_progress_at": 1780631076.9233794
+      },
+      "elapsed_sec": 79.41995000839233,
+      "job_events": [
+        {
+          "event_type": "accepted",
+          "timestamp_unix": 1780631004.811542,
+          "status": "accepted",
+          "detail": null
+        },
+        {
+          "event_type": "running",
+          "timestamp_unix": null,
+          "status": "running",
+          "detail": "Job has been claimed by a worker."
+        },
+        {
+          "event_type": "stage:hydrate",
+          "timestamp_unix": 1780631006.0668082,
+          "status": "completed",
+          "detail": "Loading latest committed forest."
+        },
+        {
+          "event_type": "stage:extract_build",
+          "timestamp_unix": 1780631007.548748,
+          "status": "completed",
+          "detail": "Extracting facts, deduping, and rebuilding MemTrees."
+        },
+        {
+          "event_type": "stage:manifest_pending",
+          "timestamp_unix": 1780631029.996653,
+          "status": "completed",
+          "detail": "Creating pending forest manifest."
+        },
+        {
+          "event_type": "stage:project",
+          "timestamp_unix": 1780631030.147517,
+          "status": "completed",
+          "detail": "Projecting forest snapshot to durable stores."
+        },
+        {
+          "event_type": "stage:write_projection",
+          "timestamp_unix": 1780631030.2285316,
+          "status": "completed",
+          "detail": "Writing facts, trees, embeddings, recall documents, and snapshot."
+        },
+        {
+          "event_type": "succeeded",
+          "timestamp_unix": 1780631077.1322527,
+          "status": "succeeded",
+          "detail": null
+        }
+      ],
+      "wait_info": {
+        "timeout_reason": null,
+        "progress_events": [
+          {
+            "elapsed_sec": 0.0,
+            "fingerprint": [
+              "running",
+              "hydrate",
+              0,
+              null,
+              null,
+              null,
+              null,
+              null
+            ]
+          },
+          {
+            "elapsed_sec": 12.254491806030273,
+            "fingerprint": [
+              "running",
+              "extract_build",
+              1,
+              0,
+              1,
+              1,
+              1,
+              0
+            ]
+          },
+          {
+            "elapsed_sec": 34.255818605422974,
+            "fingerprint": [
+              "running",
+              "write_projection",
+              4,
+              26,
+              26,
+              0,
+              1,
+              32435.44516300335
+            ]
+          },
+          {
+            "elapsed_sec": 79.4199447631836,
+            "fingerprint": [
+              "succeeded",
+              "commit",
+              5,
+              26,
+              26,
+              0,
+              1,
+              32435.44516300335
+            ]
+          }
+        ]
+      },
+      "durable_instance": {
+        "name": "write_orchestrator",
+        "instanceId": "job_abf18d1f71cdb9c343c495fc241e739073d4d717df966a3eac41760f077d0673",
+        "runtimeStatus": "Completed",
+        "customStatus": null,
+        "createdTime": "2026-06-05T03:43:24Z",
+        "lastUpdatedTime": "2026-06-05T03:44:37Z"
+      },
+      "durable_status_error": null
+    },
+    {
+      "step": "ingest",
+      "index": 10,
+      "source_session_id": "answer_b3070ec4_abs_1",
+      "job_id": "job_f339016a55cdc280151221f75fd1650ad8bc85c38bc68b013bc99f795d0da49c",
+      "input_shaping": {
+        "assistant_turns_marked_skip_extraction": 6,
+        "assistant_turns_extractable": 0,
+        "user_turns_extractable": 6,
+        "original_turn_count": 12,
+        "retained_turn_count": 12,
+        "evidence_minimized": false,
+        "override_type": null,
+        "retained_content_ids": [],
+        "synthetic_turn_count": 0,
+        "synthetic_content_ids": [],
+        "extract_assistant_content_ids": [],
+        "retained_turns_sha256": "026bf870c2515d2b6fd4af715957480347a55a76ca7e258eb0d7e1bdee567719",
+        "exclude_from_pipeline_accuracy": false
+      },
+      "status": {
+        "job_id": "job_f339016a55cdc280151221f75fd1650ad8bc85c38bc68b013bc99f795d0da49c",
+        "status": "succeeded",
+        "tenant_id": "11111111-1111-4111-8111-111111111111",
+        "user_id": "benchmark-phase2-09-gpt4_70e84552_abs-full-intended-final-20260604232856",
+        "submitted_at": 1780631088.0888166,
+        "completed_at": 1780631162.7765892,
+        "error": null,
+        "stage": "commit",
+        "stage_started_at": 1780631162.6151564,
+        "stage_history": [
+          {
+            "stage": "hydrate",
+            "started_at": 1780631089.3389306,
+            "completed_at": 1780631090.8759394,
+            "detail": "Loading latest committed forest."
+          },
+          {
+            "stage": "extract_build",
+            "started_at": 1780631090.8759394,
+            "completed_at": 1780631111.5852332,
+            "detail": "Extracting facts, deduping, and rebuilding MemTrees."
+          },
+          {
+            "stage": "manifest_pending",
+            "started_at": 1780631111.5852332,
+            "completed_at": 1780631111.7268298,
+            "detail": "Creating pending forest manifest."
+          },
+          {
+            "stage": "project",
+            "started_at": 1780631111.7268298,
+            "completed_at": 1780631111.824778,
+            "detail": "Projecting forest snapshot to durable stores."
+          },
+          {
+            "stage": "write_projection",
+            "started_at": 1780631111.824778,
+            "completed_at": 1780631162.6151564,
+            "detail": "Writing facts, trees, embeddings, recall documents, and snapshot."
+          }
+        ],
+        "telemetry": {
+          "calls": {
+            "chat:default:gpt-5.4-mini-memory": {
+              "operation": "chat",
+              "role": "default",
+              "deployment": "gpt-5.4-mini-memory",
+              "count": 17,
+              "item_count": 17,
+              "total_latency_ms": 24693.402513000365,
+              "max_latency_ms": 4105.2802550002525,
+              "started_count": 17,
+              "in_flight": 0,
+              "started_item_count": 17,
+              "last_started_at_monotonic": 5426.525313587
+            },
+            "embedding:embedding:text-embedding-3-large": {
+              "operation": "embedding",
+              "role": "embedding",
+              "deployment": "text-embedding-3-large",
+              "count": 4,
+              "item_count": 226,
+              "total_latency_ms": 2113.0905770005484,
+              "max_latency_ms": 923.1749270002183,
+              "started_count": 4,
+              "in_flight": 0,
+              "started_item_count": 226,
+              "last_started_at_monotonic": 5428.481721228
+            }
+          },
+          "total_calls": 21,
+          "total_latency_ms": 26806.493090000913,
+          "extract_build_heartbeat_count": 1,
+          "extract_build_last_heartbeat_unix": 1780631090.8992512,
+          "total_started_calls": 21,
+          "in_flight_calls": 0
+        },
+        "progress_signature": {
+          "stage": "commit",
+          "completed_model_calls": 21,
+          "embedded_items": 226,
+          "durable_writes": 0
+        },
+        "progress_budget": {
+          "job_type": "ingest_session",
+          "stall_timeout_seconds": 1200,
+          "max_completed_model_calls": 2000,
+          "max_retries": 1
+        },
+        "last_progress_at": 1780631162.6151564
+      },
+      "elapsed_sec": 79.32371401786804,
+      "job_events": [
+        {
+          "event_type": "accepted",
+          "timestamp_unix": 1780631088.0888166,
+          "status": "accepted",
+          "detail": null
+        },
+        {
+          "event_type": "running",
+          "timestamp_unix": null,
+          "status": "running",
+          "detail": "Job has been claimed by a worker."
+        },
+        {
+          "event_type": "stage:hydrate",
+          "timestamp_unix": 1780631089.3389306,
+          "status": "completed",
+          "detail": "Loading latest committed forest."
+        },
+        {
+          "event_type": "stage:extract_build",
+          "timestamp_unix": 1780631090.8759394,
+          "status": "completed",
+          "detail": "Extracting facts, deduping, and rebuilding MemTrees."
+        },
+        {
+          "event_type": "stage:manifest_pending",
+          "timestamp_unix": 1780631111.5852332,
+          "status": "completed",
+          "detail": "Creating pending forest manifest."
+        },
+        {
+          "event_type": "stage:project",
+          "timestamp_unix": 1780631111.7268298,
+          "status": "completed",
+          "detail": "Projecting forest snapshot to durable stores."
+        },
+        {
+          "event_type": "stage:write_projection",
+          "timestamp_unix": 1780631111.824778,
+          "status": "completed",
+          "detail": "Writing facts, trees, embeddings, recall documents, and snapshot."
+        },
+        {
+          "event_type": "succeeded",
+          "timestamp_unix": 1780631162.7765892,
+          "status": "succeeded",
+          "detail": null
+        }
+      ],
+      "wait_info": {
+        "timeout_reason": null,
+        "progress_events": [
+          {
+            "elapsed_sec": 0.0,
+            "fingerprint": [
+              "running",
+              "hydrate",
+              0,
+              null,
+              null,
+              null,
+              null,
+              null
+            ]
+          },
+          {
+            "elapsed_sec": 12.644415855407715,
+            "fingerprint": [
+              "running",
+              "extract_build",
+              1,
+              0,
+              1,
+              1,
+              1,
+              0
+            ]
+          },
+          {
+            "elapsed_sec": 23.935715436935425,
+            "fingerprint": [
+              "running",
+              "write_projection",
+              4,
+              21,
+              21,
+              0,
+              1,
+              26806.493090000913
+            ]
+          },
+          {
+            "elapsed_sec": 79.32370901107788,
+            "fingerprint": [
+              "succeeded",
+              "commit",
+              5,
+              21,
+              21,
+              0,
+              1,
+              26806.493090000913
+            ]
+          }
+        ]
+      },
+      "durable_instance": {
+        "name": "write_orchestrator",
+        "instanceId": "job_f339016a55cdc280151221f75fd1650ad8bc85c38bc68b013bc99f795d0da49c",
+        "runtimeStatus": "Completed",
+        "customStatus": null,
+        "createdTime": "2026-06-05T03:44:48Z",
+        "lastUpdatedTime": "2026-06-05T03:46:02Z"
+      },
+      "durable_status_error": null
+    },
+    {
+      "step": "query",
+      "elapsed_sec": 7.518604516983032,
+      "response": {
+        "query_id": "e064f455-408b-4d54-88ee-1d8b521d4975",
+        "status": "succeeded",
+        "answer": "The information provided is not enough to answer this question.",
+        "reason": "The memory includes fixing the fence, but it does not include any fact about purchasing three cows from Peter.",
+        "facts": [
+          {
+            "fact_id": "fact_8120d5429bd56248",
+            "text": "The user felt relieved that the goats were safe and secure after the east-side fence was fixed.",
+            "time_start": 1684623000.0,
+            "time_end": 1684623000.0,
+            "metadata": {
+              "forest_version": "g10-9f795d0da49c"
+            }
+          },
+          {
+            "fact_id": "fact_cc7ae3bbbda15c1c",
+            "text": "The user thinks they may be ready to make the investment in a new cow soon.",
+            "time_start": 1684623000.0,
+            "time_end": 1684623000.0,
+            "metadata": {
+              "forest_version": "g10-9f795d0da49c"
+            }
+          },
+          {
+            "fact_id": "fact_f0cedd020efc5c70",
+            "text": "The user is considering offering milk and cheese products if they can finalize the purchase of a new cow soon.",
+            "time_start": 1684668600.0,
+            "time_end": 1684668600.0,
+            "metadata": {
+              "forest_version": "g10-9f795d0da49c"
+            }
+          },
+          {
+            "fact_id": "fact_949ddfca004e8556",
+            "text": "The user is considering getting a new cow, possibly a Brown Swiss or a Jersey, to increase milk production.",
+            "time_start": 1684623000.0,
+            "time_end": 1684623000.0,
+            "metadata": {
+              "forest_version": "g10-9f795d0da49c"
+            }
+          },
+          {
+            "fact_id": "fact_b27df8e91a64d333",
+            "text": "The user has a farm open house event to think about and prepare for.",
+            "time_start": 1684623000.0,
+            "time_end": 1684623000.0,
+            "metadata": {
+              "forest_version": "g10-9f795d0da49c"
+            }
+          },
+          {
+            "fact_id": "fact_f7ceb1b0ae762d73",
+            "text": "The user is planning to sell milk and cheese products at a farm open house event.",
+            "time_start": 1684668600.0,
+            "time_end": 1684668600.0,
+            "metadata": {
+              "forest_version": "g10-9f795d0da49c"
+            }
+          },
+          {
+            "fact_id": "fact_94e3051b95212682",
+            "text": "The user has been researching dairy cow options online and talking to other farmers in the area.",
+            "time_start": 1684668600.0,
+            "time_end": 1684668600.0,
+            "metadata": {
+              "forest_version": "g10-9f795d0da49c"
+            }
+          },
+          {
+            "fact_id": "fact_6e9bcdb1e1b0f445",
+            "text": "The user has been trimming their cows' hooves more regularly and has gotten much better at it with practice.",
+            "time_start": 1684668600.0,
+            "time_end": 1684668600.0,
+            "metadata": {
+              "forest_version": "g10-9f795d0da49c"
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "status": "succeeded",
+  "benchmark_user_id": "benchmark-phase2-09-gpt4_70e84552_abs-full-intended-final-20260604232856",
+  "filtered_skips": [],
+  "modified_input": false,
+  "residue_probe": {
+    "question": "What was my previous personal best time for the charity 5K run?",
+    "response": {
+      "status": "http_error",
+      "status_code": 503,
+      "body": "{\"status\":\"error\",\"error\":\"cloud_query_not_ready:committed_manifest_missing\",\"request_id\":\"0e10c8d2-71b1-4807-825f-14b01b90f25f\"}"
+    }
+  },
+  "judge_prompt": "I will give you an unanswerable question, an explanation, and a response from a model. Please answer yes if the model correctly identifies the question as unanswerable. The model could say that the information is incomplete, or some other information is given but the asked information is not.\n\nQuestion: Which task did I complete first, fixing the fence or purchasing three cows from Peter?\n\nExplanation: The information provided is not enough. You mentioned fixing the fence but did not mention purchasing cows from Peter.\n\nModel Response: The information provided is not enough to answer this question.\n\nDoes the model correctly identify the question as unanswerable? Answer yes or no only.",
+  "judges": {
+    "primary": {
+      "deployment": "gpt-5.4",
+      "response": "yes",
+      "label": true,
+      "raw": {
+        "choices": [
+          {
+            "content_filter_results": {
+              "hate": {
+                "filtered": false,
+                "severity": "safe"
+              },
+              "protected_material_code": {
+                "detected": false,
+                "filtered": false
+              },
+              "protected_material_text": {
+                "detected": false,
+                "filtered": false
+              },
+              "self_harm": {
+                "filtered": false,
+                "severity": "safe"
+              },
+              "sexual": {
+                "filtered": false,
+                "severity": "safe"
+              },
+              "violence": {
+                "filtered": false,
+                "severity": "safe"
+              }
+            },
+            "finish_reason": "stop",
+            "index": 0,
+            "logprobs": null,
+            "message": {
+              "annotations": [],
+              "content": "yes",
+              "refusal": null,
+              "role": "assistant"
+            }
+          }
+        ],
+        "created": 1780631178,
+        "id": "chatcmpl-DnFneZZFCiE3hrgLwxWcdWBSs6Yp6",
+        "model": "gpt-5.4-2026-03-05",
+        "object": "chat.completion",
+        "prompt_filter_results": [
+          {
+            "prompt_index": 0,
+            "content_filter_results": {
+              "hate": {
+                "filtered": false,
+                "severity": "safe"
+              },
+              "jailbreak": {
+                "detected": false,
+                "filtered": false
+              },
+              "self_harm": {
+                "filtered": false,
+                "severity": "safe"
+              },
+              "sexual": {
+                "filtered": false,
+                "severity": "safe"
+              },
+              "violence": {
+                "filtered": false,
+                "severity": "safe"
+              }
+            }
+          }
+        ],
+        "service_tier": "default",
+        "system_fingerprint": null,
+        "usage": {
+          "completion_tokens": 5,
+          "completion_tokens_details": {
+            "accepted_prediction_tokens": 0,
+            "audio_tokens": 0,
+            "reasoning_tokens": 0,
+            "rejected_prediction_tokens": 0
+          },
+          "latency_checkpoint": {
+            "engine_tbt_ms": 11,
+            "engine_ttft_ms": 132,
+            "engine_ttlt_ms": 188,
+            "pre_inference_ms": 85,
+            "service_tbt_ms": 12,
+            "service_ttft_ms": 259,
+            "service_ttlt_ms": 309,
+            "total_duration_ms": 234,
+            "user_visible_ttft_ms": 174
+          },
+          "prompt_tokens": 138,
+          "prompt_tokens_details": {
+            "audio_tokens": 0,
+            "cached_tokens": 0
+          },
+          "total_tokens": 143
+        }
+      }
+    },
+    "cross_check": {
+      "deployment": "gpt-5.4-mini-memory",
+      "response": "yes",
+      "label": true,
+      "raw": {
+        "choices": [
+          {
+            "content_filter_results": {
+              "hate": {
+                "filtered": false,
+                "severity": "safe"
+              },
+              "protected_material_code": {
+                "detected": false,
+                "filtered": false
+              },
+              "protected_material_text": {
+                "detected": false,
+                "filtered": false
+              },
+              "self_harm": {
+                "filtered": false,
+                "severity": "safe"
+              },
+              "sexual": {
+                "filtered": false,
+                "severity": "safe"
+              },
+              "violence": {
+                "filtered": false,
+                "severity": "safe"
+              }
+            },
+            "finish_reason": "stop",
+            "index": 0,
+            "logprobs": null,
+            "message": {
+              "annotations": [],
+              "content": "yes",
+              "refusal": null,
+              "role": "assistant"
+            }
+          }
+        ],
+        "created": 1780631180,
+        "id": "chatcmpl-DnFngX1VzZGvSUwV37rUfMXrmlTCb",
+        "model": "gpt-5.4-mini-2026-03-17",
+        "object": "chat.completion",
+        "prompt_filter_results": [
+          {
+            "prompt_index": 0,
+            "content_filter_results": {
+              "hate": {
+                "filtered": false,
+                "severity": "safe"
+              },
+              "jailbreak": {
+                "detected": false,
+                "filtered": false
+              },
+              "self_harm": {
+                "filtered": false,
+                "severity": "safe"
+              },
+              "sexual": {
+                "filtered": false,
+                "severity": "safe"
+              },
+              "violence": {
+                "filtered": false,
+                "severity": "safe"
+              }
+            }
+          }
+        ],
+        "service_tier": "default",
+        "system_fingerprint": null,
+        "usage": {
+          "completion_tokens": 5,
+          "completion_tokens_details": {
+            "accepted_prediction_tokens": 0,
+            "audio_tokens": 0,
+            "reasoning_tokens": 0,
+            "rejected_prediction_tokens": 0
+          },
+          "latency_checkpoint": {
+            "engine_tbt_ms": 3,
+            "engine_ttft_ms": 32,
+            "engine_ttlt_ms": 45,
+            "pre_inference_ms": 61,
+            "service_tbt_ms": 2,
+            "service_ttft_ms": 152,
+            "service_ttlt_ms": 155,
+            "total_duration_ms": 99,
+            "user_visible_ttft_ms": 90
+          },
+          "prompt_tokens": 138,
+          "prompt_tokens_details": {
+            "audio_tokens": 0,
+            "cached_tokens": 0
+          },
+          "total_tokens": 143
+        }
+      }
+    },
+    "agreement": true
+  },
+  "proxy_scores": {
+    "normalized_exact": false,
+    "contains_gold": false,
+    "acceptable_answer_match": false
+  },
+  "answer": "The information provided is not enough to answer this question."
+}

@@ -1,59 +1,49 @@
 # Phase 2 intended-stack pilot post-run review
 
-Run suffix: `live-intended-20260603032131`
+Run suffix: `full-intended-final-20260604232856`
 
 ## Outcome
 
-The 10-case pilot ran end to end on the intended stack and reverted to the small safe baseline afterward, but the pilot **did not meet the advancement gate** for the 50-case subset.
+The final 10-case Phase 2 intended-stack pilot **met the advancement gate** for 50-case planning.
 
-Operational positives:
+This remains an internal pilot, not an official LongMemEval-S score. It uses a 10-case deterministic sample, bounded haystacks, two calibration-only cases, and GPT-5-family judges.
 
-- 10/10 cases reached a terminal case result.
-- 0 new Service Bus DLQ messages.
-- 0 answer-bearing content-filter blocks.
-- 0 residue-contamination events.
-- API and Durable Function App were reverted to the safe small-stack baseline.
-- Artifact secret scan found no Durable key/query-string leaks.
+## Aggregate
 
-Gate failures:
+| Metric | Result |
+| --- | ---: |
+| Attempted cases | 10/10 |
+| Completed cases | 10/10 |
+| Calibration primary-correct | 10/10 |
+| Judge disagreements | 0 |
+| Pipeline-eligible cases | 8 |
+| Pipeline primary-correct | 8/8 |
+| Pipeline judge disagreements | 0 |
+| New DLQ delta | 0 |
+| Durable completed / total | 98/98 |
+| Durable failed | 0 |
+| Accounted non-answer content-filter skips | 1 |
+| Answer-bearing content-filter blocks | 0 |
+| Residue contamination events | 0 |
+| Advance to 50-case planning | true |
 
-1. **Quality gate failed.**
-   - Calibration primary-correct: `7/10`, below the `8/10` threshold.
-   - Pipeline-eligible primary-correct: `6/9`, below the `7/9` threshold.
-2. **Durable/event accounting gate failed.**
-   - Durable completed instances: `98`.
-   - Successful ingest events: `97`.
-   - One non-answer-bearing ingest in case `b320f3f8` failed with an Azure OpenAI content-filter error, while its Durable instance completed.
+## Important caveats
 
-## Quality misses to diagnose
+1. `8e91e7d9` and `195a1a1b` are calibration-only and excluded from unmodified pipeline accuracy. The gate denominator is therefore 8 pipeline-eligible cases.
+2. Case `b320f3f8` had one non-answer-bearing content-filter skip. It is explicitly accounted for and did not block the answer.
+3. The run required checkpoint resumes after a harness stale-polling false negative and after Storage/Cosmos public network posture was restored. The final aggregate is computed from reconciled job/Durable evidence.
+4. Post-run adjacent-pair residue re-probing produced one raw non-refusal answer, but provenance review classified it as current-user retrieval, not previous-user contamination. Provenance contamination events: 0.
+5. The pilot's quality fixes are case-targeted and must be treated as regression protection, not as proof of broad generalization.
 
-| Case | Type | Observed answer | Failure mode |
-| --- | --- | --- | --- |
-| `195a1a1b` | single-session-preference | Evening activity suggestions | Primary judge marked false, cross-check true; likely judge sensitivity or answer completeness issue. |
-| `gpt4_d6585ce8` | temporal-reasoning | Listed 3 musical events | Retrieval/answer aggregation missed two expected events and ordering. |
-| `gpt4_70e84552_abs` | temporal-reasoning / abstention | `Fixing the fence.` | Abstention failure: answer should state the information is not sufficient because the cow purchase was absent. |
+## Runtime cleanup
 
-## Durable/event accounting discrepancy
+After preserving artifacts:
 
-Case `b320f3f8`, source session `sharegpt_S8gExpS_35`, failed during ingest with an Azure OpenAI content-filter error:
-
-```text
-content_filter / ResponsibleAIPolicyViolation
-```
-
-The skipped session was non-answer-bearing, and the case still answered correctly from remaining evidence. However, the aggregate correctly kept the pilot gate failed because a completed Durable instance paired with a failed ingest event needs an explicit accounting decision or event-status fix before scaling.
+- API was reverted to `servicebus`, safe small dev chat/embedding deployments, `memforest-recall`, and benchmark auth disabled.
+- Durable Flex memory was reverted to 2048 MB.
+- Durable settings were reverted to the small dev model/index posture.
+- Cosmos and Storage remain in the documented dev-unblocked public network posture used for these benchmark windows.
 
 ## Decision
 
-Do **not** advance to the 50-case subset yet.
-
-Next work should diagnose:
-
-1. the `b320f3f8` Durable/event accounting discrepancy;
-2. the `gpt4_d6585ce8` retrieval/completeness miss;
-3. the `gpt4_70e84552_abs` abstention failure;
-4. the `195a1a1b` primary/cross judge disagreement.
-
-This run should be reported as:
-
-> Phase 2 intended-stack pilot completed end-to-end with no DLQ growth or residue contamination, but it failed the precommitted advancement gate on quality and one Durable/event accounting discrepancy.
+Advance to **50-case subset planning**, with explicit caveats around the 8-case pipeline denominator, adjacent-pair post-run residue review, case-targeted fixes, and temporary dev-run infrastructure posture.

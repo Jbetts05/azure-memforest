@@ -430,3 +430,49 @@ Decision:
 
 - The temporal-event and abstention fixes are ready for the next full-pilot rerun.
 - The negative-preference fix needs one more targeted validation on the hardened assistant-advice prompt because exact concrete examples were not stable across repeats.
+
+## Final full rerun
+
+Artifact:
+
+- `case_results_full-intended-final-20260604232856/`
+
+Outcome:
+
+- Aggregate status: `succeeded`.
+- Decision field: `advance_to_50_case_subset=true`.
+- 10/10 cases completed.
+- Calibration primary-correct: 10/10.
+- Pipeline primary-correct: 8/8.
+- Judge disagreements: 0.
+- Durable accounting: 98/98 completed, 0 failed.
+- New Service Bus DLQ delta: 0.
+- Accounted non-answer content-filter skips: 1 (`b320f3f8`).
+- Answer-bearing content-filter blocks: 0.
+- Residue contamination events: 0.
+
+Operational notes:
+
+- The run used API image `memforestexampleacr.azurecr.io/azure-memforest-api:0c235c1a36c8` with digest `sha256:d0091a343bdf20248def3fa4485225d2274a22e866e763d557a80453a0c6b26a`.
+- The run used Durable dispatch, hub `MemForestWrites`, GPT-5-family chat/judge deployments, `text-embedding-3-large`, and `memforest-recall-large`.
+- Case `8e91e7d9` required a same-suffix resume after a harness stale-polling false negative: the API job document was still observed as `running`, while Durable had already completed and the API job later reconciled to `succeeded`.
+- Case `195a1a1b` required resumes after Storage and Cosmos public network posture were found reverted to `Disabled`; restoring the documented dev-run public posture unblocked snapshot and job writes.
+- These resumes preserved the same run suffix and artifacts. The final aggregate is computed from reconciled per-case artifacts and Durable/job evidence.
+
+Post-run residue evidence:
+
+- In-run residue probes returned `cloud_query_not_ready:committed_manifest_missing`, so a post-materialization residue re-probe was saved as `case_results_full-intended-final-20260604232856/postrun_residue_reprobe.json`.
+- The post-run re-probe made 9 adjacent-pair cross-case queries.
+- Raw non-refusal events: 1.
+- Provenance-reviewed contamination events: 0.
+- The raw event was for `b320f3f8` answering the previous `195a1a1b` evening-activity question using current-user organization/task-prioritization facts, not the previous user's sleep/device-avoidance facts. The returned facts carried current-user forest version `g8-78d7eb8f9dd7`, distinct from the previous user's observed `g9-37721488cbef` forest version.
+
+Post-run revert:
+
+- API was reverted to `servicebus`, small dev chat/embedding deployments, `memforest-recall`, and benchmark auth disabled.
+- Durable Flex memory was reverted to 2048 MB and Durable app settings were reverted to the small dev model/index posture.
+- Cosmos and Storage remain in the documented dev-unblocked public network posture used for benchmark windows.
+
+Decision:
+
+- Advance to 50-case subset planning, carrying forward the caveats around the 8-case unmodified-pipeline denominator, case-targeted heuristic risk, same-model judge bias, and temporary dev-run infrastructure posture.

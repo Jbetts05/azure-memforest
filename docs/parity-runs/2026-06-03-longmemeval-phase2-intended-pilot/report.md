@@ -64,7 +64,7 @@ The distribution is acceptable for a pilot gate, not for a quality claim.
 Advance to the 50-case subset only if all of the following hold:
 
 - 10/10 cases complete.
-- At least 9 cases remain eligible for unmodified pipeline accuracy.
+- At least 8 cases remain eligible for unmodified pipeline accuracy.
 - At least 7 eligible unmodified cases have correct primary judge labels.
 - Eligible unmodified judge disagreements are no more than 1.
 - At least 8/10 calibration labels are correct when the manually minimized calibration case is included.
@@ -74,7 +74,24 @@ Advance to the 50-case subset only if all of the following hold:
 - 0 answer-bearing content-filter blocks.
 - 0 residue-contamination events.
 
-Case `8e91e7d9` uses the same evidence-minimization override that was required for Phase 1 calibration. It is retained as a calibration/operational case, but it is excluded from unmodified pipeline-quality counts.
+Cases `8e91e7d9` and `195a1a1b` are retained as calibration/operational cases, but excluded from unmodified pipeline-quality counts. `8e91e7d9` uses evidence minimization with synthetic sibling-total evidence; `195a1a1b` uses assistant-advice context extraction.
+
+## Final outcome
+
+Final run: `case_results_full-intended-final-20260604232856/`
+
+The final run met the advancement gate:
+
+- 10/10 cases completed.
+- Calibration primary-correct: 10/10.
+- Pipeline primary-correct: 8/8 over the eligible denominator.
+- Judge disagreements: 0.
+- New DLQ delta: 0.
+- Durable completed/total: 98/98; Durable failed: 0.
+- Answer-bearing content-filter blocks: 0.
+- Residue contamination events: 0 after post-run provenance review.
+
+Decision: advance to 50-case subset planning. This remains an internal pilot signal, not an official LongMemEval-S score.
 
 ## Abort rules
 

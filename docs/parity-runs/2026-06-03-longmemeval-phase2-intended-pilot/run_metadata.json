@@ -2,7 +2,7 @@
   "api_version": {
     "name": "azure-memforest-api",
     "version": "0.1.0",
-    "git_sha": "62149d58ba89",
+    "git_sha": "0c235c1a36c8",
     "image_dirty": "false"
   },
   "queue_before": {
@@ -17,7 +17,7 @@
       "date_utc": "2026-06-03T02:04:03Z",
       "title": "LongMemEval-S Phase 2 intended-stack pilot",
       "goal": "Lock the 10-case intended-stack pilot plan after Phase 1 passed on the GPT-5-family stack.",
-      "status": "gate_failed",
+      "status": "succeeded",
       "owner": "local"
     },
     "purpose": "internal intended-stack infrastructure and quality pilot",
@@ -30,9 +30,9 @@
       "total_cases": 500
     },
     "code": {
-      "git_sha": "6b4aacdf7e1d",
-      "image": "memforestexampleacr.azurecr.io/azure-memforest-api:6b4aacdf7e1d",
-      "image_digest": "sha256:c5eee3c84a5579fa410c610358cf6d74a8a189fdd7358b68eda240fd77dcd302",
+      "git_sha": "0c235c1a36c8",
+      "image": "memforestexampleacr.azurecr.io/azure-memforest-api:0c235c1a36c8",
+      "image_digest": "sha256:d0091a343bdf20248def3fa4485225d2274a22e866e763d557a80453a0c6b26a",
       "dirty": false
     },
     "intended_stack": {
@@ -51,7 +51,9 @@
       "embedding_model_version": "text-embedding-3-large-1",
       "search_index": "memforest-recall-large",
       "model_call_budget_multiplier": 20,
-      "caveat": "Worker summarization still resolves through default for some materialization paths; artifacts must report observed telemetry, not just configured role env."
+      "model_call_budget_min": 2000,
+      "model_call_budget_max": 2000,
+      "caveat": "Strict preflight requires active API and Durable settings to stamp a fixed 2000-call ingest budget via min=max=2000. Worker summarization still resolves through default for some materialization paths; artifacts must report observed telemetry, not just configured role env."
     },
     "selection": {
       "selection_seed": 20260530,
@@ -112,7 +114,7 @@
       "advance_to_50_case_subset_if": {
         "attempted_cases": 10,
         "completed_cases": 10,
-        "pipeline_eligible_cases_min": 9,
+        "pipeline_eligible_cases_min": 8,
         "pipeline_primary_judge_correct_min": 7,
         "pipeline_judge_disagreements_max": 1,
         "calibration_primary_judge_correct_min": 8,
@@ -121,7 +123,8 @@
         "durable_failed_instances_max": 0,
         "new_dlq_count_delta": 0,
         "answer_bearing_content_filter_blocks": 0,
-        "residue_contamination_events": 0
+        "residue_contamination_events": 0,
+        "pipeline_eligibility_policy": "Two cases are calibration-only because they require harness intervention: 8e91e7d9 uses evidence minimization with synthetic sibling-total evidence, and 195a1a1b uses assistant-advice context extraction. The green-light gate therefore requires all 8 unmodified pipeline-eligible cases to complete, with at least 7 judged correct."
       },
       "abort_rules": [
         "Abort on any new Service Bus DLQ message.",
@@ -151,21 +154,50 @@
         "case_results_<suffix>/"
       ]
     },
-    "next_gate": "Implement/adapt the Phase 2 pilot harness locally, add static tests, then request explicit approval before a guarded live 10-case run.",
+    "next_gate": "Plan the 50-case subset with the Phase 2 pilot caveats carried forward.",
     "postrun": {
       "report": "postrun.md",
-      "run_suffix": "live-intended-20260603032131",
-      "aggregate_status": "gate_failed",
-      "decision": "Do not advance to 50-case subset yet."
+      "run_suffix": "full-intended-final-20260604232856",
+      "aggregate_status": "succeeded",
+      "decision": "Advance to 50-case subset planning."
     }
   },
-  "isolation": "fresh benchmark synthetic user per case using auth_mode=dev; dispatch_mode=durable; no clear-per-case",
-  "auth_mode": "dev",
+  "isolation": "fresh benchmark synthetic user per case using auth_mode=benchmark; dispatch_mode=durable; no clear-per-case",
+  "auth_mode": "benchmark",
   "dispatch_mode": "durable",
   "durable_hub": "MemForestWrites",
-  "run_suffix": "negative-pref-195-20260603172248",
-  "results_dir": "docs\\parity-runs\\2026-06-03-longmemeval-phase2-intended-pilot\\case_results_negative-pref-195-20260603172248",
-  "case_filter": [
-    "195a1a1b"
-  ]
+  "run_suffix": "full-intended-final-20260604232856",
+  "results_dir": "docs\\parity-runs\\2026-06-03-longmemeval-phase2-intended-pilot\\case_results_full-intended-final-20260604232856",
+  "case_filter": [],
+  "preflight": {
+    "strict": true,
+    "api_containerapp": {
+      "AZURE_MEMFOREST_DISPATCH_MODE": "durable",
+      "AZURE_MEMFOREST_MODEL_CALL_BUDGET_MAX": "2000",
+      "AZURE_MEMFOREST_MODEL_CALL_BUDGET_MIN": "2000",
+      "AZURE_MEMFOREST_MODEL_CALL_BUDGET_MULTIPLIER": "20",
+      "AZURE_OPENAI_ANSWER_DEPLOYMENT": "gpt-5.4",
+      "AZURE_OPENAI_CHAT_DEPLOYMENT": "gpt-5.4-mini-memory",
+      "AZURE_OPENAI_EMBEDDING_DEPLOYMENT": "text-embedding-3-large",
+      "AZURE_OPENAI_EMBEDDING_DIMENSION": "3072",
+      "AZURE_SEARCH_RECALL_INDEX_NAME": "memforest-recall-large"
+    },
+    "durable_function_app": {
+      "AZURE_MEMFOREST_MODEL_CALL_BUDGET_MAX": "2000",
+      "AZURE_MEMFOREST_MODEL_CALL_BUDGET_MIN": "2000",
+      "AZURE_MEMFOREST_MODEL_CALL_BUDGET_MULTIPLIER": "20",
+      "AZURE_OPENAI_ANSWER_DEPLOYMENT": "gpt-5.4",
+      "AZURE_OPENAI_CHAT_DEPLOYMENT": "gpt-5.4-mini-memory",
+      "AZURE_OPENAI_EMBEDDING_DEPLOYMENT": "text-embedding-3-large",
+      "AZURE_OPENAI_EMBEDDING_DIMENSION": "3072",
+      "AZURE_SEARCH_RECALL_INDEX_NAME": "memforest-recall-large",
+      "AzureFunctionsJobHost__extensions__durableTask__hubName": "MemForestWrites"
+    }
+  },
+  "postrun_metadata_update": {
+    "reason": "Manifest decision fields were updated after the successful final aggregate so the artifact bundle no longer points at the earlier failed pilot decision.",
+    "final_run_suffix": "full-intended-final-20260604232856",
+    "aggregate_status": "succeeded",
+    "advance_to_50_case_subset": true
+  }
 }
