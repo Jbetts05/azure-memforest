@@ -410,6 +410,7 @@ def turns_for_ingest(session: dict, *, case_id: str = "") -> tuple[list[dict], d
     retained_ids = set(override.get("retained_content_ids") or []) if override else set()
     extract_assistant_ids = set(override.get("extract_assistant_content_ids") or []) if override else set()
     assistant_advice_metadata = dict(override.get("assistant_advice_metadata") or {}) if override else {}
+    session_date = str((session.get("metadata") or {}).get("date") or "").strip()
     shaped: list[dict] = []
     assistant_skip_count = 0
     assistant_extract_count = 0
@@ -426,6 +427,8 @@ def turns_for_ingest(session: dict, *, case_id: str = "") -> tuple[list[dict], d
     ).hexdigest()
     for turn in source_turns:
         copied = dict(turn)
+        if session_date and not any(copied.get(key) for key in ("timestamp", "time_stamp", "session_time")):
+            copied["timestamp"] = session_date
         metadata = dict(copied.get("metadata") or {})
         if copied.get("role") == "assistant":
             if copied.get("content_id") in extract_assistant_ids:

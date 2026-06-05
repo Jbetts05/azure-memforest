@@ -336,6 +336,25 @@ def test_phase2_harness_can_extract_explicit_assistant_advice_override(monkeypat
     assert stats["extract_assistant_content_ids"] == ["answer_6dc4305e:5"]
 
 
+def test_phase2_turns_for_ingest_backfills_turn_timestamp_from_session_date(monkeypatch) -> None:
+    harness = _load_harness(monkeypatch)
+
+    turns, _stats = harness.turns_for_ingest(
+        {
+            "source_session_id": "session-1",
+            "metadata": {"date": "2023/04/25 (Tue) 10:21"},
+            "turns": [
+                {"role": "user", "content_id": "turn-1", "content": "I have 1250 followers.", "metadata": {}},
+                {"role": "user", "content_id": "turn-2", "content": "I have 1300 now.", "timestamp": "2023/05/01 (Mon) 22:56"},
+            ],
+        },
+        case_id="case-1",
+    )
+
+    assert turns[0]["timestamp"] == "2023/04/25 (Tue) 10:21"
+    assert turns[1]["timestamp"] == "2023/05/01 (Mon) 22:56"
+
+
 def test_phase2_judge_uses_non_tiny_token_budget(monkeypatch) -> None:
     harness = _load_harness(monkeypatch)
     captured = {}
