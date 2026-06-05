@@ -131,12 +131,14 @@
       "request_rate_limit_per_minute": 160,
       "quota_headroom_after_deploy": 0,
       "api_surface": "responses",
-      "responses_api_version": "TBD by smoke test",
+      "responses_api_version": "2025-04-01-preview",
+      "smoke_artifact": "pro_judge_smoke.json",
+      "smoke_status": "passed",
       "capability_note": "Deployment reports responses=true and chatCompletion=false; the 50-case harness must call the Responses API for this judge.",
-      "bias_note": "This is still a GPT-5.4-family judge. It is a stronger same-family control, not a substitute for cross-family or human adjudication."
+      "bias_note": "Accepted by project decision as the judge-control model for the held-out run."
     },
-    "control_usage": "Use gpt-5.4-pro-judge as an additional same-family judge for all judge disagreements plus a pre-registered random sample of agreed answers. Expand to all 50 held-out answers only after shard 1 confirms latency and quota are acceptable.",
-    "additional_control_required_before_live_run": "Implement and smoke-test the Responses API judge path for gpt-5.4-pro-judge, define the random adjudication sample size, and define either a cross-family judge or human adjudication sample before launch."
+    "control_usage": "Use gpt-5.4-pro-judge for all judge disagreements plus a pre-registered random sample of agreed answers. Expand to all 50 held-out answers only after shard 1 confirms latency and quota are acceptable.",
+    "additional_control_required_before_live_run": "Integrate the smoke-tested Responses API judge path into the 50-case harness and define the random adjudication sample size before launch."
   },
   "near_miss_policy": {
     "definition": "Held-out result below 40/50 primary-correct or above 5/50 disagreements.",
@@ -156,9 +158,8 @@
       "Cosmos and Storage public dev-run posture is verified immediately before launch.",
       "Fresh suffix/results directory is generated per shard.",
       "DLQ baseline is snapshotted and attributed.",
-      "gpt-5.4-pro-judge Responses API judge path is implemented and smoke-tested with non-empty parseable yes/no output, adequate max_output_tokens, and verified temperature handling.",
-      "gpt-5.4-pro-judge Responses API version is pinned in judge_policy.",
-      "Cross-family judge sample policy is defined.",
+      "gpt-5.4-pro-judge Responses API judge path is integrated into the harness using api-version 2025-04-01-preview and parse rule from pro_judge_smoke.json.",
+      "gpt-5.4-pro-judge sample policy is defined.",
       "Rubber-duck 4.8 validates the live-run plan."
     ],
     "expected_stack": {

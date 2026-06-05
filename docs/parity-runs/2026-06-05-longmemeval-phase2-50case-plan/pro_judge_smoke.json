@@ -1,0 +1,34 @@
+{
+  "deployment": "gpt-5.4-pro-judge",
+  "resource": "memforestexampleopenai",
+  "resource_group": "azure-memforest",
+  "region": "eastus2",
+  "endpoint": "https://memforestexampleopenai.openai.azure.com/",
+  "api_surface": "responses",
+  "api_version": "2025-04-01-preview",
+  "capacity": 160,
+  "token_rate_limit_per_minute": 160000,
+  "request_rate_limit_per_minute": 160,
+  "smoke_results": [
+    {
+      "prompt": "Answer yes or no only: Is 2 + 2 equal to 4?",
+      "status": "completed",
+      "text": "Yes",
+      "label": true,
+      "total_tokens": 28,
+      "output_tokens": 5,
+      "reasoning_tokens": 0
+    },
+    {
+      "prompt": "Answer yes or no only: Is 2 + 2 equal to 5?",
+      "status": "completed",
+      "text": "No",
+      "label": false,
+      "total_tokens": 59,
+      "output_tokens": 36,
+      "reasoning_tokens": 29
+    }
+  ],
+  "parse_rule": "Concatenate output_text content from response.output[].content[] and parse yes/no from visible text.",
+  "result": "passed"
+}
