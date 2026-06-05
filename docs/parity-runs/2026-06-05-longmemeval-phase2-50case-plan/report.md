@@ -68,6 +68,7 @@ For the held-out 50:
 - Judge disagreements at most 10% (`<=5/50`).
 - 0 new DLQ messages.
 - 0 Durable failed instances.
+- 0 raw non-refusal residue responses.
 - Durable accounting gate passes.
 - 0 provenance residue contamination events.
 
@@ -88,11 +89,12 @@ For the held-out 50:
 | Token rate limit | `160000 TPM` |
 | Request rate limit | `160 RPM` |
 | Responses API version | `2025-04-01-preview` |
+| Harness max output tokens | `2048` |
 | Smoke artifact | `pro_judge_smoke.json` |
 
-The deployment reports `responses=true` and `chatCompletion=false`, so the 50-case harness must call the Responses API for this judge. Smoke testing passed with parseable `Yes` and `No` outputs. Use it first for all judge disagreements plus a pre-registered random sample of agreed answers. Expand to all 50 held-out answers only after shard 1 confirms latency and quota are acceptable.
+The deployment reports `responses=true` and `chatCompletion=false`, so the 50-case harness must call the Responses API for this judge. Smoke testing passed with parseable `Yes` and `No` outputs. The harness uses a larger output budget for reasoning headroom and fails loudly on incomplete or empty visible outputs. Use it first for all judge disagreements plus a deterministic pre-registered sample of agreed answers. The default sample is 2 agreed answers per shard via `PHASE2_50_PRO_JUDGE_SAMPLE_SIZE`. Expand to all 50 held-out answers only after shard 1 confirms latency and quota are acceptable.
 
-This deployment consumes the available East US 2 `gpt-5.4-pro` GlobalStandard quota (`160K TPM`), leaving no quota headroom for capacity increases without a quota request. Project decision: `gpt-5.4-pro-judge` is acceptable as the judge-control model for the held-out run.
+This deployment consumes the available East US 2 `gpt-5.4-pro` GlobalStandard quota (`160K TPM`), leaving no quota headroom for capacity increases without a quota request. Project decision: `gpt-5.4-pro-judge` is acceptable as the judge-control model for the held-out run. Before broadening the pro-judge sample beyond the default, run at least one long prompt smoke to confirm the `2048` output-token budget leaves enough reasoning headroom.
 
 A near miss below `40/50` primary-correct, or above `5/50` disagreements, is a no-go for scaling. Preserve the failed artifact and perform root-cause analysis; do not renegotiate caps, thresholds, selection, or denominator after seeing results.
 
@@ -115,7 +117,7 @@ For the held-out run:
 - Run post-materialization residue probes for every adjacent pair and every shard boundary.
 - Capture machine-readable provenance for raw non-refusal responses.
 - Manual reclassification is not allowed for gate pass/fail.
-- Any raw non-refusal must be cleared by the pre-registered automated provenance rule.
+- For this first held-out run, any raw non-refusal residue response fails the gate. Provenance fields are still captured for diagnosis.
 
 ## Caveats
 

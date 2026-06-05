@@ -109,6 +109,7 @@
       "durable_failed_instances_max": 0,
       "durable_gate_passed": true,
       "answer_bearing_content_filter_blocks": 0,
+      "residue_raw_nonrefusal_events": 0,
       "residue_provenance_contamination_events": 0,
       "no_mid_run_runtime_posture_changes": true
     }
@@ -132,13 +133,14 @@
       "quota_headroom_after_deploy": 0,
       "api_surface": "responses",
       "responses_api_version": "2025-04-01-preview",
+      "max_output_tokens": 2048,
       "smoke_artifact": "pro_judge_smoke.json",
       "smoke_status": "passed",
       "capability_note": "Deployment reports responses=true and chatCompletion=false; the 50-case harness must call the Responses API for this judge.",
       "bias_note": "Accepted by project decision as the judge-control model for the held-out run."
     },
-    "control_usage": "Use gpt-5.4-pro-judge for all judge disagreements plus a pre-registered random sample of agreed answers. Expand to all 50 held-out answers only after shard 1 confirms latency and quota are acceptable.",
-    "additional_control_required_before_live_run": "Integrate the smoke-tested Responses API judge path into the 50-case harness and define the random adjudication sample size before launch."
+    "control_usage": "Use gpt-5.4-pro-judge for all judge disagreements plus a deterministic pre-registered random sample of agreed answers. Default sample size is 2 cases per shard via PHASE2_50_PRO_JUDGE_SAMPLE_SIZE. Expand to all 50 held-out answers only after shard 1 confirms latency and quota are acceptable.",
+    "additional_control_required_before_live_run": "Use the smoke-tested Responses API judge path for gpt-5.4-pro-judge and confirm PHASE2_50_PRO_JUDGE_SAMPLE_SIZE before launch."
   },
   "near_miss_policy": {
     "definition": "Held-out result below 40/50 primary-correct or above 5/50 disagreements.",
@@ -146,7 +148,7 @@
   },
   "residue_policy": {
     "scope": "Post-materialization probes for every adjacent pair in the continuous held-out execution order, every shard boundary pair, and regression/held-out boundary pairs if the cohorts share one run window.",
-    "automation_requirement": "Every raw non-refusal response must include machine-readable provenance fields. A response is contamination if it uses prior-user facts, prior-user forest versions, or answer content from the probed prior case.",
+    "automation_requirement": "Every raw non-refusal response fails the first held-out run gate. Machine-readable provenance fields must still be captured to diagnose whether the event is current-user retrieval or prior-user contamination.",
     "manual_reclassification_allowed_for_gate": false,
     "artifact_required": "postrun_residue_reprobe.json with raw_nonrefusal_events and provenance_contamination_events"
   },
@@ -158,8 +160,8 @@
       "Cosmos and Storage public dev-run posture is verified immediately before launch.",
       "Fresh suffix/results directory is generated per shard.",
       "DLQ baseline is snapshotted and attributed.",
-      "gpt-5.4-pro-judge Responses API judge path is integrated into the harness using api-version 2025-04-01-preview and parse rule from pro_judge_smoke.json.",
-      "gpt-5.4-pro-judge sample policy is defined.",
+      "gpt-5.4-pro-judge Responses API judge path is integrated into the harness using api-version 2025-04-01-preview, max_output_tokens 2048, and parse rule from pro_judge_smoke.json. Incomplete or empty visible outputs fail loudly.",
+      "gpt-5.4-pro-judge sample policy is defined; default is 2 agreed-answer samples per shard.",
       "Rubber-duck 4.8 validates the live-run plan."
     ],
     "expected_stack": {
