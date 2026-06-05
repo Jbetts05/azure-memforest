@@ -25,6 +25,7 @@ from src.observability import TraceEvent, TraceEventType
 from src.prompt.answer_prompts import ANSWER_SYSTEM_CLOUD as ANSWER_SYSTEM, build_answer_user_message
 from src.service.auth import ActorContext
 from src.service.schemas import MemoryFactResponse, QueryRequest, QueryResponse
+from src.utils.time import render_time_text
 
 log = logging.getLogger(__name__)
 
@@ -223,7 +224,8 @@ class CloudMemoryQueryService:
                 facts = _merge_preference_activity_facts(preference_activity_facts, facts, max_facts=max_facts)
             else:
                 facts = facts[:max_facts]
-        answer, reason = await self._compose_answer(request.question, facts)
+        _validate_retrieved_fact_temporality(facts)
+        answer, reason = await self._compose_answer(request.question, facts, request.query_time)
         if answer:
             events.append(
                 TraceEvent(
@@ -266,10 +268,13 @@ class CloudMemoryQueryService:
             ],
         )
 
-    async def _compose_answer(self, question: str, facts: list[Any]) -> tuple[str | None, str | None]:
+    async def _compose_answer(self, question: str, facts: list[Any], query_time: float | None = None) -> tuple[str | None, str | None]:
         if not self._config.compose_answer or not facts:
             return None, None
         context = _facts_context(facts)
+        reference_date = _reference_date(query_time, facts)
+        if reference_date:
+            context = f"[Reference date: {reference_date}]\n{context}"
         user_prompt = build_answer_user_message(question, context)
         try:
             payload = await self._generate_answer_json(user_prompt)
@@ -681,18 +686,53 @@ def _fact_time(fact: Any) -> float | None:
     candidates = [getattr(fact, "time_end", None), getattr(fact, "time_start", None)]
     for occurrence in getattr(fact, "occurrences", []) or []:
         candidates.extend([getattr(occurrence, "time_end", None), getattr(occurrence, "time_start", None)])
-    numeric = [float(value) for value in candidates if value is not None]
+    numeric = [float(value) for value in candidates if value is not None and float(value) > 0]
     return max(numeric) if numeric else None
 
 
 def _facts_context(facts: list[Any]) -> str:
     lines = []
     for index, fact in enumerate(facts, start=1):
-        prefix = ""
-        if getattr(fact, "time_start", None) is not None:
-            prefix = f"[time_start={fact.time_start}] "
+        prefix = _render_fact_time_prefix(fact)
         lines.append(f"{index}. {prefix}{fact.fact_text}")
     return "\n".join(lines)
+
+
+def _validate_retrieved_fact_temporality(facts: list[Any]) -> None:
+    for fact in facts:
+        fact_id = str(getattr(fact, "fact_id", ""))
+        if _positive_float(getattr(fact, "time_start", None)) is None or _positive_float(getattr(fact, "time_end", None)) is None:
+            raise ValueError(f"retrieved fact {fact_id} is missing required temporal metadata.")
+
+
+def _reference_date(query_time: float | None, facts: list[Any]) -> str:
+    time_value = _positive_float(query_time)
+    if time_value is None:
+        fact_times = [_fact_time(fact) for fact in facts]
+        valid_times = [value for value in fact_times if value is not None]
+        if not valid_times:
+            return ""
+        time_value = max(valid_times)
+    return render_time_text(time_value)
+
+
+def _render_fact_time_prefix(fact: Any) -> str:
+    start = _positive_float(getattr(fact, "time_start", None))
+    end = _positive_float(getattr(fact, "time_end", None))
+    if start is None:
+        return ""
+    if end is None or end == start:
+        return f"[{render_time_text(start)}] "
+    return f"[{render_time_text(start)} to {render_time_text(end)}] "
+
+
+def _positive_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    value = float(value)
+    if value <= 0:
+        return None
+    return value
 
 
 def _stored_fact_embedding(fact: Any) -> list[float] | None:

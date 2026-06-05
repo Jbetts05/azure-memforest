@@ -78,6 +78,30 @@ def _fact(fact_id="fact-1") -> ManagedFact:
     )
 
 
+def _dateless_fact(fact_id="fact-1") -> ManagedFact:
+    fact = _fact(fact_id)
+    return ManagedFact(
+        **{
+            **fact.__dict__,
+            "occurrences": [
+                FactOccurrence(
+                    session_id="session-1",
+                    cell_id="cell-1",
+                    item_id="item-1",
+                    source_turn_ids=["turn-1"],
+                    source_spans=["span"],
+                    participants=["Bob"],
+                    time_text="",
+                    time_start=None,
+                    time_end=None,
+                )
+            ],
+            "time_start": None,
+            "time_end": None,
+        }
+    )
+
+
 def _text_fact(fact_id: str, text: str, time_value: float) -> ManagedFact:
     fact = _fact(fact_id)
     return ManagedFact(
@@ -112,6 +136,30 @@ async def test_cosmos_fact_store_round_trips_managed_fact() -> None:
 
     assert fact == _fact()
     assert fact.occurrences[0].source_turn_ids == ["turn-1"]
+
+
+@pytest.mark.asyncio
+async def test_cosmos_fact_store_rejects_dateless_facts() -> None:
+    store = CosmosFactStore(FakeContainer(), tenant_id="tenant-1", user_id="user-1")
+
+    with pytest.raises(ValueError, match="missing required temporal metadata"):
+        await store.upsert_facts([_dateless_fact()])
+
+
+@pytest.mark.asyncio
+async def test_cosmos_fact_store_rejects_legacy_dateless_documents_on_read() -> None:
+    container = FakeContainer()
+    store = CosmosFactStore(container, tenant_id="tenant-1", user_id="user-1")
+    await store.upsert_facts([_fact()])
+    stored = next(iter(container.items.values()))
+    stored["time_start"] = None
+    stored["time_end"] = None
+    stored["occurrences"][0]["time_start"] = None
+    stored["occurrences"][0]["time_end"] = None
+    container.items[(stored["tenant_user_key"], stored["id"])] = stored
+
+    with pytest.raises(ValueError, match="missing required temporal metadata"):
+        await store.get_fact("fact-1")
 
 
 @pytest.mark.asyncio

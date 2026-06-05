@@ -23,8 +23,8 @@ def normalize_turns(session_id: str, turns: Sequence[dict[str, Any]]) -> list[No
             continue
         timestamp_raw = turn.get("timestamp") or turn.get("time_stamp") or turn.get("session_time")
         if timestamp_raw is None:
-            timestamp_unix = float(idx)
-            timestamp_text = render_time_text(timestamp_unix)
+            timestamp_unix = 0.0
+            timestamp_text = ""
         else:
             timestamp_unix = parse_timestamp_to_unix(timestamp_raw)
             timestamp_text = str(timestamp_raw)

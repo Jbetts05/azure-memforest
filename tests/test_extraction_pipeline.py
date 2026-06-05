@@ -26,6 +26,52 @@ class QuantityDroppingBackend:
         }
 
 
+class ZeroTimeBackend:
+    def generate_json(self, **kwargs):
+        return {
+            "cell_summary": "The user stated a timed fact.",
+            "memory_items": [
+                {
+                    "fact_text": "The user has 1300 followers on Instagram.",
+                    "participants": ["user"],
+                    "origin": "user",
+                    "semantic_role": "state",
+                    "entities": ["user"],
+                    "topics": ["social media"],
+                    "time_text": "",
+                    "time_start": 0,
+                    "time_end": 0,
+                    "attribute_keys": [],
+                    "domain_keys": [],
+                    "collection_keys": [],
+                }
+            ],
+        }
+
+
+def test_extraction_pipeline_falls_back_to_cell_dates_for_zero_llm_times() -> None:
+    pipeline = ChunkExtractionPipeline(backend=ZeroTimeBackend())
+
+    result = pipeline.extract_session(
+        "session-1",
+        [
+            {
+                "role": "user",
+                "content_id": "turn-1",
+                "content": "I have close to 1300 followers on Instagram now.",
+                "timestamp": "2023/05/25 (Thu) 09:28",
+            }
+        ],
+    )
+
+    [item] = result.memory_items
+    [cell] = result.cells
+    assert item.time_start == cell.time_start
+    assert item.time_end == cell.time_end
+    assert item.time_start and item.time_start > 0
+    assert "2023" in item.time_text
+
+
 def test_extraction_pipeline_supplements_countable_collection_quantities() -> None:
     pipeline = ChunkExtractionPipeline(backend=QuantityDroppingBackend())
 

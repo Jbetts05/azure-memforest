@@ -305,6 +305,7 @@ class ForestQuery:
         if result.session_date:
             lines.append(f"[Reference date: {result.session_date}]\n")
 
+        _validate_retrieved_fact_temporality(result.top_facts)
         lines.append(f"Retrieved {len(result.top_facts)} memory facts:\n")
         for i, fact in enumerate(result.top_facts, 1):
             time_tag = _render_fact_time_tag(fact.time_start, fact.time_end)
@@ -522,7 +523,7 @@ def _extract_session_date(session_alias_map: dict) -> str | None:
 
 
 def _render_fact_time_tag(time_start: float | None, time_end: float | None) -> str:
-    if time_start is None:
+    if time_start is None or float(time_start) <= 0:
         return ""
     from src.utils.time import render_time_text
 
@@ -530,13 +531,28 @@ def _render_fact_time_tag(time_start: float | None, time_end: float | None) -> s
         start_text = render_time_text(time_start)
     except (ValueError, OverflowError, OSError):
         return ""
-    if time_end is None or float(time_end) == float(time_start):
+    if time_end is None or float(time_end) <= 0 or float(time_end) == float(time_start):
         return f" [{start_text}]"
     try:
         end_text = render_time_text(time_end)
     except (ValueError, OverflowError, OSError):
         return f" [{start_text}]"
     return f" [{start_text} -> {end_text}]"
+
+
+def _validate_retrieved_fact_temporality(facts: list["ManagedFact"]) -> None:
+    for fact in facts:
+        if _positive_time(fact.time_start) is None or _positive_time(fact.time_end) is None:
+            raise ValueError(f"retrieved fact {fact.fact_id} is missing required temporal metadata.")
+
+
+def _positive_time(value: float | None) -> float | None:
+    if value is None:
+        return None
+    value = float(value)
+    if value <= 0:
+        return None
+    return value
 
 
 def _elapsed_ms(start: float) -> float:

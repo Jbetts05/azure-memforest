@@ -39,8 +39,8 @@ Output JSON schema:
       "entities": ["important named entities"],
       "topics": ["2-5 short topical labels for scene routing"],
       "time_text": "dual format: relative time (absolute date), e.g. 'last week (March 1, 2023)'",
-      "time_start": 0,
-      "time_end": 0,
+      "time_start": null,
+      "time_end": null,
       "attribute_keys": ["stable attributes: job_title, city, phone_model, etc."],
       "domain_keys": ["domains: food, travel, finance, fitness, etc."],
       "collection_keys": ["grouping keys for repeatable/countable items"]
@@ -90,7 +90,7 @@ Item rules:
 Time rules:
 - Use the cell time span header as observation provenance and as the base time for resolving explicit relative references.
 - For relative times, use dual format in time_text: "last week (March 1, 2023)".
-- Use UTC unix seconds for time_start/time_end as observation/provenance when no explicit validity date exists; null if unresolvable.
+- Leave time_start/time_end null unless an explicit absolute time is present and already machine-resolvable from the cell; the pipeline will attach the cell time span as observation provenance.
 
 Facet rules:
 - `topics`: at most {max_topics_per_item}. Scene-style routing labels.

@@ -125,6 +125,8 @@ class FakeFactStore:
                 first_session_id="s1",
                 first_cell_id="c1",
                 metadata={"embedding": [0.1, 1.0] if fact_id == "fact-a" else [1.0, 0.0]} if self.include_embeddings else {},
+                time_start=1685006880.0,
+                time_end=1685006880.0,
             )
             for fact_id in fact_ids
         ]
@@ -149,6 +151,8 @@ class FakeSiblingFactStore:
                 first_session_id="s1",
                 first_cell_id="c1",
                 metadata={"embedding": [1.0, 0.0]},
+                time_start=1685006880.0,
+                time_end=1685006880.0,
             )
             for fact_id in fact_ids
         ]
@@ -249,6 +253,32 @@ class FakePreferenceActivityFactStore:
 
     async def get_facts(self, fact_ids):
         return [self.facts[fact_id] for fact_id in fact_ids if fact_id in self.facts]
+
+
+class FakeDatelessFactStore:
+    async def get_facts(self, fact_ids):
+        return [
+            ManagedFact(
+                fact_id=fact_id,
+                fact_text=f"Text for {fact_id}",
+                embedding_id="",
+                origin="",
+                semantic_role="state",
+                entities=[],
+                topics=[],
+                attribute_keys=[],
+                domain_keys=[],
+                collection_keys=[],
+                detail_level="specific",
+                confidence=1.0,
+                first_session_id="s1",
+                first_cell_id="c1",
+                metadata={"embedding": [1.0, 0.0]},
+                time_start=None,
+                time_end=None,
+            )
+            for fact_id in fact_ids
+        ]
 
 
 class FakePreferenceTreeStore:
@@ -386,6 +416,16 @@ async def test_cloud_query_handles_leaf_recall_candidate() -> None:
     )
 
     assert [fact.fact_id for fact in response.facts] == ["fact-b"]
+
+
+@pytest.mark.asyncio
+async def test_cloud_query_rejects_retrieved_dateless_facts() -> None:
+    with pytest.raises(ValueError, match="missing required temporal metadata"):
+        await _service(_manifest(), fact_store=FakeDatelessFactStore()).query(
+            ActorContext(actor_id="user-1", tenant=TenantContext("tenant-1")),
+            user_id="user-1",
+            request=QueryRequest(question="Where?", max_facts=1),
+        )
 
 
 @pytest.mark.asyncio

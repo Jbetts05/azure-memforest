@@ -164,6 +164,9 @@ class FactManager:
                     canonical_fact_ids=[],
                     duplicate_records=[],
                 )
+            for item in valid_items:
+                if _valid_time(item.time_start) is None or _valid_time(item.time_end) is None:
+                    raise ValueError(f"memory item {item.item_id} is missing required temporal metadata.")
 
             groups = self._group_exact_duplicates(valid_items)
             representative_items = [group[0] for group in groups]
@@ -586,6 +589,7 @@ class FactManager:
                         ]
                         payload["occurrences"] = occurrences
                         fact = ManagedFact(**payload)
+                        _validate_fact_temporality(fact)
                         self._facts[fact.fact_id] = fact
                         self._exact_index[self._normalize_fact_text(fact.fact_text)] = fact.fact_id
 
@@ -767,18 +771,26 @@ class FactManager:
     ) -> list[MemoryItem]:
         hydrated: list[MemoryItem] = []
         for item in items:
-            if item.time_start is not None or item.time_end is not None:
-                hydrated.append(item)
+            start = _valid_time(item.time_start)
+            end = _valid_time(item.time_end)
+            if start is not None and end is not None:
+                if start == item.time_start and end == item.time_end:
+                    hydrated.append(item)
+                    continue
+                hydrated.append(replace(item, time_start=start, time_end=end))
                 continue
             cell = cell_fallbacks.get(item.cell_id)
             if cell is None:
-                hydrated.append(item)
+                hydrated.append(replace(item, time_start=start, time_end=end))
                 continue
+            start = start if start is not None else _valid_time(cell.time_start)
+            end = end if end is not None else _valid_time(cell.time_end)
+            fallback_time_text = _render_time_range_text(start, end) if start is not None and end is not None else ""
             hydrated.append(replace(
                 item,
-                time_text=item.time_text or _render_time_range_text(cell.time_start, cell.time_end),
-                time_start=float(cell.time_start),
-                time_end=float(cell.time_end),
+                time_text=item.time_text or fallback_time_text,
+                time_start=start,
+                time_end=end,
             ))
         return hydrated
 
@@ -798,13 +810,30 @@ class FactManager:
 
 
 def _min_time(*values: float | None) -> float | None:
-    clean = [float(value) for value in values if value is not None]
+    clean = [float(value) for value in values if _valid_time(value) is not None]
     return min(clean) if clean else None
 
 
 def _max_time(*values: float | None) -> float | None:
-    clean = [float(value) for value in values if value is not None]
+    clean = [float(value) for value in values if _valid_time(value) is not None]
     return max(clean) if clean else None
+
+
+def _valid_time(value: float | None) -> float | None:
+    if value is None:
+        return None
+    value = float(value)
+    if value <= 0:
+        return None
+    return value
+
+
+def _validate_fact_temporality(fact: ManagedFact) -> None:
+    if _valid_time(fact.time_start) is None or _valid_time(fact.time_end) is None:
+        raise ValueError(f"fact {fact.fact_id} is missing required temporal metadata.")
+    for occurrence in fact.occurrences:
+        if _valid_time(occurrence.time_start) is None or _valid_time(occurrence.time_end) is None:
+            raise ValueError(f"fact {fact.fact_id} occurrence {occurrence.item_id} is missing required temporal metadata.")
 
 
 def _render_time_range_text(time_start: float, time_end: float) -> str:

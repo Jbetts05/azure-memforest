@@ -203,8 +203,14 @@ def _parse_cell_response(
         if semantic_role == "reference":
             collection_keys = []
         time_text = str(row.get("time_text", "")).strip()
-        time_start = _maybe_float(row.get("time_start"))
-        time_end = _maybe_float(row.get("time_end"))
+        time_start = _valid_time_or_none(_maybe_float(row.get("time_start")))
+        time_end = _valid_time_or_none(_maybe_float(row.get("time_end")))
+        if time_start is None:
+            time_start = _valid_time_or_none(float(cell.time_start))
+        if time_end is None:
+            time_end = _valid_time_or_none(float(cell.time_end))
+        if not time_text:
+            time_text = _render_time_text_if_valid(time_start, time_end)
         item_id = _stable_id("item", cell.cell_id, idx, fact_text)
         items.append(
             MemoryItem(
@@ -261,9 +267,9 @@ def _fallback_extract_cell(cell: MemCell) -> CellExtractionResult:
                     semantic_role=semantic_role,
                     entities=[],
                     topics=[],
-                    time_text=turn.timestamp_text,
-                    time_start=float(turn.timestamp_unix),
-                    time_end=float(turn.timestamp_unix),
+                    time_text=turn.timestamp_text if _valid_time_or_none(float(turn.timestamp_unix)) is not None else "",
+                    time_start=_valid_time_or_none(float(turn.timestamp_unix)),
+                    time_end=_valid_time_or_none(float(turn.timestamp_unix)),
                     attribute_keys=[],
                     domain_keys=[],
                     collection_keys=[],
@@ -324,9 +330,9 @@ def _supplement_countable_collection_items(cell: MemCell, result: CellExtraction
                     semantic_role="state",
                     entities=[],
                     topics=["collection"],
-                    time_text=turn.timestamp_text,
-                    time_start=float(turn.timestamp_unix),
-                    time_end=float(turn.timestamp_unix),
+                    time_text=turn.timestamp_text if _valid_time_or_none(float(turn.timestamp_unix)) is not None else "",
+                    time_start=_valid_time_or_none(float(turn.timestamp_unix)),
+                    time_end=_valid_time_or_none(float(turn.timestamp_unix)),
                     attribute_keys=[],
                     domain_keys=[],
                     collection_keys=_normalize_keys([item_type], limit=2),
@@ -448,6 +454,22 @@ def _maybe_float(value: Any, default: float | None = None) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _valid_time_or_none(value: float | None) -> float | None:
+    if value is None:
+        return None
+    if value <= 0:
+        return None
+    return value
+
+
+def _render_time_text_if_valid(time_start: float | None, time_end: float | None) -> str:
+    if time_start is None:
+        return ""
+    if time_end is None or time_start == time_end:
+        return render_time_text(time_start)
+    return f"{render_time_text(time_start)} to {render_time_text(time_end)}"
 
 
 def _stable_id(prefix: str, seed: str, index: int, value: Any) -> str:

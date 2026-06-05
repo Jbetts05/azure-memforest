@@ -141,6 +141,7 @@ class CosmosFactStore:
 
     async def upsert_facts(self, facts: list[ManagedFact]) -> None:
         for fact in facts:
+            _validate_fact_temporality(fact)
             existing = await self._read_raw_fact(fact.fact_id)
             if existing is not None and existing.get("tombstoned"):
                 continue
@@ -206,9 +207,17 @@ def _fact_to_doc(fact: ManagedFact, tenant_id: str, user_id: str, tenant_user_ke
     }
 
 
+def _validate_fact_temporality(fact: ManagedFact) -> None:
+    if _positive_time(fact.time_start) is None or _positive_time(fact.time_end) is None:
+        raise ValueError(f"fact {fact.fact_id} is missing required temporal metadata.")
+    for occurrence in fact.occurrences:
+        if _positive_time(occurrence.time_start) is None or _positive_time(occurrence.time_end) is None:
+            raise ValueError(f"fact {fact.fact_id} occurrence {occurrence.item_id} is missing required temporal metadata.")
+
+
 def _fact_from_doc(item: dict[str, Any]) -> ManagedFact:
     occurrences = [FactOccurrence(**occurrence) for occurrence in item.get("occurrences", [])]
-    return ManagedFact(
+    fact = ManagedFact(
         fact_id=item["fact_id"],
         fact_text=item["fact_text"],
         embedding_id=item.get("embedding_id", ""),
@@ -228,6 +237,8 @@ def _fact_from_doc(item: dict[str, Any]) -> ManagedFact:
         time_start=item.get("time_start"),
         time_end=item.get("time_end"),
     )
+    _validate_fact_temporality(fact)
+    return fact
 
 
 def _fact_doc_id(fact_id: str) -> str:
@@ -254,8 +265,17 @@ def _managed_fact_time(fact: ManagedFact) -> float:
     candidates = [fact.time_end, fact.time_start]
     for occurrence in fact.occurrences:
         candidates.extend([occurrence.time_end, occurrence.time_start])
-    numeric = [float(value) for value in candidates if value is not None]
+    numeric = [float(value) for value in candidates if _positive_time(value) is not None]
     return max(numeric) if numeric else 0.0
+
+
+def _positive_time(value: Any) -> float | None:
+    if value is None:
+        return None
+    value = float(value)
+    if value <= 0:
+        return None
+    return value
 
 
 async def _maybe_await(value):
