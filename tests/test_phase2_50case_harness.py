@@ -46,6 +46,35 @@ def test_50case_harness_selects_regression_cases(monkeypatch) -> None:
     assert len(harness.selected_case_ids()) == 10
 
 
+def test_50case_harness_selects_official_shard_cases(monkeypatch) -> None:
+    harness = _load_harness(monkeypatch, PHASE2_50_SHARD="official_2", PHASE2_OFFICIAL_SHARD_SIZE="3")
+    source = {f"case-{index}": {"question_id": f"case-{index}"} for index in range(1, 9)}
+    harness.MANIFEST["source"]["total_cases"] = len(source)
+
+    assert harness.selected_case_ids(source) == ["case-4", "case-5", "case-6"]
+
+
+def test_50case_harness_selects_all_official_cases(monkeypatch) -> None:
+    harness = _load_harness(monkeypatch, PHASE2_50_SHARD="official-all")
+    source = {f"case-{index}": {"question_id": f"case-{index}"} for index in range(1, 4)}
+    harness.MANIFEST["source"]["total_cases"] = len(source)
+
+    assert harness.selected_case_ids(source) == ["case-1", "case-2", "case-3"]
+
+
+def test_50case_harness_rejects_incomplete_official_source(monkeypatch) -> None:
+    harness = _load_harness(monkeypatch, PHASE2_50_SHARD="official-all")
+    source = {"case-1": {"question_id": "case-1"}}
+    harness.MANIFEST["source"]["total_cases"] = 2
+
+    try:
+        harness.selected_case_ids(source)
+    except RuntimeError as exc:
+        assert "official source expected 2 unique cases" in str(exc)
+    else:
+        raise AssertionError("official mode should reject incomplete sources")
+
+
 def test_50case_pro_judge_sample_ids_are_deterministic(monkeypatch) -> None:
     harness = _load_harness(monkeypatch, PHASE2_50_SHARD="heldout_1", PHASE2_50_PRO_JUDGE_SAMPLE_SIZE="2")
     cases = [{"case_id": case_id} for case_id in harness.CASE_INDEX["shards"]["heldout_1"]]
@@ -354,3 +383,70 @@ def test_50case_aggregate_shards_requires_raw_residue_key(tmp_path, monkeypatch)
         assert "missing residue_postrun_raw_nonrefusal_events" in str(exc)
     else:
         raise AssertionError("missing raw residue key should fail loudly")
+
+
+def test_50case_aggregate_official_shards_reports_500_case_completion(tmp_path, monkeypatch) -> None:
+    harness = _load_harness(monkeypatch)
+    shard_dirs = []
+    for index in range(50):
+        shard = tmp_path / f"official-{index:03d}"
+        shard.mkdir()
+        (shard / "aggregate.json").write_text(
+            json.dumps(
+                {
+                    "cohort": "official_500",
+                    "attempted_cases": 10,
+                    "completed_cases": 10,
+                    "primary_judge_correct": 7,
+                    "judge_disagreements": 0,
+                    "filtered_skip_count": 0,
+                    "new_dlq_count_delta": 0,
+                    "durable_instance_failed_count": 0,
+                    "blocked_by_content_filter": 0,
+                    "residue_postrun_raw_nonrefusal_events": 0,
+                    "residue_postrun_provenance_events": 0,
+                }
+            ),
+            encoding="utf-8",
+        )
+        shard_dirs.append(shard)
+
+    aggregate = harness.aggregate_shards(shard_dirs)
+
+    assert aggregate["status"] == "completed"
+    assert aggregate["cohort"] == "official_500"
+    assert aggregate["not_official_score"] is True
+    assert aggregate["expected_cases"] == 500
+    assert aggregate["attempted_cases"] == 500
+    assert aggregate["completed_cases"] == 500
+    assert aggregate["primary_judge_correct"] == 350
+    assert aggregate["primary_correct_rate"] == 0.7
+
+
+def test_50case_aggregate_shards_rejects_mixed_cohorts(tmp_path, monkeypatch) -> None:
+    harness = _load_harness(monkeypatch)
+    official = tmp_path / "official"
+    heldout = tmp_path / "heldout"
+    official.mkdir()
+    heldout.mkdir()
+    base_payload = {
+        "attempted_cases": 10,
+        "completed_cases": 10,
+        "primary_judge_correct": 7,
+        "judge_disagreements": 0,
+        "filtered_skip_count": 0,
+        "new_dlq_count_delta": 0,
+        "durable_instance_failed_count": 0,
+        "blocked_by_content_filter": 0,
+        "residue_postrun_raw_nonrefusal_events": 0,
+        "residue_postrun_provenance_events": 0,
+    }
+    (official / "aggregate.json").write_text(json.dumps({**base_payload, "cohort": "official_500"}), encoding="utf-8")
+    (heldout / "aggregate.json").write_text(json.dumps({**base_payload, "cohort": "heldout_50"}), encoding="utf-8")
+
+    try:
+        harness.aggregate_shards([official, heldout])
+    except RuntimeError as exc:
+        assert "mixed cohorts" in str(exc)
+    else:
+        raise AssertionError("mixed cohorts should fail loudly")

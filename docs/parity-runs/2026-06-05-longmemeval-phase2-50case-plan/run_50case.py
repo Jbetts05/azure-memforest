@@ -26,6 +26,7 @@ RUN_SUFFIX = os.getenv("PHASE2_RUN_SUFFIX", "").strip()
 RESULTS = Path(os.getenv("PHASE2_RESULTS_DIR", str(RUN / "case_results")))
 PRO_JUDGE_MAX_OUTPUT_TOKENS = int(os.getenv("PHASE2_50_PRO_JUDGE_MAX_OUTPUT_TOKENS", "2048"))
 PRO_JUDGE_SAMPLE_SIZE = int(os.getenv("PHASE2_50_PRO_JUDGE_SAMPLE_SIZE", "2"))
+OFFICIAL_SHARD_SIZE = int(os.getenv("PHASE2_OFFICIAL_SHARD_SIZE", "10"))
 
 
 def _load_pilot_module():
@@ -105,25 +106,58 @@ def _normalize_case(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def selected_case_ids() -> list[str]:
+def selected_case_ids(source: dict[str, dict[str, Any]] | None = None) -> list[str]:
     if SHARD == "regression":
         return list(CASE_INDEX["pilot_regression_case_ids"])
     if SHARD in CASE_INDEX["shards"]:
         return list(CASE_INDEX["shards"][SHARD])
     if SHARD == "all-heldout":
         return list(CASE_INDEX["heldout_case_ids"])
+    if SHARD == "official-all":
+        if source is None:
+            raise RuntimeError("official-all selection requires loaded source cases")
+        _assert_official_source_complete(source)
+        return list(source.keys())
+    if SHARD.startswith("official_"):
+        if source is None:
+            raise RuntimeError("official shard selection requires loaded source cases")
+        _assert_official_source_complete(source)
+        shard_index = _official_shard_index(SHARD)
+        case_ids = list(source.keys())
+        start = (shard_index - 1) * OFFICIAL_SHARD_SIZE
+        selected = case_ids[start : start + OFFICIAL_SHARD_SIZE]
+        if not selected:
+            raise RuntimeError(f"official shard {SHARD} is empty for shard size {OFFICIAL_SHARD_SIZE}")
+        return selected
     raise RuntimeError(
-        "Set PHASE2_50_SHARD to one of regression, all-heldout, "
+        "Set PHASE2_50_SHARD to one of regression, all-heldout, official-all, official_N, "
         + ", ".join(sorted(CASE_INDEX["shards"]))
     )
 
 
 def load_cases() -> list[dict[str, Any]]:
     source = _source_cases()
-    missing = [case_id for case_id in selected_case_ids() if case_id not in source]
+    selected_ids = selected_case_ids(source)
+    missing = [case_id for case_id in selected_ids if case_id not in source]
     if missing:
         raise RuntimeError(f"missing source cases: {missing}")
-    return [_normalize_case(source[case_id]) for case_id in selected_case_ids()]
+    return [_normalize_case(source[case_id]) for case_id in selected_ids]
+
+
+def _official_shard_index(value: str) -> int:
+    raw = value.removeprefix("official_").strip()
+    if not raw.isdigit():
+        raise RuntimeError(f"official shard must use form official_N, got {value!r}")
+    shard_index = int(raw)
+    if shard_index <= 0:
+        raise RuntimeError(f"official shard index must be positive, got {value!r}")
+    return shard_index
+
+
+def _assert_official_source_complete(source: dict[str, dict[str, Any]]) -> None:
+    expected = int(MANIFEST["source"]["total_cases"])
+    if len(source) != expected:
+        raise RuntimeError(f"official source expected {expected} unique cases, got {len(source)}")
 
 
 def strict_preflight_snapshot() -> dict[str, Any]:
@@ -271,7 +305,10 @@ def aggregate(results: list[dict[str, Any]], before: dict[str, Any], after: dict
     base = pilot.aggregate(results, before, after)
     completed = [result for result in results if result.get("status") == "succeeded"]
     base["shard"] = SHARD
-    base["cohort"] = "regression_10" if SHARD == "regression" else "heldout_50"
+    base["cohort"] = _cohort_name()
+    if base["cohort"] == "official_500":
+        base["not_official_score"] = True
+        base["not_official_score_reason"] = _official_not_score_reason()
     base["status"] = "shard_completed" if base.get("completed_cases") == base.get("attempted_cases") else "shard_incomplete"
     base["pilot_gate_status_ignored"] = True
     base["pro_judge_policy"] = MANIFEST["judge_policy"]["control_usage"]
@@ -288,6 +325,12 @@ def aggregate(results: list[dict[str, Any]], before: dict[str, Any], after: dict
 
 def aggregate_shards(paths: list[Path]) -> dict[str, Any]:
     aggregates = [json.loads((path / "aggregate.json").read_text(encoding="utf-8")) for path in paths]
+    cohorts = {str(item.get("cohort") or "") for item in aggregates}
+    if len(cohorts) > 1:
+        raise RuntimeError(f"cannot aggregate mixed cohorts: {sorted(cohorts)}")
+    official = [item for item in aggregates if item.get("cohort") == "official_500"]
+    if official:
+        return _aggregate_official_shards(official, aggregates)
     heldout = [item for item in aggregates if item.get("cohort") == "heldout_50"]
     attempted = sum(int(item.get("attempted_cases") or 0) for item in heldout)
     completed = sum(int(item.get("completed_cases") or 0) for item in heldout)
@@ -332,6 +375,39 @@ def aggregate_shards(paths: list[Path]) -> dict[str, Any]:
     }
 
 
+def _aggregate_official_shards(official: list[dict[str, Any]], aggregates: list[dict[str, Any]]) -> dict[str, Any]:
+    attempted = sum(int(item.get("attempted_cases") or 0) for item in official)
+    completed = sum(int(item.get("completed_cases") or 0) for item in official)
+    primary_correct = sum(int(item.get("primary_judge_correct") or 0) for item in official)
+    disagreements = sum(int(item.get("judge_disagreements") or 0) for item in official)
+    dlq_delta = sum(int(item.get("new_dlq_count_delta") or 0) for item in official)
+    durable_failed = sum(int(item.get("durable_instance_failed_count") or 0) for item in official)
+    answer_blocks = sum(int(item.get("blocked_by_content_filter") or 0) for item in official)
+    raw_nonrefusal_events = sum(_raw_nonrefusal_event_count(item) for item in official)
+    residue_events = sum(_residue_event_count(item) for item in official)
+    skipped = sum(int(item.get("filtered_skip_count") or 0) for item in official)
+    return {
+        "status": "completed" if attempted == 500 and completed == 500 else "incomplete",
+        "cohort": "official_500",
+        "not_official_score": True,
+        "not_official_score_reason": _official_not_score_reason(),
+        "expected_cases": int(MANIFEST["source"]["total_cases"]),
+        "shard_count": len(official),
+        "attempted_cases": attempted,
+        "completed_cases": completed,
+        "primary_judge_correct": primary_correct,
+        "primary_correct_rate": (primary_correct / attempted) if attempted else 0.0,
+        "judge_disagreements": disagreements,
+        "filtered_skip_count": skipped,
+        "new_dlq_count_delta": dlq_delta,
+        "durable_instance_failed_count": durable_failed,
+        "blocked_by_content_filter": answer_blocks,
+        "residue_raw_nonrefusal_events": raw_nonrefusal_events,
+        "residue_provenance_contamination_events": residue_events,
+        "shards": aggregates,
+    }
+
+
 def _residue_event_count(item: dict[str, Any]) -> int:
     if "residue_postrun_provenance_events" in item:
         return int(item["residue_postrun_provenance_events"] or 0)
@@ -357,6 +433,18 @@ def pro_judge_sample_ids(cases: list[dict[str, Any]]) -> set[str]:
         key=lambda case_id: hashlib.sha256((f"{CASE_INDEX['selection_seed']}:{SHARD}:{case_id}").encode("utf-8")).hexdigest(),
     )
     return set(ranked[: min(PRO_JUDGE_SAMPLE_SIZE, len(ranked))])
+
+
+def _cohort_name() -> str:
+    if SHARD == "regression":
+        return "regression_10"
+    if SHARD == "official-all" or SHARD.startswith("official_"):
+        return "official_500"
+    return "heldout_50"
+
+
+def _official_not_score_reason() -> str:
+    return "Uses the official LongMemEval-S cleaned 500-case dataset, but keeps the Azure-MemForest bounded session-slice policy and GPT-5-family judge policy."
 
 
 def preflight_report(cases: list[dict[str, Any]]) -> dict[str, Any]:
