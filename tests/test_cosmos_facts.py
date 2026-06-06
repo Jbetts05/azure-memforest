@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from src.cloud.cosmos_facts import CosmosFactStore
@@ -41,6 +43,22 @@ class FakeContainer:
                 continue
             result.append(dict(item))
         return result
+
+
+class AsyncTrackingContainer(FakeContainer):
+    def __init__(self):
+        super().__init__()
+        self.active = 0
+        self.max_active = 0
+
+    async def upsert_item(self, item):
+        self.active += 1
+        self.max_active = max(self.max_active, self.active)
+        await asyncio.sleep(0.01)
+        try:
+            return super().upsert_item(item)
+        finally:
+            self.active -= 1
 
 
 def _fact(fact_id="fact-1") -> ManagedFact:
@@ -170,6 +188,17 @@ async def test_cosmos_fact_store_get_facts_batches_and_preserves_order() -> None
     facts = await store.get_facts(["missing", "fact-2", "fact-1"])
 
     assert [fact.fact_id for fact in facts] == ["fact-2", "fact-1"]
+
+
+@pytest.mark.asyncio
+async def test_cosmos_fact_store_upserts_with_bounded_overlap() -> None:
+    container = AsyncTrackingContainer()
+    store = CosmosFactStore(container, tenant_id="tenant-1", user_id="user-1")
+
+    await store.upsert_facts([_fact(f"fact-{index}") for index in range(4)])
+
+    assert len(container.items) == 4
+    assert container.max_active > 1
 
 
 @pytest.mark.asyncio

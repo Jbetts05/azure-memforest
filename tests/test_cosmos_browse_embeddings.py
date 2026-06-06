@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from src.cloud.cosmos_browse_embeddings import BrowseEmbeddingRecord, CosmosBrowseEmbeddingStore
@@ -32,6 +34,22 @@ class FakeContainer:
             and item.get("tree_id") == params.get("@tree_id")
             and item.get("embedding_model_version") == params.get("@embedding_model_version")
         ]
+
+
+class AsyncTrackingContainer(FakeContainer):
+    def __init__(self):
+        super().__init__()
+        self.active = 0
+        self.max_active = 0
+
+    async def upsert_item(self, item):
+        self.active += 1
+        self.max_active = max(self.max_active, self.active)
+        await asyncio.sleep(0.01)
+        try:
+            return super().upsert_item(item)
+        finally:
+            self.active -= 1
 
 
 def _store(container=None, *, forest_version="v1", model_version="embed-v1"):
@@ -68,6 +86,23 @@ async def test_browse_embedding_store_hides_other_forest_versions() -> None:
     )
 
     assert await reader.get_embedding("node-1") is None
+
+
+@pytest.mark.asyncio
+async def test_browse_embedding_store_upserts_with_bounded_overlap() -> None:
+    container = AsyncTrackingContainer()
+    store = _store(container)
+
+    await store.upsert_records(
+        [
+            BrowseEmbeddingRecord(node_id=f"node-{index}", tree_id="tree-1", tree_type="entity", embedding=(0.1,))
+            for index in range(4)
+        ],
+        model_version="embed-v1",
+    )
+
+    assert len(container.items) == 4
+    assert container.max_active > 1
 
 
 @pytest.mark.asyncio

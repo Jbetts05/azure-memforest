@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from src.cloud.contracts import FactLocation, StoredTreeNode
@@ -40,6 +42,22 @@ class FakeCosmosContainer:
                 continue
             result.append({"id": item["id"]} if "SELECT c.id" in query else dict(item))
         return result
+
+
+class AsyncTrackingContainer(FakeCosmosContainer):
+    def __init__(self):
+        super().__init__()
+        self.active = 0
+        self.max_active = 0
+
+    async def upsert_item(self, item):
+        self.active += 1
+        self.max_active = max(self.max_active, self.active)
+        await asyncio.sleep(0.01)
+        try:
+            return super().upsert_item(item)
+        finally:
+            self.active -= 1
 
 
 def _tree_node(node_id="node-1", tree_id="tree-1", *, parent_id=None, level="L1") -> StoredTreeNode:
@@ -101,6 +119,17 @@ async def test_cosmos_tree_node_store_lists_roots_and_tree_nodes() -> None:
 
 
 @pytest.mark.asyncio
+async def test_cosmos_tree_node_store_upserts_with_bounded_overlap() -> None:
+    container = AsyncTrackingContainer()
+    store = CosmosTreeNodeStore(container, tenant_id="tenant-1", user_id="user-1", forest_version="v1")
+
+    await store.upsert_nodes([_tree_node(f"node-{index}") for index in range(4)])
+
+    assert len(container.items) == 4
+    assert container.max_active > 1
+
+
+@pytest.mark.asyncio
 async def test_cosmos_tree_node_store_rejects_scope_mismatch() -> None:
     store = CosmosTreeNodeStore(FakeCosmosContainer(), tenant_id="tenant-1", user_id="user-1", forest_version="v1")
 
@@ -135,6 +164,17 @@ async def test_cosmos_fact_location_index_upsert_get_delete() -> None:
     assert locations["missing"] == []
     assert after_delete["fact-1"] == []
     assert [loc.tree_id for loc in after_delete["fact-2"]] == ["tree-2"]
+
+
+@pytest.mark.asyncio
+async def test_cosmos_fact_location_index_upserts_with_bounded_overlap() -> None:
+    container = AsyncTrackingContainer()
+    index = CosmosFactLocationIndex(container, tenant_id="tenant-1", user_id="user-1", forest_version="v1")
+
+    await index.upsert_locations([_fact_location(f"fact-{item}") for item in range(4)])
+
+    assert len(container.items) == 4
+    assert container.max_active > 1
 
 
 @pytest.mark.asyncio

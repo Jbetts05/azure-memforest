@@ -470,18 +470,16 @@ async def test_materialization_handler_commits_after_projection_writes() -> None
     await handler.handle(_envelope(), {"fencing_token": 1})
 
     assert manifest_store.committed
-    assert calls == [
-        "source_session",
-        "source_turns",
+    assert calls[:2] == ["source_session", "source_turns"]
+    assert calls[-2:] == ["snapshot", "snapshot"]
+    assert set(calls[2:-2]) == {
         "facts",
         "tree_nodes",
         "locations",
         "browse_embeddings",
         "summary_cache",
         "recall",
-        "snapshot",
-        "snapshot",
-    ]
+    }
     assert lease_store.asserted is True
     assert lease_store.released is True
 

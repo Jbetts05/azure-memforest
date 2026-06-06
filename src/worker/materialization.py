@@ -7,12 +7,14 @@ import asyncio
 import contextlib
 import faulthandler
 import hashlib
+import inspect
 import logging
 import sys
 import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from src.cloud.async_batch import run_bounded
 from src.cloud.cosmos_browse_embeddings import BrowseEmbeddingRecord
 from src.cloud.contracts import FactLocation, RecallDocument, StoredTreeNode
 from src.cloud.cosmos_leases import LeaseConflict
@@ -575,35 +577,14 @@ class MemForestMaterializationHandler:
         snapshot: ForestMaterializationSnapshot,
         projection: MaterializationProjection,
     ) -> dict[str, Any]:
-        await _maybe_await(self._stores.fact_store.upsert_facts(snapshot.facts))
-        await _maybe_await(self._tree_node_store(forest_version).upsert_nodes(projection.stored_nodes))
-        await _maybe_await(self._fact_location_index(forest_version).upsert_locations(projection.fact_locations))
-        browse_store = self._browse_embedding_store(forest_version)
-        if browse_store is not None:
-            if hasattr(browse_store, "upsert_records"):
-                await _maybe_await(
-                    browse_store.upsert_records(
-                        projection.browse_embedding_records,
-                        model_version=self._config.embedding_model_version,
-                    )
-                )
-            else:
-                await _maybe_await(
-                    browse_store.upsert_embeddings(
-                        projection.browse_embeddings,
-                        model_version=self._config.embedding_model_version,
-                    )
-                )
-        if self._stores.summary_cache is not None:
-            for entry in projection.summary_cache_entries:
-                await _maybe_await(
-                    self._stores.summary_cache.put(
-                        entry.content_hash,
-                        entry.summary,
-                        metadata=entry.metadata,
-                    )
-                )
-        await _maybe_await(self._stores.recall_index.upsert_documents(projection.recall_documents))
+        await asyncio.gather(
+            self._call_store_method(self._stores.fact_store.upsert_facts, snapshot.facts),
+            self._call_store_method(self._tree_node_store(forest_version).upsert_nodes, projection.stored_nodes),
+            self._call_store_method(self._fact_location_index(forest_version).upsert_locations, projection.fact_locations),
+            self._write_browse_embeddings(forest_version, projection),
+            self._write_summary_cache_entries(projection),
+            self._write_recall_documents(projection),
+        )
         fingerprint_metadata, fingerprint_payload = _materialization_fingerprint_metadata(
             projection=projection,
             snapshot=snapshot,
@@ -660,6 +641,48 @@ class MemForestMaterializationHandler:
                 },
             )
         return metadata
+
+    async def _write_browse_embeddings(self, forest_version: str, projection: MaterializationProjection) -> None:
+        browse_store = self._browse_embedding_store(forest_version)
+        if browse_store is None:
+            return
+        if hasattr(browse_store, "upsert_records"):
+            await self._call_store_method(
+                browse_store.upsert_records,
+                projection.browse_embedding_records,
+                model_version=self._config.embedding_model_version,
+            )
+            return
+        await self._call_store_method(
+            browse_store.upsert_embeddings,
+            projection.browse_embeddings,
+            model_version=self._config.embedding_model_version,
+        )
+
+    async def _write_summary_cache_entries(self, projection: MaterializationProjection) -> None:
+        if self._stores.summary_cache is None:
+            return
+
+        async def _put(entry: SummaryCacheEntry) -> None:
+            await self._call_store_method(
+                self._stores.summary_cache.put,
+                entry.content_hash,
+                entry.summary,
+                metadata=entry.metadata,
+            )
+
+        await run_bounded(projection.summary_cache_entries, _put)
+
+    async def _write_recall_documents(self, projection: MaterializationProjection) -> None:
+        await self._call_store_method(self._stores.recall_index.upsert_documents, projection.recall_documents)
+
+    async def _call_store_method(self, method: Any, *args: Any, **kwargs: Any) -> Any:
+        if inspect.iscoroutinefunction(method):
+            return await method(*args, **kwargs)
+        result = await asyncio.to_thread(method, *args, **kwargs)
+        if hasattr(result, "__await__"):
+            return await result
+        return result
 
     async def _latest_committed_matches_job(self, envelope: WriteJobEnvelope) -> bool:
         return await self._matching_latest_committed(envelope) is not None

@@ -8,6 +8,7 @@ import time
 from dataclasses import asdict
 from typing import Any
 
+from src.cloud.async_batch import run_bounded
 from src.cloud.schema import SCHEMA_VERSION, partition_key
 from src.utils.types import FactOccurrence, ManagedFact
 
@@ -142,13 +143,17 @@ class CosmosFactStore:
     async def upsert_facts(self, facts: list[ManagedFact]) -> None:
         for fact in facts:
             _validate_fact_temporality(fact)
+
+        async def _upsert(fact: ManagedFact) -> None:
             existing = await self._read_raw_fact(fact.fact_id)
             if existing is not None and existing.get("tombstoned"):
-                continue
+                return
             doc = _fact_to_doc(fact, self.tenant_id, self.user_id, self.tenant_user_key)
             if len(json.dumps(doc, ensure_ascii=False).encode("utf-8")) > MAX_FACT_DOCUMENT_BYTES:
                 raise ValueError("fact document exceeds Cosmos size budget.")
             await _maybe_await(self.container.upsert_item(doc))
+
+        await run_bounded(facts, _upsert)
 
     async def tombstone_facts(self, fact_ids: list[str], *, reason: str) -> None:
         for fact_id in fact_ids:

@@ -6,6 +6,7 @@ import hashlib
 import time
 from typing import Any
 
+from src.cloud.async_batch import run_bounded
 from src.cloud.contracts import FactLocation, StoredTreeNode
 from src.cloud.schema import SCHEMA_VERSION, partition_key
 
@@ -80,7 +81,11 @@ class CosmosTreeNodeStore:
     async def upsert_nodes(self, nodes: list[StoredTreeNode]) -> None:
         for node in nodes:
             self._validate_node_scope(node)
+
+        async def _upsert(node: StoredTreeNode) -> None:
             await _maybe_await(self.container.upsert_item(_tree_node_doc(node, self.tenant_user_key)))
+
+        await run_bounded(nodes, _upsert)
 
     async def tombstone_tree(self, tree_id: str, *, reason: str) -> None:
         query = (
@@ -133,7 +138,11 @@ class CosmosFactLocationIndex:
     async def upsert_locations(self, locations: list[FactLocation]) -> None:
         for location in locations:
             self._validate_location_scope(location)
+
+        async def _upsert(location: FactLocation) -> None:
             await _maybe_await(self.container.upsert_item(_fact_location_doc(location, self.tenant_user_key)))
+
+        await run_bounded(locations, _upsert)
 
     async def delete_locations_for_tree(self, tree_id: str) -> None:
         query = (

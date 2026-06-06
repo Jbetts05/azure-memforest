@@ -7,6 +7,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+from src.cloud.async_batch import run_bounded
 from src.cloud.schema import SCHEMA_VERSION, partition_key
 
 
@@ -69,8 +70,11 @@ class CosmosBrowseEmbeddingStore:
     async def upsert_records(self, records: list[BrowseEmbeddingRecord], *, model_version: str) -> None:
         if model_version != self.embedding_model_version:
             raise ValueError("model_version does not match CosmosBrowseEmbeddingStore scope.")
-        for record in records:
+
+        async def _upsert(record: BrowseEmbeddingRecord) -> None:
             await _maybe_await(self.container.upsert_item(_record_to_doc(record, self)))
+
+        await run_bounded(records, _upsert)
 
     async def tombstone_tree(self, tree_id: str, *, reason: str) -> None:
         query = (
