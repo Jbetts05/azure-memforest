@@ -1,0 +1,256 @@
+{
+  "api_version": {
+    "name": "azure-memforest-api",
+    "version": "0.1.0",
+    "git_sha": "7241006b1643",
+    "image_dirty": "false"
+  },
+  "queue_before": {
+    "active": 0,
+    "deadletter": 19,
+    "scheduled": 0
+  },
+  "decisions": {
+    "schema_version": 1,
+    "run": {
+      "id": "2026-06-05-longmemeval-phase2-50case-plan",
+      "date_utc": "2026-06-05T04:14:55Z",
+      "title": "LongMemEval-S Phase 2 held-out 50-case subset plan",
+      "goal": "Plan the first held-out validation step after the successful 10-case intended-stack pilot.",
+      "status": "planned",
+      "owner": "local"
+    },
+    "purpose": "internal held-out planning artifact; not a live-run approval",
+    "not_a_longmemeval_score": true,
+    "not_a_score_reason": "This plan still uses bounded session slices, GPT-5-family judges, and internal gates. It must not be reported as an official LongMemEval-S score.",
+    "source": {
+      "dataset": "LongMemEval-S cleaned",
+      "source_url": "https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/main/longmemeval_s_cleaned.json",
+      "source_sha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+      "total_cases": 500
+    },
+    "basis": {
+      "phase2_pilot_commit": "dd267f1",
+      "phase2_pilot_artifact": "docs/parity-runs/2026-06-03-longmemeval-phase2-intended-pilot/case_results_full-intended-final-20260604232856/",
+      "phase2_pilot_decision": "advance_to_50_case_subset=true",
+      "phase2_pilot_caveats": [
+        "The 10-case pilot includes two calibration-only cases and only 8 unmodified pipeline-eligible cases.",
+        "The pilot pass followed case-targeted fixes; those cases are regression evidence, not held-out generalization evidence.",
+        "Post-run residue evidence covers adjacent pairs and uses provenance review.",
+        "The pilot required documented dev-run network posture and checkpoint resumes."
+      ]
+    },
+    "selection": {
+      "selection_seed": 20260530,
+      "selection_script": "select_cases.py",
+      "selection_index": "cases_index.json",
+      "selection_strategy": "Select 50 fully held-out cases, excluding all 10 pilot cases, by exact full-set-proportional question-type targets and deterministic SHA256(seed+case_id) ordering within type.",
+      "heldout_case_count": 50,
+      "regression_case_count": 10,
+      "heldout_type_targets": {
+        "knowledge-update": 8,
+        "multi-session": 13,
+        "single-session-assistant": 6,
+        "single-session-preference": 3,
+        "single-session-user": 7,
+        "temporal-reasoning": 13
+      },
+      "regression_case_ids": [
+        "4b24c848",
+        "8e91e7d9",
+        "fea54f57",
+        "195a1a1b",
+        "b320f3f8",
+        "gpt4_d6585ce8",
+        "e3038f8c",
+        "e66b632c",
+        "gpt4_70e84552_abs",
+        "6e984302"
+      ],
+      "session_slice_policy": "Use the Phase 2 pilot policy initially: first 8 haystack sessions plus all answer sessions, filled to 9 sessions max when fewer than 9 are selected. This remains bounded and must be labeled as non-official.",
+      "cap_decision": "Keep pilot caps for the first held-out 50-case subset to isolate quality/runtime movement from cap changes; revisit caps only after this subset."
+    },
+    "cohorts": {
+      "heldout_50": {
+        "purpose": "Measure first untuned generalization signal beyond the pilot.",
+        "headline_generalization_denominator": true,
+        "case_ids_source": "cases_index.json:heldout_case_ids"
+      },
+      "regression_10": {
+        "purpose": "Protect the successful 10-case pilot fixes and calibration behavior.",
+        "headline_generalization_denominator": false,
+        "case_ids_source": "selection.regression_case_ids",
+        "execution_policy": "Run separately before or after held-out shards, never mixed into the held-out numerator or denominator."
+      }
+    },
+    "shards": {
+      "heldout_shard_count": 5,
+      "heldout_cases_per_shard": 10,
+      "shard_source": "cases_index.json:shards",
+      "shard_policy": "Each held-out shard has 10 cases and a roughly balanced type mix. Shard-level quality is diagnostic only; pass/fail is evaluated on aggregate held-out results."
+    },
+    "gates": {
+      "pre_live_authorization_required": true,
+      "heldout_50": {
+        "attempted_cases": 50,
+        "completed_cases": 50,
+        "case_targeted_fixes_allowed": false,
+        "answer_bearing_content_filter_blocks": 0,
+        "non_answer_content_filter_skips_max": 5,
+        "denominator_policy": "The held-out denominator is fixed at 50. Non-answer content-filter skips are allowed up to the cap but count as not-correct for the primary_correct_min and primary_correct_rate_min gates.",
+        "primary_correct_rate_min": 0.8,
+        "primary_correct_min": 40,
+        "judge_disagreement_rate_max": 0.1,
+        "judge_disagreements_max": 5,
+        "per_type_quality_claims_allowed": false
+      },
+      "regression_10": {
+        "attempted_cases": 10,
+        "completed_cases": 10,
+        "primary_correct_min": 9,
+        "known_fixed_cases_must_pass": [
+          "195a1a1b",
+          "gpt4_d6585ce8",
+          "gpt4_70e84552_abs",
+          "e3038f8c",
+          "e66b632c"
+        ]
+      },
+      "operational": {
+        "new_dlq_count_delta": 0,
+        "durable_failed_instances_max": 0,
+        "durable_gate_passed": true,
+        "answer_bearing_content_filter_blocks": 0,
+        "residue_raw_nonrefusal_events": 0,
+        "residue_provenance_contamination_events": 0,
+        "no_mid_run_runtime_posture_changes": true
+      }
+    },
+    "judge_policy": {
+      "primary_judge": "gpt-5.4",
+      "cross_check": "gpt-5.4-mini-memory",
+      "same_family_bias_caveat": true,
+      "judge_control": {
+        "deployment": "gpt-5.4-pro-judge",
+        "model": "gpt-5.4-pro",
+        "model_version": "2026-03-05",
+        "resource": "memforestexampleopenai",
+        "resource_group": "azure-memforest",
+        "region": "eastus2",
+        "endpoint": "https://memforestexampleopenai.openai.azure.com/",
+        "sku": "GlobalStandard",
+        "capacity": 160,
+        "token_rate_limit_per_minute": 160000,
+        "request_rate_limit_per_minute": 160,
+        "quota_headroom_after_deploy": 0,
+        "api_surface": "responses",
+        "responses_api_version": "2025-04-01-preview",
+        "max_output_tokens": 2048,
+        "smoke_artifact": "pro_judge_smoke.json",
+        "smoke_status": "passed",
+        "capability_note": "Deployment reports responses=true and chatCompletion=false; the 50-case harness must call the Responses API for this judge.",
+        "bias_note": "Accepted by project decision as the judge-control model for the held-out run."
+      },
+      "control_usage": "Use gpt-5.4-pro-judge for all judge disagreements plus a deterministic pre-registered random sample of agreed answers. Default sample size is 2 cases per shard via PHASE2_50_PRO_JUDGE_SAMPLE_SIZE. Expand to all 50 held-out answers only after shard 1 confirms latency and quota are acceptable.",
+      "additional_control_required_before_live_run": "Use the smoke-tested Responses API judge path for gpt-5.4-pro-judge and confirm PHASE2_50_PRO_JUDGE_SAMPLE_SIZE before launch."
+    },
+    "near_miss_policy": {
+      "definition": "Held-out result below 40/50 primary-correct or above 5/50 disagreements.",
+      "response": "Treat as a no-go for scaling. Perform root-cause analysis and preserve the failed artifact; do not change caps, thresholds, selection, or denominator after seeing results."
+    },
+    "residue_policy": {
+      "scope": "Post-materialization probes for every adjacent pair in the continuous held-out execution order, every shard boundary pair, and regression/held-out boundary pairs if the cohorts share one run window.",
+      "automation_requirement": "Every raw non-refusal response fails the first held-out run gate. Machine-readable provenance fields must still be captured to diagnose whether the event is current-user retrieval or prior-user contamination.",
+      "manual_reclassification_allowed_for_gate": false,
+      "artifact_required": "postrun_residue_reprobe.json with raw_nonrefusal_events and provenance_contamination_events"
+    },
+    "runtime_policy": {
+      "no_live_run_until": [
+        "Current code and manifest are committed.",
+        "API and Durable active settings match intended stack.",
+        "Durable memory and network posture are captured before launch.",
+        "Cosmos and Storage public dev-run posture is verified immediately before launch.",
+        "Fresh suffix/results directory is generated per shard.",
+        "DLQ baseline is snapshotted and attributed.",
+        "gpt-5.4-pro-judge Responses API judge path is integrated into the harness using api-version 2025-04-01-preview, max_output_tokens 2048, and parse rule from pro_judge_smoke.json. Incomplete or empty visible outputs fail loudly.",
+        "gpt-5.4-pro-judge sample policy is defined; default is 2 agreed-answer samples per shard.",
+        "Rubber-duck 4.8 validates the live-run plan."
+      ],
+      "expected_stack": {
+        "default_chat": "gpt-5.4-mini-memory",
+        "answer": "gpt-5.4",
+        "judge_primary": "gpt-5.4",
+        "judge_cross_check": "gpt-5.4-mini-memory",
+        "judge_control": "gpt-5.4-pro-judge",
+        "embedding": "text-embedding-3-large",
+        "search_index": "memforest-recall-large",
+        "budget_min": 2000,
+        "budget_max": 2000,
+        "model_max_retries": 2,
+        "model_timeout_seconds": 240
+      },
+      "resume_protocol": "Use a distinct suffix per shard attempt or a documented same-suffix reconcile protocol that prevents duplicate writes and preserves residue evidence.",
+      "cost_runtime_policy": "Estimate model-call budget and wall-clock time per shard before launch. Do not run all shards as one unbounded interactive command."
+    }
+  },
+  "auth_mode": "benchmark",
+  "dispatch_mode": "durable",
+  "durable_hub": "MemForestWrites",
+  "run_suffix": "heldout1-tuned-20260606153500",
+  "results_dir": "docs\\parity-runs\\2026-06-05-longmemeval-phase2-50case-plan\\case_results_heldout1-tuned-20260606153500",
+  "shard": "heldout_1",
+  "case_ids": [
+    "a2f3aa27",
+    "2ce6a0f2",
+    "60036106",
+    "d851d5ba",
+    "1de5cff2",
+    "66f24dbb",
+    "94f70d80",
+    "gpt4_18c2b244",
+    "gpt4_b4a80587",
+    "gpt4_d31cdae3"
+  ],
+  "preflight": {
+    "strict": true,
+    "api_containerapp": {
+      "AZURE_MEMFOREST_DISPATCH_MODE": "durable",
+      "AZURE_MEMFOREST_MODEL_CALL_BUDGET_MAX": "2000",
+      "AZURE_MEMFOREST_MODEL_CALL_BUDGET_MIN": "2000",
+      "AZURE_MEMFOREST_MODEL_CALL_BUDGET_MULTIPLIER": "20",
+      "AZURE_MEMFOREST_MODEL_MAX_RETRIES": "2",
+      "AZURE_MEMFOREST_MODEL_TIMEOUT_SECONDS": "240",
+      "AZURE_OPENAI_ANSWER_DEPLOYMENT": "gpt-5.4",
+      "AZURE_OPENAI_CHAT_DEPLOYMENT": "gpt-5.4-mini-memory",
+      "AZURE_OPENAI_EMBEDDING_DEPLOYMENT": "text-embedding-3-large",
+      "AZURE_OPENAI_EMBEDDING_DIMENSION": "3072",
+      "AZURE_SEARCH_RECALL_INDEX_NAME": "memforest-recall-large"
+    },
+    "durable_function_app": {
+      "AZURE_MEMFOREST_MODEL_CALL_BUDGET_MAX": "2000",
+      "AZURE_MEMFOREST_MODEL_CALL_BUDGET_MIN": "2000",
+      "AZURE_MEMFOREST_MODEL_CALL_BUDGET_MULTIPLIER": "20",
+      "AZURE_MEMFOREST_MODEL_MAX_RETRIES": "2",
+      "AZURE_MEMFOREST_MODEL_TIMEOUT_SECONDS": "240",
+      "AZURE_OPENAI_ANSWER_DEPLOYMENT": "gpt-5.4",
+      "AZURE_OPENAI_CHAT_DEPLOYMENT": "gpt-5.4-mini-memory",
+      "AZURE_OPENAI_EMBEDDING_DEPLOYMENT": "text-embedding-3-large",
+      "AZURE_OPENAI_EMBEDDING_DIMENSION": "3072",
+      "AZURE_SEARCH_RECALL_INDEX_NAME": "memforest-recall-large",
+      "AzureFunctionsJobHost__extensions__durableTask__hubName": "MemForestWrites"
+    },
+    "pro_judge": {
+      "deployment": "gpt-5.4-pro-judge",
+      "resource": "memforestexampleopenai",
+      "api_surface": "responses",
+      "api_version": "2025-04-01-preview",
+      "capacity": 160,
+      "capabilities": {
+        "agentsV2": "true",
+        "assistants": "true",
+        "chatCompletion": "false",
+        "responses": "true"
+      }
+    }
+  }
+}
