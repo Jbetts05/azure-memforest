@@ -116,7 +116,7 @@ async def test_durable_activity_marks_terminal_failure_reason() -> None:
 
 
 @pytest.mark.asyncio
-async def test_durable_activity_marks_transient_failure_terminally() -> None:
+async def test_durable_activity_raises_transient_failure_for_durable_retry() -> None:
     job_store = FakeJobStore()
     runner = DurableWriteActivityRunner(
         job_store=job_store,
@@ -124,12 +124,11 @@ async def test_durable_activity_marks_transient_failure_terminally() -> None:
         owner_id="durable:job-1",
     )
 
-    result = await runner.run(asdict(_envelope()))
+    with pytest.raises(TransientHandlerError, match="try again"):
+        await runner.run(asdict(_envelope()))
 
-    assert result["status"] == "failed"
-    assert result["reason"] == "transient_handler_error"
-    assert job_store.status == "failed"
-    assert job_store.failed_error == "try again"
+    assert job_store.status == "running"
+    assert job_store.failed_error == ""
 
 
 @pytest.mark.asyncio

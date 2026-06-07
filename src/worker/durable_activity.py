@@ -83,9 +83,9 @@ class DurableWriteActivityRunner:
         except PermanentHandlerError as exc:
             await self._fail_if_running(envelope, fencing_token=fencing_token, error=str(exc))
             return _result(envelope, status="failed", reason="permanent_handler_error")
-        except TransientHandlerError as exc:
-            await self._fail_if_running(envelope, fencing_token=fencing_token, error=str(exc))
-            return _result(envelope, status="failed", reason="transient_handler_error")
+        except TransientHandlerError:
+            # Let Durable retry the whole activity; fail_write_job compensates after retry exhaustion.
+            raise
         await self._job_store.complete_job(
             tenant_id=envelope.tenant_id,
             user_id=envelope.user_id,

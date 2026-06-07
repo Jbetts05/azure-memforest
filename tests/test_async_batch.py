@@ -15,6 +15,14 @@ class TooManyRequestsError(Exception):
         self.retry_after_in_milliseconds = retry_after_in_milliseconds
 
 
+class HeaderTooManyRequestsError(Exception):
+    status_code = 429
+
+    def __init__(self, message: str = "TooManyRequests", *, retry_after_ms: str = "1"):
+        super().__init__(message)
+        self.headers = {'x-ms-retry-after-ms': retry_after_ms}
+
+
 @pytest.mark.asyncio
 async def test_run_bounded_limits_chunk_concurrency() -> None:
     active = 0
@@ -80,3 +88,52 @@ async def test_run_bounded_retries_throttled_items() -> None:
     await run_bounded([0, 1, 2], worker, concurrency=2)
 
     assert attempts == {0: 1, 1: 2, 2: 1}
+
+
+@pytest.mark.asyncio
+async def test_run_bounded_uses_cosmos_retry_after_header() -> None:
+    attempts = 0
+
+    async def worker(_item: int) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise HeaderTooManyRequestsError()
+
+    await run_bounded([1], worker, concurrency=1)
+
+    assert attempts == 2
+
+
+@pytest.mark.asyncio
+async def test_run_bounded_uses_env_concurrency(monkeypatch) -> None:
+    monkeypatch.setenv('AZURE_MEMFOREST_PROJECTION_WRITE_CONCURRENCY', '2')
+    active = 0
+    max_active = 0
+
+    async def worker(_item: int) -> None:
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+
+    await run_bounded(list(range(5)), worker)
+
+    assert max_active == 2
+
+
+@pytest.mark.asyncio
+async def test_run_bounded_uses_env_retry_attempts(monkeypatch) -> None:
+    monkeypatch.setenv('AZURE_MEMFOREST_PROJECTION_WRITE_MAX_ATTEMPTS', '3')
+    attempts = 0
+
+    async def worker(_item: int) -> None:
+        nonlocal attempts
+        attempts += 1
+        raise TooManyRequestsError()
+
+    with pytest.raises(TooManyRequestsError):
+        await run_bounded([1], worker)
+
+    assert attempts == 3

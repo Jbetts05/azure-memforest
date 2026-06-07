@@ -3,21 +3,23 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import Awaitable, Callable, Sequence
 from typing import TypeVar
 
 T = TypeVar("T")
 
-DEFAULT_WRITE_CONCURRENCY = 8
-DEFAULT_MAX_ATTEMPTS = 5
+DEFAULT_WRITE_CONCURRENCY = 4
+DEFAULT_MAX_ATTEMPTS = 8
+DEFAULT_MAX_RETRY_DELAY_SECONDS = 30.0
 
 
 async def run_bounded(
     items: Sequence[T],
     worker: Callable[[T], Awaitable[None]],
     *,
-    concurrency: int = DEFAULT_WRITE_CONCURRENCY,
-    max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+    concurrency: int | None = None,
+    max_attempts: int | None = None,
 ) -> None:
     """Run one async worker per item in bounded chunks.
 
@@ -29,8 +31,8 @@ async def run_bounded(
 
     if not items:
         return
-    limit = max(1, int(concurrency))
-    attempts = max(1, int(max_attempts))
+    limit = _resolved_concurrency(concurrency)
+    attempts = _resolved_max_attempts(max_attempts)
     if limit == 1:
         for item in items:
             await _run_with_retry(item, worker, max_attempts=attempts)
@@ -66,10 +68,68 @@ def _retry_delay_seconds(exc: Exception, attempt: int) -> float:
             return max(0.1, float(retry_after) / 1000.0)
         except (TypeError, ValueError):
             pass
+    headers = getattr(exc, "headers", None) or {}
+    retry_after = _header_value(headers, "x-ms-retry-after-ms")
+    if retry_after is not None:
+        try:
+            return max(0.1, float(retry_after) / 1000.0)
+        except (TypeError, ValueError):
+            pass
+    retry_after = _header_value(headers, "retry-after")
+    if retry_after is not None:
+        try:
+            return max(0.1, float(retry_after))
+        except (TypeError, ValueError):
+            pass
     retry_after = getattr(exc, "retry_after", None)
     if retry_after is not None:
         try:
             return max(0.1, float(retry_after))
         except (TypeError, ValueError):
             pass
-    return min(8.0, 0.25 * (2 ** (attempt - 1)))
+    return min(_max_retry_delay_seconds(), 0.5 * (2 ** (attempt - 1)))
+
+
+def _header_value(headers: object, name: str) -> object | None:
+    if not hasattr(headers, "get"):
+        return None
+    value = headers.get(name)  # type: ignore[attr-defined]
+    if value is not None:
+        return value
+    return headers.get(name.lower())  # type: ignore[attr-defined]
+
+
+def _resolved_concurrency(value: int | None) -> int:
+    if value is not None:
+        return max(1, int(value))
+    return _int_env("AZURE_MEMFOREST_PROJECTION_WRITE_CONCURRENCY", DEFAULT_WRITE_CONCURRENCY)
+
+
+def _resolved_max_attempts(value: int | None) -> int:
+    if value is not None:
+        return max(1, int(value))
+    return _int_env("AZURE_MEMFOREST_PROJECTION_WRITE_MAX_ATTEMPTS", DEFAULT_MAX_ATTEMPTS)
+
+
+def _max_retry_delay_seconds() -> float:
+    return _float_env("AZURE_MEMFOREST_PROJECTION_WRITE_MAX_RETRY_DELAY_SECONDS", DEFAULT_MAX_RETRY_DELAY_SECONDS)
+
+
+def _int_env(name: str, default: int) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return default
+
+
+def _float_env(name: str, default: float) -> float:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return max(0.1, float(raw))
+    except ValueError:
+        return default
