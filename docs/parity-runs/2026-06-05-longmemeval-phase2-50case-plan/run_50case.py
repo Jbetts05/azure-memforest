@@ -27,6 +27,7 @@ RESULTS = Path(os.getenv("PHASE2_RESULTS_DIR", str(RUN / "case_results")))
 PRO_JUDGE_MAX_OUTPUT_TOKENS = int(os.getenv("PHASE2_50_PRO_JUDGE_MAX_OUTPUT_TOKENS", "2048"))
 PRO_JUDGE_SAMPLE_SIZE = int(os.getenv("PHASE2_50_PRO_JUDGE_SAMPLE_SIZE", "2"))
 OFFICIAL_SHARD_SIZE = int(os.getenv("PHASE2_OFFICIAL_SHARD_SIZE", "10"))
+SESSION_POLICY = os.getenv("PHASE2_SESSION_POLICY", "bounded").strip().lower()
 
 
 def _load_pilot_module():
@@ -55,18 +56,7 @@ def _source_cases() -> dict[str, dict[str, Any]]:
 
 def _normalize_case(item: dict[str, Any]) -> dict[str, Any]:
     answer_ids = set(item.get("answer_session_ids") or [])
-    selected_indexes = list(range(min(8, len(item.get("haystack_sessions") or []))))
-    selected_source_ids = {item["haystack_session_ids"][index] for index in selected_indexes}
-    for index, source_id in enumerate(item.get("haystack_session_ids") or []):
-        if source_id in answer_ids and source_id not in selected_source_ids:
-            selected_indexes.append(index)
-            selected_source_ids.add(source_id)
-    index = 8
-    while len(selected_indexes) < 9 and index < len(item.get("haystack_sessions") or []):
-        if index not in selected_indexes:
-            selected_indexes.append(index)
-        index += 1
-    selected_indexes = sorted(selected_indexes)
+    selected_indexes = _selected_session_indexes(item, answer_ids=answer_ids)
 
     sessions = []
     selected_turn_count = 0
@@ -101,12 +91,35 @@ def _normalize_case(item: dict[str, Any]) -> dict[str, Any]:
         "selected_turn_count": selected_turn_count,
         "total_haystack_sessions": len(item.get("haystack_sessions") or []),
         "total_haystack_turns": sum(len(session) for session in item.get("haystack_sessions") or []),
-        "selection_strategy": "first_8_haystack_sessions_plus_all_answer_sessions_then_fill_to_9",
+        "selection_strategy": _selection_strategy_text(),
+        "session_policy": SESSION_POLICY,
         "sessions": sessions,
     }
 
 
+def _selected_session_indexes(item: dict[str, Any], *, answer_ids: set[str]) -> list[int]:
+    haystack_sessions = item.get("haystack_sessions") or []
+    if SESSION_POLICY == "full":
+        return list(range(len(haystack_sessions)))
+    if SESSION_POLICY != "bounded":
+        raise RuntimeError("PHASE2_SESSION_POLICY must be one of: bounded, full")
+    selected_indexes = list(range(min(8, len(haystack_sessions))))
+    selected_source_ids = {item["haystack_session_ids"][index] for index in selected_indexes}
+    for index, source_id in enumerate(item.get("haystack_session_ids") or []):
+        if source_id in answer_ids and source_id not in selected_source_ids:
+            selected_indexes.append(index)
+            selected_source_ids.add(source_id)
+    index = 8
+    while len(selected_indexes) < 9 and index < len(haystack_sessions):
+        if index not in selected_indexes:
+            selected_indexes.append(index)
+        index += 1
+    return sorted(selected_indexes)
+
+
 def selected_case_ids(source: dict[str, dict[str, Any]] | None = None) -> list[str]:
+    if _is_official_shard():
+        _assert_official_session_policy()
     if SHARD == "regression":
         return list(CASE_INDEX["pilot_regression_case_ids"])
     if SHARD in CASE_INDEX["shards"]:
@@ -158,6 +171,11 @@ def _assert_official_source_complete(source: dict[str, dict[str, Any]]) -> None:
     expected = int(MANIFEST["source"]["total_cases"])
     if len(source) != expected:
         raise RuntimeError(f"official source expected {expected} unique cases, got {len(source)}")
+
+
+def _assert_official_session_policy() -> None:
+    if SESSION_POLICY != "full":
+        raise RuntimeError("official LongMemEval-S runs require PHASE2_SESSION_POLICY=full")
 
 
 def strict_preflight_snapshot() -> dict[str, Any]:
@@ -308,7 +326,8 @@ def aggregate(results: list[dict[str, Any]], before: dict[str, Any], after: dict
     base["cohort"] = _cohort_name()
     if base["cohort"] == "official_500":
         base["not_official_score"] = True
-        base["not_official_score_reason"] = _official_not_score_reason()
+        base["not_official_score_reason"] = _official_not_score_reason(SESSION_POLICY)
+        base["session_policy"] = SESSION_POLICY
     base["status"] = "shard_completed" if base.get("completed_cases") == base.get("attempted_cases") else "shard_incomplete"
     base["pilot_gate_status_ignored"] = True
     base["pro_judge_policy"] = MANIFEST["judge_policy"]["control_usage"]
@@ -376,6 +395,9 @@ def aggregate_shards(paths: list[Path]) -> dict[str, Any]:
 
 
 def _aggregate_official_shards(official: list[dict[str, Any]], aggregates: list[dict[str, Any]]) -> dict[str, Any]:
+    session_policies = {str(item.get("session_policy") or "") for item in official}
+    if session_policies != {"full"}:
+        raise RuntimeError(f"official shard aggregates must all use session_policy=full, got {sorted(session_policies)}")
     attempted = sum(int(item.get("attempted_cases") or 0) for item in official)
     completed = sum(int(item.get("completed_cases") or 0) for item in official)
     primary_correct = sum(int(item.get("primary_judge_correct") or 0) for item in official)
@@ -390,7 +412,8 @@ def _aggregate_official_shards(official: list[dict[str, Any]], aggregates: list[
         "status": "completed" if attempted == 500 and completed == 500 else "incomplete",
         "cohort": "official_500",
         "not_official_score": True,
-        "not_official_score_reason": _official_not_score_reason(),
+        "not_official_score_reason": _official_not_score_reason("full"),
+        "session_policy": "full",
         "expected_cases": int(MANIFEST["source"]["total_cases"]),
         "shard_count": len(official),
         "attempted_cases": attempted,
@@ -443,13 +466,26 @@ def _cohort_name() -> str:
     return "heldout_50"
 
 
-def _official_not_score_reason() -> str:
+def _official_not_score_reason(session_policy: str) -> str:
+    if session_policy == "full":
+        return "Uses the official LongMemEval-S cleaned 500-case dataset and all haystack sessions, but keeps the Azure-MemForest GPT-5-family judge policy and internal harness gates."
     return "Uses the official LongMemEval-S cleaned 500-case dataset, but keeps the Azure-MemForest bounded session-slice policy and GPT-5-family judge policy."
+
+
+def _is_official_shard() -> bool:
+    return SHARD == "official-all" or SHARD.startswith("official_")
+
+
+def _selection_strategy_text() -> str:
+    if SESSION_POLICY == "full":
+        return "all_haystack_sessions"
+    return "first_8_haystack_sessions_plus_all_answer_sessions_then_fill_to_9"
 
 
 def preflight_report(cases: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "shard": SHARD,
+        "session_policy": SESSION_POLICY,
         "case_count": len(cases),
         "case_ids": [case["case_id"] for case in cases],
         "results_dir": str(RESULTS),
@@ -496,6 +532,7 @@ def main() -> None:
         "run_suffix": RUN_SUFFIX,
         "results_dir": str(RESULTS),
         "shard": SHARD,
+        "session_policy": SESSION_POLICY,
         "case_ids": [case["case_id"] for case in cases],
         "preflight": preflight,
     }

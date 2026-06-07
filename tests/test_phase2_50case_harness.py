@@ -47,7 +47,7 @@ def test_50case_harness_selects_regression_cases(monkeypatch) -> None:
 
 
 def test_50case_harness_selects_official_shard_cases(monkeypatch) -> None:
-    harness = _load_harness(monkeypatch, PHASE2_50_SHARD="official_2", PHASE2_OFFICIAL_SHARD_SIZE="3")
+    harness = _load_harness(monkeypatch, PHASE2_50_SHARD="official_2", PHASE2_OFFICIAL_SHARD_SIZE="3", PHASE2_SESSION_POLICY="full")
     source = {f"case-{index}": {"question_id": f"case-{index}"} for index in range(1, 9)}
     harness.MANIFEST["source"]["total_cases"] = len(source)
 
@@ -55,7 +55,7 @@ def test_50case_harness_selects_official_shard_cases(monkeypatch) -> None:
 
 
 def test_50case_harness_selects_all_official_cases(monkeypatch) -> None:
-    harness = _load_harness(monkeypatch, PHASE2_50_SHARD="official-all")
+    harness = _load_harness(monkeypatch, PHASE2_50_SHARD="official-all", PHASE2_SESSION_POLICY="full")
     source = {f"case-{index}": {"question_id": f"case-{index}"} for index in range(1, 4)}
     harness.MANIFEST["source"]["total_cases"] = len(source)
 
@@ -63,7 +63,7 @@ def test_50case_harness_selects_all_official_cases(monkeypatch) -> None:
 
 
 def test_50case_harness_rejects_incomplete_official_source(monkeypatch) -> None:
-    harness = _load_harness(monkeypatch, PHASE2_50_SHARD="official-all")
+    harness = _load_harness(monkeypatch, PHASE2_50_SHARD="official-all", PHASE2_SESSION_POLICY="full")
     source = {"case-1": {"question_id": "case-1"}}
     harness.MANIFEST["source"]["total_cases"] = 2
 
@@ -73,6 +73,17 @@ def test_50case_harness_rejects_incomplete_official_source(monkeypatch) -> None:
         assert "official source expected 2 unique cases" in str(exc)
     else:
         raise AssertionError("official mode should reject incomplete sources")
+
+
+def test_50case_harness_requires_full_session_policy_for_official(monkeypatch) -> None:
+    harness = _load_harness(monkeypatch, PHASE2_50_SHARD="official_1")
+
+    try:
+        harness.selected_case_ids({"case-1": {"question_id": "case-1"}})
+    except RuntimeError as exc:
+        assert "PHASE2_SESSION_POLICY=full" in str(exc)
+    else:
+        raise AssertionError("official runs should require full session policy")
 
 
 def test_50case_pro_judge_sample_ids_are_deterministic(monkeypatch) -> None:
@@ -92,6 +103,48 @@ def test_50case_harness_loads_normalized_cases(monkeypatch) -> None:
     assert cases[0]["sessions"]
     assert cases[0]["sessions"][0]["turns"][0]["content_id"]
     assert cases[0]["selected_session_count"] == len(cases[0]["sessions"])
+
+
+def test_50case_full_session_policy_selects_all_haystack_sessions(monkeypatch) -> None:
+    harness = _load_harness(monkeypatch, PHASE2_50_SHARD="heldout_1", PHASE2_SESSION_POLICY="full")
+    case = {
+        "question_id": "case-1",
+        "question_type": "multi-session",
+        "question": "question",
+        "question_date": "2023/05/01 (Mon) 10:00",
+        "answer": "answer",
+        "answer_session_ids": ["s5"],
+        "haystack_session_ids": ["s1", "s2", "s3", "s4", "s5"],
+        "haystack_dates": [
+            "2023/04/01 (Sat) 10:00",
+            "2023/04/02 (Sun) 10:00",
+            "2023/04/03 (Mon) 10:00",
+            "2023/04/04 (Tue) 10:00",
+            "2023/04/05 (Wed) 10:00",
+        ],
+        "haystack_sessions": [
+            [{"role": "user", "content": f"turn {index}"}]
+            for index in range(5)
+        ],
+    }
+
+    normalized = harness._normalize_case(case)
+
+    assert normalized["session_policy"] == "full"
+    assert normalized["selection_strategy"] == "all_haystack_sessions"
+    assert normalized["selected_session_count"] == 5
+    assert [session["source_session_id"] for session in normalized["sessions"]] == ["s1", "s2", "s3", "s4", "s5"]
+
+
+def test_50case_invalid_session_policy_fails(monkeypatch) -> None:
+    harness = _load_harness(monkeypatch, PHASE2_50_SHARD="heldout_1", PHASE2_SESSION_POLICY="invalid")
+
+    try:
+        harness._selected_session_indexes({"haystack_sessions": []}, answer_ids=set())
+    except RuntimeError as exc:
+        assert "PHASE2_SESSION_POLICY" in str(exc)
+    else:
+        raise AssertionError("invalid session policy should fail")
 
 
 def test_50case_pro_judge_parses_responses_output(monkeypatch) -> None:
@@ -395,6 +448,7 @@ def test_50case_aggregate_official_shards_reports_500_case_completion(tmp_path, 
             json.dumps(
                 {
                     "cohort": "official_500",
+                    "session_policy": "full",
                     "attempted_cases": 10,
                     "completed_cases": 10,
                     "primary_judge_correct": 7,
@@ -423,6 +477,67 @@ def test_50case_aggregate_official_shards_reports_500_case_completion(tmp_path, 
     assert aggregate["primary_correct_rate"] == 0.7
 
 
+def test_50case_official_full_session_reason_mentions_all_sessions(tmp_path, monkeypatch) -> None:
+    harness = _load_harness(monkeypatch, PHASE2_SESSION_POLICY="full")
+    shard = tmp_path / "official"
+    shard.mkdir()
+    (shard / "aggregate.json").write_text(
+        json.dumps(
+            {
+                "cohort": "official_500",
+                "session_policy": "full",
+                "attempted_cases": 500,
+                "completed_cases": 500,
+                "primary_judge_correct": 350,
+                "judge_disagreements": 0,
+                "filtered_skip_count": 0,
+                "new_dlq_count_delta": 0,
+                "durable_instance_failed_count": 0,
+                "blocked_by_content_filter": 0,
+                "residue_postrun_raw_nonrefusal_events": 0,
+                "residue_postrun_provenance_events": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    aggregate = harness.aggregate_shards([shard])
+
+    assert "all haystack sessions" in aggregate["not_official_score_reason"]
+
+
+def test_50case_aggregate_official_shards_requires_full_session_policy(tmp_path, monkeypatch) -> None:
+    harness = _load_harness(monkeypatch)
+    shard = tmp_path / "official"
+    shard.mkdir()
+    (shard / "aggregate.json").write_text(
+        json.dumps(
+            {
+                "cohort": "official_500",
+                "session_policy": "bounded",
+                "attempted_cases": 10,
+                "completed_cases": 10,
+                "primary_judge_correct": 7,
+                "judge_disagreements": 0,
+                "filtered_skip_count": 0,
+                "new_dlq_count_delta": 0,
+                "durable_instance_failed_count": 0,
+                "blocked_by_content_filter": 0,
+                "residue_postrun_raw_nonrefusal_events": 0,
+                "residue_postrun_provenance_events": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    try:
+        harness.aggregate_shards([shard])
+    except RuntimeError as exc:
+        assert "session_policy=full" in str(exc)
+    else:
+        raise AssertionError("official aggregate should require full session policy")
+
+
 def test_50case_aggregate_shards_rejects_mixed_cohorts(tmp_path, monkeypatch) -> None:
     harness = _load_harness(monkeypatch)
     official = tmp_path / "official"
@@ -441,7 +556,7 @@ def test_50case_aggregate_shards_rejects_mixed_cohorts(tmp_path, monkeypatch) ->
         "residue_postrun_raw_nonrefusal_events": 0,
         "residue_postrun_provenance_events": 0,
     }
-    (official / "aggregate.json").write_text(json.dumps({**base_payload, "cohort": "official_500"}), encoding="utf-8")
+    (official / "aggregate.json").write_text(json.dumps({**base_payload, "cohort": "official_500", "session_policy": "full"}), encoding="utf-8")
     (heldout / "aggregate.json").write_text(json.dumps({**base_payload, "cohort": "heldout_50"}), encoding="utf-8")
 
     try:
