@@ -1,4 +1,5 @@
 import json
+import os
 
 import azure.durable_functions as df
 import azure.functions as func
@@ -50,7 +51,7 @@ def write_orchestrator(context: df.DurableOrchestrationContext):
     }
     retry_options = df.RetryOptions(
         first_retry_interval_in_milliseconds=30000,
-        max_number_of_attempts=3,
+        max_number_of_attempts=int(os.getenv("AZURE_MEMFOREST_DURABLE_ACTIVITY_MAX_ATTEMPTS", "1")),
     )
     try:
         return (yield context.call_activity_with_retry("materialize_write_job", retry_options, activity_input))

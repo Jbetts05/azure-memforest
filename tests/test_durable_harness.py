@@ -44,6 +44,7 @@ def test_durable_host_has_explicit_long_function_timeout() -> None:
     host = json.loads(Path("durable_write_orchestrator/host.json").read_text(encoding="utf-8"))
 
     assert host["functionTimeout"] == "02:00:00"
+    assert host["extensions"]["durableTask"]["maxConcurrentActivityFunctions"] == 1
 
 
 def test_durable_orchestrator_uses_single_deterministic_activity() -> None:
@@ -51,6 +52,7 @@ def test_durable_orchestrator_uses_single_deterministic_activity() -> None:
 
     assert 'context.call_activity_with_retry("materialize_write_job"' in source
     assert 'context.call_activity("fail_write_job"' in source
+    assert 'AZURE_MEMFOREST_DURABLE_ACTIVITY_MAX_ATTEMPTS' in source
 
 
 def test_durable_activity_import_does_not_load_api_or_faiss_stack() -> None:

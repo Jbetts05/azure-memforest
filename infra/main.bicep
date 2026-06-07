@@ -1197,7 +1197,7 @@ resource durableFunctionApp 'Microsoft.Web/sites@2024-04-01' = if (deployDurable
       }
       scaleAndConcurrency: {
         maximumInstanceCount: 10
-        instanceMemoryMB: 2048
+        instanceMemoryMB: 4096
       }
     }
   } : {})

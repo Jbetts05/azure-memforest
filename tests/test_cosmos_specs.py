@@ -33,6 +33,13 @@ def test_cosmos_specs_match_bicep_container_names_and_partition_keys() -> None:
     assert specs["query_traces"].default_ttl == 604800
 
 
+def test_durable_flex_memory_supports_full_session_materialization() -> None:
+    bicep = Path("infra/main.bicep").read_text(encoding="utf-8")
+    durable_app = _resource_block(bicep, "durableFunctionApp")
+
+    assert "instanceMemoryMB: 4096" in durable_app
+
+
 def _array_block(text: str, variable_name: str) -> str:
     match = re.search(rf"var {variable_name} = \[(.*?)\]", text, re.DOTALL)
     assert match is not None
