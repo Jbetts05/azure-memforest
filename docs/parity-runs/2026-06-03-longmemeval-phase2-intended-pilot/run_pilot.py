@@ -695,24 +695,26 @@ def aggregate(results: list[dict], before: dict, after: dict) -> dict:
     pipeline_completed = [r for r in completed if not r.get("exclude_from_pipeline_accuracy")]
     new_dlq = int(after.get("deadletter", 0)) - int(before.get("deadletter", 0))
     durable_mode = DISPATCH_MODE == "durable"
+    ingest_events = [
+        event
+        for result in results
+        for event in _latest_ingest_events(result)
+    ]
     durable_instances = [
         event.get("durable_instance")
-        for result in results
-        for event in result.get("events", [])
-        if event.get("step") == "ingest" and event.get("durable_instance")
+        for event in ingest_events
+        if event.get("durable_instance")
     ]
     successful_ingest_events = [
         event
-        for result in results
-        for event in result.get("events", [])
-        if event.get("step") == "ingest" and (event.get("status") or {}).get("status") == "succeeded"
+        for event in ingest_events
+        if (event.get("status") or {}).get("status") == "succeeded"
     ]
     skipped_non_answer_ingest_events = [
         event
         for result in results
-        for event in result.get("events", [])
-        if event.get("step") == "ingest"
-        and (event.get("status") or {}).get("status") == "failed"
+        for event in _latest_ingest_events(result)
+        if (event.get("status") or {}).get("status") == "failed"
         and _is_skipped_non_answer_ingest(result, event)
     ]
     durable_completed = sum(1 for item in durable_instances if item.get("runtimeStatus") == "Completed")
@@ -771,8 +773,30 @@ def aggregate(results: list[dict], before: dict, after: dict) -> dict:
         "advance_to_50_case_subset": all_gates_passed,
         "queue_before": before,
         "queue_after": after,
-        "case_statuses": [{"case_id": r["case_id"], "status": r["status"], "answer": r.get("answer"), "primary_label": r.get("judges", {}).get("primary", {}).get("label"), "cross_label": r.get("judges", {}).get("cross_check", {}).get("label")} for r in results],
+        "case_statuses": [
+            {
+                "case_id": r["case_id"],
+                "status": r["status"],
+                "answer": r.get("answer"),
+                "primary_label": r.get("judges", {}).get("primary", {}).get("label"),
+                "cross_label": r.get("judges", {}).get("cross_check", {}).get("label"),
+            }
+            for r in results
+        ],
     }
+
+
+def _latest_ingest_events(result: dict) -> list[dict]:
+    latest: dict[int, dict] = {}
+    for event in result.get("events", []):
+        if event.get("step") != "ingest":
+            continue
+        try:
+            index = int(event["index"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        latest[index] = event
+    return [latest[index] for index in sorted(latest)]
 
 
 def _residue_contaminated(probe: dict | None) -> bool:
