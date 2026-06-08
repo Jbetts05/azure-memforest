@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 import os
+import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from src.cloud.cosmos_jobs import CosmosJobStore, JobClaimError, JobNotFound
+from src.cloud.cosmos_jobs import CosmosJobStore, JobClaimError, JobNotFound, job_store_from_env
+from src.service.jobs import ServiceBusJobPublisher
 from src.worker.consumer import (
     PermanentHandlerError,
     TerminalHandlerError,
@@ -142,7 +144,57 @@ class DurableWriteActivityRunner:
         return None
 
 
+class ServiceBusOffloadActivityRunner:
+    """Offload Durable activity execution to the Service Bus write worker."""
+
+    def __init__(
+        self,
+        *,
+        job_store: CosmosJobStore,
+        publisher: ServiceBusJobPublisher,
+        poll_seconds: float = 10.0,
+        timeout_seconds: float = 7100.0,
+    ) -> None:
+        self._job_store = job_store
+        self._publisher = publisher
+        self._poll_seconds = poll_seconds
+        self._timeout_seconds = timeout_seconds
+
+    async def run(self, payload: dict[str, Any] | str | bytes) -> dict[str, Any]:
+        envelope = _parse_payload(payload)
+        status = await self._job_status(envelope)
+        terminal = _terminal_result_from_status(envelope, status)
+        if terminal is not None:
+            return terminal
+        if str(_job_value(status, "status") or "") != "running":
+            await self._publisher.submit_job(envelope)
+        deadline = asyncio.get_running_loop().time() + self._timeout_seconds
+        while True:
+            terminal = _terminal_result_from_status(envelope, await self._job_status(envelope))
+            if terminal is not None:
+                return terminal
+            if asyncio.get_running_loop().time() >= deadline:
+                raise TransientHandlerError("servicebus offloaded materialization did not complete before timeout")
+            await asyncio.sleep(self._poll_seconds)
+
+    async def _job_status(self, envelope: WriteJobEnvelope) -> Any | None:
+        try:
+            return await self._job_store.get_job_by_ids(
+                tenant_id=envelope.tenant_id,
+                user_id=envelope.user_id,
+                job_id=envelope.job_id,
+            )
+        except JobNotFound:
+            return None
+
+    async def close(self) -> None:
+        await self._publisher.close()
+
+
 async def materialize_write_job_from_env(activity_input: dict[str, Any]) -> dict[str, Any]:
+    if os.getenv("AZURE_MEMFOREST_DURABLE_ACTIVITY_OFFLOAD_MODE", "").strip().lower() == "servicebus":
+        return await _materialize_write_job_via_servicebus(activity_input)
+
     from src.worker.factory import build_scoped_materialization_handler_from_env
 
     envelope_payload = activity_input.get("envelope", activity_input)
@@ -158,6 +210,24 @@ async def materialize_write_job_from_env(activity_input: dict[str, Any]) -> dict
         return await runner.run(envelope_payload)
     finally:
         await _close_runtime(runtime)
+
+
+async def _materialize_write_job_via_servicebus(activity_input: dict[str, Any]) -> dict[str, Any]:
+    envelope_payload = activity_input.get("envelope", activity_input)
+    job_store = job_store_from_env(os.environ)
+    if job_store is None:
+        raise RuntimeError("servicebus offload requires Cosmos job store environment")
+    publisher = _servicebus_publisher_from_env(os.environ)
+    runner = ServiceBusOffloadActivityRunner(
+        job_store=job_store,
+        publisher=publisher,
+        poll_seconds=float(os.getenv("AZURE_MEMFOREST_DURABLE_OFFLOAD_POLL_SECONDS", "10")),
+        timeout_seconds=float(os.getenv("AZURE_MEMFOREST_DURABLE_OFFLOAD_TIMEOUT_SECONDS", "6800")),
+    )
+    try:
+        return await runner.run(envelope_payload)
+    finally:
+        await runner.close()
 
 
 async def fail_write_job_from_env(activity_input: dict[str, Any]) -> dict[str, Any]:
@@ -190,6 +260,37 @@ def _owner_id(activity_input: dict[str, Any]) -> str:
     if not owner_id:
         raise ValueError("Durable activity input requires owner_id or instance_id")
     return owner_id
+
+
+def _servicebus_publisher_from_env(environ: dict[str, str]) -> ServiceBusJobPublisher:
+    namespace = str(environ.get("AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE", "")).strip()
+    queue_name = str(environ.get("AZURE_SERVICEBUS_WRITES_QUEUE_NAME", "")).strip()
+    client_id = str(environ.get("AZURE_CLIENT_ID", "")).strip()
+    missing = [
+        name
+        for name, value in {
+            "AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE": namespace,
+            "AZURE_SERVICEBUS_WRITES_QUEUE_NAME": queue_name,
+            "AZURE_CLIENT_ID": client_id,
+        }.items()
+        if not value
+    ]
+    if missing:
+        raise RuntimeError(f"servicebus offload environment is missing required settings: {', '.join(missing)}")
+    return ServiceBusJobPublisher(
+        fully_qualified_namespace=namespace,
+        queue_name=queue_name,
+        client_id=client_id,
+    )
+
+
+def _terminal_result_from_status(envelope: WriteJobEnvelope, job: Any | None) -> dict[str, Any] | None:
+    status = str(_job_value(job, "status") or "")
+    if status == "succeeded":
+        return _result(envelope, status="succeeded")
+    if status == "failed":
+        return _result(envelope, status="failed", reason=str(_job_value(job, "error") or "failed"))
+    return None
 
 
 def _result(envelope: WriteJobEnvelope, *, status: str, reason: str = "") -> dict[str, Any]:

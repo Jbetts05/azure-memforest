@@ -36,6 +36,7 @@ API_CONTAINERAPP = os.getenv("PHASE2_API_CONTAINERAPP", "memforest-example-api")
 DURABLE_FUNCTION_APP = os.getenv("PHASE2_DURABLE_FUNCTION_APP", "memforest-example-durable").strip()
 RUN_SUFFIX = os.getenv("PHASE2_RUN_SUFFIX", "").strip()
 CASE_FILTER = {item.strip() for item in os.getenv("PHASE2_CASE_IDS", "").split(",") if item.strip()}
+API_IDEMPOTENT_POST_ATTEMPTS = int(os.getenv("PHASE2_API_IDEMPOTENT_POST_ATTEMPTS", "1").strip() or "1")
 
 RUN = Path(__file__).resolve().parent
 CASES = json.loads((RUN / "pilot_cases.json").read_text(encoding="utf-8"))
@@ -49,11 +50,13 @@ RESULTS.mkdir(exist_ok=True)
 
 _tokens: dict[str, tuple[str, float]] = {}
 
+FIXED_MODEL_CALL_BUDGET = os.getenv("PHASE2_MODEL_CALL_BUDGET_FIXED", "3000").strip() or "3000"
+
 INTENDED_API_SETTINGS = {
     "AZURE_MEMFOREST_DISPATCH_MODE": "durable",
     "AZURE_MEMFOREST_MODEL_CALL_BUDGET_MULTIPLIER": "20",
-    "AZURE_MEMFOREST_MODEL_CALL_BUDGET_MIN": "2000",
-    "AZURE_MEMFOREST_MODEL_CALL_BUDGET_MAX": "2000",
+    "AZURE_MEMFOREST_MODEL_CALL_BUDGET_MIN": FIXED_MODEL_CALL_BUDGET,
+    "AZURE_MEMFOREST_MODEL_CALL_BUDGET_MAX": FIXED_MODEL_CALL_BUDGET,
     "AZURE_MEMFOREST_MODEL_MAX_RETRIES": "2",
     "AZURE_MEMFOREST_MODEL_TIMEOUT_SECONDS": "240",
     "AZURE_OPENAI_CHAT_DEPLOYMENT": "gpt-5.4-mini-memory",
@@ -66,8 +69,8 @@ INTENDED_API_SETTINGS = {
 INTENDED_DURABLE_SETTINGS = {
     "AzureFunctionsJobHost__extensions__durableTask__hubName": "MemForestWrites",
     "AZURE_MEMFOREST_MODEL_CALL_BUDGET_MULTIPLIER": "20",
-    "AZURE_MEMFOREST_MODEL_CALL_BUDGET_MIN": "2000",
-    "AZURE_MEMFOREST_MODEL_CALL_BUDGET_MAX": "2000",
+    "AZURE_MEMFOREST_MODEL_CALL_BUDGET_MIN": FIXED_MODEL_CALL_BUDGET,
+    "AZURE_MEMFOREST_MODEL_CALL_BUDGET_MAX": FIXED_MODEL_CALL_BUDGET,
     "AZURE_MEMFOREST_MODEL_MAX_RETRIES": "2",
     "AZURE_MEMFOREST_MODEL_TIMEOUT_SECONDS": "240",
     "AZURE_OPENAI_CHAT_DEPLOYMENT": "gpt-5.4-mini-memory",
@@ -137,9 +140,22 @@ def api_get(path: str, *, user_id: str = USER) -> dict:
 
 
 def api_post(path: str, body: dict | None = None, *, user_id: str = USER, idem: str | None = None) -> dict:
-    response = requests.post(API + path, headers=api_headers(user_id=user_id, json_body=True, idem=idem), json=body or {}, timeout=180)
-    response.raise_for_status()
-    return response.json()
+    attempts = max(1, API_IDEMPOTENT_POST_ATTEMPTS if idem else 1)
+    for attempt in range(1, attempts + 1):
+        try:
+            response = requests.post(
+                API + path,
+                headers=api_headers(user_id=user_id, json_body=True, idem=idem),
+                json=body or {},
+                timeout=180,
+            )
+            response.raise_for_status()
+            return response.json()
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+            if attempt == attempts:
+                raise
+            time.sleep(min(30, 2**attempt))
+    raise RuntimeError("unreachable idempotent POST retry state")
 
 
 def progress_fingerprint(status: dict) -> tuple:

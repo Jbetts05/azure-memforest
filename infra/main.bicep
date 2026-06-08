@@ -42,6 +42,31 @@ param durableHostingPlan string = 'flex'
 @description('Allow the worker entrypoint to connect to Service Bus. Keep false until smoke testing is approved.')
 param workerFactoryReady bool = false
 
+@description('Container App worker CPU allocation. Use a larger value for full-session benchmark materialization.')
+param workerCpu string = '0.5'
+
+@description('Container App worker memory allocation. Use a larger value for full-session benchmark materialization.')
+param workerMemory string = '1Gi'
+
+@description('Maximum Service Bus session lock renewal duration for the worker.')
+param workerSessionLockRenewalSeconds int = 300
+
+@description('Worker job-claim lease TTL in seconds.')
+param workerJobLeaseTtlSeconds int = 300
+
+@description('Worker tenant/user write lease TTL in seconds.')
+param workerUserLeaseTtlSeconds int = 300
+
+@description('Worker ingest timeout in seconds.')
+param workerIngestTimeoutSeconds int = 1800
+
+@allowed([
+  'local'
+  'servicebus'
+])
+@description('Durable activity execution mode. servicebus keeps Durable orchestration but offloads materialization to the Container Apps worker.')
+param durableActivityOffloadMode string = 'local'
+
 @description('Enable development header auth for the API. Dev only; use Entra for production.')
 param enableDevHeaderAuth bool = false
 
@@ -892,7 +917,19 @@ resource workerContainerApp 'Microsoft.App/containerApps@2024-03-01' = if (deplo
             }
             {
               name: 'AZURE_MEMFOREST_WORKER_SESSION_LOCK_RENEWAL_SECONDS'
-              value: '60'
+              value: string(workerSessionLockRenewalSeconds)
+            }
+            {
+              name: 'AZURE_MEMFOREST_JOB_LEASE_TTL_SECONDS'
+              value: string(workerJobLeaseTtlSeconds)
+            }
+            {
+              name: 'AZURE_MEMFOREST_USER_LEASE_TTL_SECONDS'
+              value: string(workerUserLeaseTtlSeconds)
+            }
+            {
+              name: 'AZURE_MEMFOREST_INGEST_TIMEOUT_SECONDS'
+              value: string(workerIngestTimeoutSeconds)
             }
             {
               name: 'AZURE_MEMFOREST_WORKER_MESSAGE_WAIT_SECONDS'
@@ -1000,8 +1037,8 @@ resource workerContainerApp 'Microsoft.App/containerApps@2024-03-01' = if (deplo
             }
           ]
           resources: {
-            cpu: json('0.5')
-            memory: '1Gi'
+            cpu: json(workerCpu)
+            memory: workerMemory
           }
         }
       ]
@@ -1082,6 +1119,18 @@ var durableBaseFunctionAppSettings = [
   {
     name: 'AZURE_STORAGE_SNAPSHOT_CONTAINER'
     value: snapshotsContainer.name
+  }
+  {
+    name: 'AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE'
+    value: '${serviceBusNamespace.name}.servicebus.windows.net'
+  }
+  {
+    name: 'AZURE_SERVICEBUS_WRITES_QUEUE_NAME'
+    value: writesQueue.name
+  }
+  {
+    name: 'AZURE_MEMFOREST_DURABLE_ACTIVITY_OFFLOAD_MODE'
+    value: durableActivityOffloadMode
   }
   {
     name: 'AZURE_OPENAI_ENDPOINT'
@@ -1210,6 +1259,7 @@ resource durableFunctionApp 'Microsoft.Web/sites@2024-04-01' = if (deployDurable
     durableDeploymentBlobContributorAssignment
     storageQueueDataContributorAssignment
     storageTableDataContributorAssignment
+    serviceBusSenderAssignment
     openAiUserAssignment
   ]
 }

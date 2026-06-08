@@ -69,6 +69,48 @@ def test_phase2_dev_auth_adds_benchmark_role(monkeypatch) -> None:
     assert headers["Idempotency-Key"] == "idem-1"
 
 
+def test_phase2_api_post_retries_idempotent_timeout(monkeypatch) -> None:
+    harness = _load_harness(monkeypatch, PHASE2_AUTH_MODE="dev", PHASE2_API_IDEMPOTENT_POST_ATTEMPTS="2")
+    calls = {"count": 0}
+
+    class Response:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {"job_id": "job-1"}
+
+    def post(*args, **kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise harness.requests.exceptions.ReadTimeout("timeout")
+        return Response()
+
+    monkeypatch.setattr(harness.requests, "post", post)
+    monkeypatch.setattr(harness.time, "sleep", lambda seconds: None)
+
+    assert harness.api_post("/path", {"ok": True}, user_id="user-1", idem="idem-1") == {"job_id": "job-1"}
+    assert calls["count"] == 2
+
+
+def test_phase2_api_post_does_not_retry_non_idempotent_timeout(monkeypatch) -> None:
+    harness = _load_harness(monkeypatch, PHASE2_AUTH_MODE="dev", PHASE2_API_IDEMPOTENT_POST_ATTEMPTS="2")
+    calls = {"count": 0}
+
+    def post(*args, **kwargs):
+        calls["count"] += 1
+        raise harness.requests.exceptions.ReadTimeout("timeout")
+
+    monkeypatch.setattr(harness.requests, "post", post)
+
+    try:
+        harness.api_post("/path", {"ok": True}, user_id="user-1")
+    except harness.requests.exceptions.ReadTimeout:
+        assert calls["count"] == 1
+    else:
+        raise AssertionError("non-idempotent POST timeout should not be retried")
+
+
 def test_phase2_aggregate_allows_pilot_quality_threshold(monkeypatch) -> None:
     harness = _load_harness(monkeypatch, PHASE2_DISPATCH_MODE="durable")
     results = [_result(case["case_id"]) for case in harness.CASES]
@@ -456,10 +498,20 @@ def test_phase2_expected_stamped_budget_comes_from_intended_settings(monkeypatch
     )
 
 
+def test_phase2_expected_stamped_budget_is_configurable(monkeypatch) -> None:
+    harness = _load_harness(monkeypatch, PHASE2_MODEL_CALL_BUDGET_FIXED="3500")
+
+    assert harness.INTENDED_API_SETTINGS["AZURE_MEMFOREST_MODEL_CALL_BUDGET_MIN"] == "3500"
+    assert harness.INTENDED_API_SETTINGS["AZURE_MEMFOREST_MODEL_CALL_BUDGET_MAX"] == "3500"
+    assert harness.INTENDED_DURABLE_SETTINGS["AZURE_MEMFOREST_MODEL_CALL_BUDGET_MIN"] == "3500"
+    assert harness.INTENDED_DURABLE_SETTINGS["AZURE_MEMFOREST_MODEL_CALL_BUDGET_MAX"] == "3500"
+    assert harness._expected_stamped_budget() == 3500
+
+
 def test_phase2_strict_preflight_rejects_inverted_budget(monkeypatch) -> None:
     harness = _load_harness(monkeypatch)
     settings = dict(harness.INTENDED_API_SETTINGS)
-    settings["AZURE_MEMFOREST_MODEL_CALL_BUDGET_MIN"] = "3000"
+    settings["AZURE_MEMFOREST_MODEL_CALL_BUDGET_MAX"] = "2000"
 
     try:
         harness._assert_budget_settings_consistent(settings)
@@ -472,12 +524,12 @@ def test_phase2_strict_preflight_rejects_inverted_budget(monkeypatch) -> None:
 def test_phase2_strict_preflight_requires_fixed_stamped_budget(monkeypatch) -> None:
     harness = _load_harness(monkeypatch)
     settings = dict(harness.INTENDED_API_SETTINGS)
-    settings["AZURE_MEMFOREST_MODEL_CALL_BUDGET_MAX"] = "3000"
+    settings["AZURE_MEMFOREST_MODEL_CALL_BUDGET_MAX"] = "3500"
 
     try:
         harness._assert_budget_settings_consistent(settings)
     except RuntimeError as exc:
-        assert "requires min 2000 to equal max 3000" in str(exc)
+        assert "requires min 3000 to equal max 3500" in str(exc)
     else:
         raise AssertionError("strict preflight should require a fixed stamped budget")
 

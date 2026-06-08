@@ -40,6 +40,35 @@ def test_durable_flex_memory_supports_full_session_materialization() -> None:
     assert "instanceMemoryMB: 4096" in durable_app
 
 
+def test_durable_servicebus_offload_and_worker_sizing_are_configurable() -> None:
+    bicep = Path("infra/main.bicep").read_text(encoding="utf-8")
+    durable_settings = _variable_block(bicep, "durableBaseFunctionAppSettings")
+    worker_app = _resource_block(bicep, "workerContainerApp")
+
+    assert "param durableActivityOffloadMode string = 'local'" in bicep
+    assert "name: 'AZURE_MEMFOREST_DURABLE_ACTIVITY_OFFLOAD_MODE'" in durable_settings
+    assert "value: durableActivityOffloadMode" in durable_settings
+    assert "name: 'AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE'" in durable_settings
+    assert "name: 'AZURE_SERVICEBUS_WRITES_QUEUE_NAME'" in durable_settings
+    assert "serviceBusSenderAssignment" in _resource_block(bicep, "durableFunctionApp")
+    assert "param workerCpu string = '0.5'" in bicep
+    assert "param workerMemory string = '1Gi'" in bicep
+    assert "param workerSessionLockRenewalSeconds int = 300" in bicep
+    assert "param workerJobLeaseTtlSeconds int = 300" in bicep
+    assert "param workerUserLeaseTtlSeconds int = 300" in bicep
+    assert "param workerIngestTimeoutSeconds int = 1800" in bicep
+    assert "cpu: json(workerCpu)" in worker_app
+    assert "memory: workerMemory" in worker_app
+    assert "name: 'AZURE_MEMFOREST_WORKER_SESSION_LOCK_RENEWAL_SECONDS'" in worker_app
+    assert "value: string(workerSessionLockRenewalSeconds)" in worker_app
+    assert "name: 'AZURE_MEMFOREST_JOB_LEASE_TTL_SECONDS'" in worker_app
+    assert "value: string(workerJobLeaseTtlSeconds)" in worker_app
+    assert "name: 'AZURE_MEMFOREST_USER_LEASE_TTL_SECONDS'" in worker_app
+    assert "value: string(workerUserLeaseTtlSeconds)" in worker_app
+    assert "name: 'AZURE_MEMFOREST_INGEST_TIMEOUT_SECONDS'" in worker_app
+    assert "value: string(workerIngestTimeoutSeconds)" in worker_app
+
+
 def _array_block(text: str, variable_name: str) -> str:
     match = re.search(rf"var {variable_name} = \[(.*?)\]", text, re.DOTALL)
     assert match is not None
@@ -50,3 +79,9 @@ def _resource_block(text: str, resource_name: str) -> str:
     match = re.search(rf"resource {resource_name} .*?\n\}}", text, re.DOTALL)
     assert match is not None
     return match.group(0)
+
+
+def _variable_block(text: str, variable_name: str) -> str:
+    match = re.search(rf"var {variable_name} = \[(.*?)\]\n", text, re.DOTALL)
+    assert match is not None
+    return match.group(1)

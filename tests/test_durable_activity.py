@@ -7,7 +7,7 @@ from src.cloud.cosmos_jobs import JobClaimError
 from src.service.auth import ActorContext, TenantContext
 from src.service.jobs import build_write_job_envelope
 from src.worker.consumer import PermanentHandlerError, TerminalHandlerError, TransientHandlerError
-from src.worker.durable_activity import DurableWriteActivityRunner
+from src.worker.durable_activity import DurableWriteActivityRunner, ServiceBusOffloadActivityRunner
 
 
 class FakeJobStore:
@@ -42,6 +42,33 @@ class FakeJobStore:
         self.status = "failed"
         self.error = error
         self.failed_error = error
+
+
+class PollingJobStore:
+    def __init__(self, statuses):
+        self.statuses = list(statuses)
+        self.calls = 0
+
+    async def get_job_by_ids(self, *, tenant_id, user_id, job_id):
+        self.calls += 1
+        if self.statuses:
+            status = self.statuses.pop(0)
+        else:
+            status = "running"
+        error = "worker failed" if status == "failed" else ""
+        return {"status": status, "error": error}
+
+
+class RecordingPublisher:
+    def __init__(self):
+        self.envelopes = []
+        self.closed = False
+
+    async def submit_job(self, envelope):
+        self.envelopes.append(envelope)
+
+    async def close(self):
+        self.closed = True
 
 
 class RecordingHandler:
@@ -178,3 +205,87 @@ async def test_durable_activity_compensation_preserves_existing_terminal_status(
 
     assert result["status"] == "succeeded"
     assert job_store.status == "succeeded"
+
+
+@pytest.mark.asyncio
+async def test_servicebus_offload_returns_existing_terminal_without_publish() -> None:
+    job_store = PollingJobStore(["succeeded"])
+    publisher = RecordingPublisher()
+    runner = ServiceBusOffloadActivityRunner(
+        job_store=job_store,
+        publisher=publisher,
+        poll_seconds=0.001,
+        timeout_seconds=1,
+    )
+
+    result = await runner.run(asdict(_envelope()))
+
+    assert result["status"] == "succeeded"
+    assert publisher.envelopes == []
+
+
+@pytest.mark.asyncio
+async def test_servicebus_offload_publishes_and_polls_until_success() -> None:
+    job_store = PollingJobStore(["accepted", "running", "succeeded"])
+    publisher = RecordingPublisher()
+    runner = ServiceBusOffloadActivityRunner(
+        job_store=job_store,
+        publisher=publisher,
+        poll_seconds=0.001,
+        timeout_seconds=1,
+    )
+
+    result = await runner.run(asdict(_envelope()))
+
+    assert result["status"] == "succeeded"
+    assert [envelope.job_id for envelope in publisher.envelopes] == [_envelope().job_id]
+    assert job_store.calls == 3
+
+
+@pytest.mark.asyncio
+async def test_servicebus_offload_does_not_republish_running_job() -> None:
+    job_store = PollingJobStore(["running", "running", "succeeded"])
+    publisher = RecordingPublisher()
+    runner = ServiceBusOffloadActivityRunner(
+        job_store=job_store,
+        publisher=publisher,
+        poll_seconds=0.001,
+        timeout_seconds=1,
+    )
+
+    result = await runner.run(asdict(_envelope()))
+
+    assert result["status"] == "succeeded"
+    assert publisher.envelopes == []
+
+
+@pytest.mark.asyncio
+async def test_servicebus_offload_returns_failed_job_reason() -> None:
+    job_store = PollingJobStore(["accepted", "failed"])
+    publisher = RecordingPublisher()
+    runner = ServiceBusOffloadActivityRunner(
+        job_store=job_store,
+        publisher=publisher,
+        poll_seconds=0.001,
+        timeout_seconds=1,
+    )
+
+    result = await runner.run(asdict(_envelope()))
+
+    assert result["status"] == "failed"
+    assert result["reason"] == "worker failed"
+
+
+@pytest.mark.asyncio
+async def test_servicebus_offload_times_out_as_transient() -> None:
+    job_store = PollingJobStore(["accepted", "running", "running"])
+    publisher = RecordingPublisher()
+    runner = ServiceBusOffloadActivityRunner(
+        job_store=job_store,
+        publisher=publisher,
+        poll_seconds=0.001,
+        timeout_seconds=0.001,
+    )
+
+    with pytest.raises(TransientHandlerError, match="servicebus offloaded materialization"):
+        await runner.run(asdict(_envelope()))
