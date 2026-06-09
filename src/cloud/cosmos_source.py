@@ -294,13 +294,28 @@ def _stored_tree_node_from_doc(item: dict[str, Any]) -> StoredTreeNode:
 
 
 def _fact_location_doc(location: FactLocation, tenant_user_key: str) -> dict[str, Any]:
+    content = _fact_location_content(location)
     return {
         "id": _fact_location_id(location),
+        "doc_kind": "fact_location",
         "schema_version": location.schema_version,
         "tenant_id": location.tenant_id,
         "user_id": location.user_id,
         "tenant_user_key": tenant_user_key,
         "forest_version": location.forest_version,
+        "content_sha256": _stable_hash(content),
+        **content,
+        "updated_at_unix": time.time(),
+    }
+
+
+def _fact_location_content(location: FactLocation) -> dict[str, Any]:
+    metadata = {
+        key: value
+        for key, value in dict(location.metadata).items()
+        if key not in {"generation", "forest_version"}
+    }
+    return {
         "fact_id": location.fact_id,
         "tree_id": location.tree_id,
         "node_id": location.node_id,
@@ -308,8 +323,7 @@ def _fact_location_doc(location: FactLocation, tenant_user_key: str) -> dict[str
         "level": location.level,
         "time_start": location.time_start,
         "time_end": location.time_end,
-        "metadata": dict(location.metadata),
-        "updated_at_unix": time.time(),
+        "metadata": metadata,
     }
 
 

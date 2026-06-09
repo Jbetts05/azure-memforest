@@ -108,6 +108,23 @@ def _fact_location(fact_id="fact-1", tree_id="tree-1", node_id="node-1") -> Fact
     )
 
 
+def _fact_location_for_version(version: str, fact_id="fact-1", tree_id="tree-1", node_id="node-1", *, generation: int = 1) -> FactLocation:
+    location = _fact_location(fact_id=fact_id, tree_id=tree_id, node_id=node_id)
+    return FactLocation(
+        fact_id=location.fact_id,
+        tree_id=location.tree_id,
+        node_id=location.node_id,
+        tree_type=location.tree_type,
+        level=location.level,
+        tenant_id=location.tenant_id,
+        user_id=location.user_id,
+        forest_version=version,
+        time_start=location.time_start,
+        time_end=location.time_end,
+        metadata={"generation": generation},
+    )
+
+
 @pytest.mark.asyncio
 async def test_cosmos_tree_node_store_upsert_get_and_tombstone() -> None:
     container = FakeCosmosContainer()
@@ -224,6 +241,23 @@ async def test_cosmos_fact_location_index_upsert_get_delete() -> None:
     assert locations["missing"] == []
     assert after_delete["fact-1"] == []
     assert [loc.tree_id for loc in after_delete["fact-2"]] == ["tree-2"]
+
+
+@pytest.mark.asyncio
+async def test_cosmos_fact_location_hash_is_stable_across_generation_metadata() -> None:
+    container = FakeCosmosContainer()
+    first = CosmosFactLocationIndex(container, tenant_id="tenant-1", user_id="user-1", forest_version="v1")
+    second = CosmosFactLocationIndex(container, tenant_id="tenant-1", user_id="user-1", forest_version="v2")
+
+    await first.upsert_locations([_fact_location_for_version("v1", generation=1)])
+    await second.upsert_locations([_fact_location_for_version("v2", generation=2)])
+
+    docs = [item for item in container.items.values() if item.get("fact_id") == "fact-1"]
+    assert len(docs) == 2
+    assert {doc["doc_kind"] for doc in docs} == {"fact_location"}
+    assert len({doc["content_sha256"] for doc in docs}) == 1
+    assert (await first.get_locations(["fact-1"]))["fact-1"][0].forest_version == "v1"
+    assert (await second.get_locations(["fact-1"]))["fact-1"][0].forest_version == "v2"
 
 
 @pytest.mark.asyncio
