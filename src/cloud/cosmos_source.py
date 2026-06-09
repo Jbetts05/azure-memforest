@@ -30,7 +30,9 @@ class CosmosTreeNodeStore:
             return None
         if item.get("tombstoned"):
             return None
-        return _stored_tree_node_from_doc(item)
+        if item.get("doc_kind") != "tree_node_membership":
+            return _stored_tree_node_from_doc(item)
+        return await self._read_body(item)
 
     async def get_nodes(self, tree_id: str, node_ids: list[str]) -> list[StoredTreeNode]:
         nodes = []
@@ -52,9 +54,13 @@ class CosmosTreeNodeStore:
         async for item in _aiter(self.container.query_items(query=query, parameters=params, partition_key=self.tenant_user_key)):
             if item.get("tombstoned"):
                 continue
-            metadata = dict(item.get("metadata", {}))
-            if metadata.get("parent_id") in {None, ""}:
-                roots.append(_stored_tree_node_from_doc(item))
+            if item.get("doc_kind") == "tree_node_body":
+                continue
+            if _node_parent_id(item) in {None, ""}:
+                node = await self._node_from_query_item(item)
+                if node is None:
+                    continue
+                roots.append(node)
                 if len(roots) >= limit:
                     break
         return roots
@@ -73,7 +79,12 @@ class CosmosTreeNodeStore:
         async for item in _aiter(self.container.query_items(query=query, parameters=params, partition_key=self.tenant_user_key)):
             if item.get("tombstoned"):
                 continue
-            nodes.append(_stored_tree_node_from_doc(item))
+            if item.get("doc_kind") == "tree_node_body":
+                continue
+            node = await self._node_from_query_item(item)
+            if node is None:
+                continue
+            nodes.append(node)
             if len(nodes) >= limit:
                 break
         return nodes
@@ -83,7 +94,11 @@ class CosmosTreeNodeStore:
             self._validate_node_scope(node)
 
         async def _upsert(node: StoredTreeNode) -> None:
-            await _maybe_await(self.container.upsert_item(_tree_node_doc(node, self.tenant_user_key)))
+            body = _tree_node_body_doc(node, self.tenant_user_key)
+            existing = await self._read_body_doc(body["id"])
+            if not _same_tree_node_body(existing, body):
+                await _maybe_await(self.container.upsert_item(body))
+            await _maybe_await(self.container.upsert_item(_tree_node_membership_doc(node, self.tenant_user_key, body)))
 
         await run_bounded(nodes, _upsert)
 
@@ -106,6 +121,49 @@ class CosmosTreeNodeStore:
     def _validate_node_scope(self, node: StoredTreeNode) -> None:
         if node.tenant_id != self.tenant_id or node.user_id != self.user_id or node.forest_version != self.forest_version:
             raise ValueError("StoredTreeNode scope does not match CosmosTreeNodeStore scope.")
+
+    async def _node_from_query_item(self, item: dict[str, Any]) -> StoredTreeNode | None:
+        if item.get("doc_kind") != "tree_node_membership":
+            return _stored_tree_node_from_doc(item)
+        return await self._read_body(item)
+
+    async def _read_body(self, membership: dict[str, Any]) -> StoredTreeNode | None:
+        body_id = str(membership.get("body_id") or "")
+        if not body_id:
+            return None
+        try:
+            body = await _maybe_await(self.container.read_item(item=body_id, partition_key=self.tenant_user_key))
+        except Exception as exc:
+            if _is_not_found(exc):
+                return None
+            raise
+        if body.get("tenant_id") != self.tenant_id or body.get("user_id") != self.user_id or body.get("tombstoned"):
+            return None
+        node = _stored_tree_node_from_doc(body)
+        return StoredTreeNode(
+            tree_id=node.tree_id,
+            node_id=node.node_id,
+            level=node.level,
+            summary=node.summary,
+            child_ids=node.child_ids,
+            fact_ids=node.fact_ids,
+            tenant_id=node.tenant_id,
+            user_id=node.user_id,
+            forest_version=self.forest_version,
+            schema_version=node.schema_version,
+            metadata={**dict(node.metadata), **dict(membership.get("metadata") or {})},
+        )
+
+    async def _read_body_doc(self, body_id: str) -> dict[str, Any] | None:
+        try:
+            body = await _maybe_await(self.container.read_item(item=body_id, partition_key=self.tenant_user_key))
+        except Exception as exc:
+            if _is_not_found(exc):
+                return None
+            raise
+        if body.get("tenant_id") != self.tenant_id or body.get("user_id") != self.user_id or body.get("tombstoned"):
+            return None
+        return body
 
 
 class CosmosFactLocationIndex:
@@ -162,9 +220,27 @@ class CosmosFactLocationIndex:
             raise ValueError("FactLocation scope does not match CosmosFactLocationIndex scope.")
 
 
-def _tree_node_doc(node: StoredTreeNode, tenant_user_key: str) -> dict[str, Any]:
+def _tree_node_body_doc(node: StoredTreeNode, tenant_user_key: str) -> dict[str, Any]:
+    content = _tree_node_content(node)
+    content_hash = _stable_hash(content)
+    return {
+        "id": _tree_node_body_id(node.tree_id, node.node_id, content_hash),
+        "doc_kind": "tree_node_body",
+        "schema_version": node.schema_version,
+        "tenant_id": node.tenant_id,
+        "user_id": node.user_id,
+        "tenant_user_key": tenant_user_key,
+        "content_sha256": content_hash,
+        **content,
+        "tombstoned": False,
+        "updated_at_unix": time.time(),
+    }
+
+
+def _tree_node_membership_doc(node: StoredTreeNode, tenant_user_key: str, body: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": _tree_node_id(node.tree_id, node.node_id, node.forest_version or ""),
+        "doc_kind": "tree_node_membership",
         "schema_version": node.schema_version,
         "tenant_id": node.tenant_id,
         "user_id": node.user_id,
@@ -172,13 +248,32 @@ def _tree_node_doc(node: StoredTreeNode, tenant_user_key: str) -> dict[str, Any]
         "forest_version": node.forest_version,
         "tree_id": node.tree_id,
         "node_id": node.node_id,
+        "body_id": body["id"],
+        "content_sha256": body["content_sha256"],
+        "metadata": {
+            "parent_id": node.metadata.get("parent_id"),
+            "tree_type": node.metadata.get("tree_type"),
+            "generation": node.metadata.get("generation"),
+        },
+        "tombstoned": False,
+        "updated_at_unix": time.time(),
+    }
+
+
+def _tree_node_content(node: StoredTreeNode) -> dict[str, Any]:
+    metadata = {
+        key: value
+        for key, value in dict(node.metadata).items()
+        if key not in {"generation", "forest_version"}
+    }
+    return {
         "level": node.level,
         "summary": node.summary,
         "child_ids": list(node.child_ids),
         "fact_ids": list(node.fact_ids),
-        "metadata": dict(node.metadata),
-        "tombstoned": False,
-        "updated_at_unix": time.time(),
+        "tree_id": node.tree_id,
+        "node_id": node.node_id,
+        "metadata": metadata,
     }
 
 
@@ -237,6 +332,29 @@ def _fact_location_from_doc(item: dict[str, Any]) -> FactLocation:
 
 def _tree_node_id(tree_id: str, node_id: str, forest_version: str) -> str:
     return _hash_id("tree_node", tree_id, node_id, forest_version)
+
+
+def _tree_node_body_id(tree_id: str, node_id: str, content_sha256: str) -> str:
+    return _hash_id("tree_node_body", tree_id, node_id, content_sha256)
+
+
+def _node_parent_id(item: dict[str, Any]) -> Any:
+    return dict(item.get("metadata") or {}).get("parent_id")
+
+
+def _same_tree_node_body(existing: dict[str, Any] | None, document: dict[str, Any]) -> bool:
+    return existing is not None and existing.get("content_sha256") == document.get("content_sha256")
+
+
+def _stable_hash(value: Any) -> str:
+    payload = json_dumps(value)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def json_dumps(value: Any) -> str:
+    import json
+
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 def _fact_location_id(location: FactLocation) -> str:

@@ -15,11 +15,15 @@ class NotFoundError(Exception):
 class FakeCosmosContainer:
     def __init__(self):
         self.items: dict[tuple[str, str], dict] = {}
+        self.upsert_count = 0
+        self.read_count = 0
 
     def upsert_item(self, item):
+        self.upsert_count += 1
         self.items[(item["tenant_user_key"], item["id"])] = dict(item)
 
     def read_item(self, *, item, partition_key):
+        self.read_count += 1
         key = (partition_key, item)
         if key not in self.items:
             raise NotFoundError()
@@ -74,6 +78,23 @@ def _tree_node(node_id="node-1", tree_id="tree-1", *, parent_id=None, level="L1"
     )
 
 
+def _tree_node_for_version(version: str, node_id="node-1", tree_id="tree-1", *, summary="summary", parent_id=None, level="L1") -> StoredTreeNode:
+    node = _tree_node(node_id=node_id, tree_id=tree_id, parent_id=parent_id, level=level)
+    return StoredTreeNode(
+        tree_id=node.tree_id,
+        node_id=node.node_id,
+        level=node.level,
+        summary=summary,
+        child_ids=node.child_ids,
+        fact_ids=node.fact_ids,
+        tenant_id=node.tenant_id,
+        user_id=node.user_id,
+        forest_version=version,
+        schema_version=node.schema_version,
+        metadata=node.metadata,
+    )
+
+
 def _fact_location(fact_id="fact-1", tree_id="tree-1", node_id="node-1") -> FactLocation:
     return FactLocation(
         fact_id=fact_id,
@@ -125,8 +146,47 @@ async def test_cosmos_tree_node_store_upserts_with_bounded_overlap() -> None:
 
     await store.upsert_nodes([_tree_node(f"node-{index}") for index in range(4)])
 
-    assert len(container.items) == 4
+    assert len(container.items) == 8
     assert container.max_active > 1
+
+
+@pytest.mark.asyncio
+async def test_cosmos_tree_node_store_reuses_stable_body_across_versions() -> None:
+    container = FakeCosmosContainer()
+    first = CosmosTreeNodeStore(container, tenant_id="tenant-1", user_id="user-1", forest_version="v1")
+    second = CosmosTreeNodeStore(container, tenant_id="tenant-1", user_id="user-1", forest_version="v2")
+    await first.upsert_nodes([_tree_node_for_version("v1")])
+    await second.upsert_nodes([_tree_node_for_version("v2")])
+
+    assert len(container.items) == 3  # one stable body, two version memberships
+    assert container.upsert_count == 3
+    assert (await second.get_node("tree-1", "node-1")).summary == "summary"
+
+
+@pytest.mark.asyncio
+async def test_cosmos_tree_node_store_overwrites_stable_body_when_content_changes() -> None:
+    container = FakeCosmosContainer()
+    first = CosmosTreeNodeStore(container, tenant_id="tenant-1", user_id="user-1", forest_version="v1")
+    second = CosmosTreeNodeStore(container, tenant_id="tenant-1", user_id="user-1", forest_version="v2")
+    await first.upsert_nodes([_tree_node_for_version("v1", summary="old")])
+    await second.upsert_nodes([_tree_node_for_version("v2", summary="new")])
+
+    assert len(container.items) == 4
+    assert container.upsert_count == 4
+    assert (await first.get_node("tree-1", "node-1")).summary == "old"
+    assert (await second.get_node("tree-1", "node-1")).summary == "new"
+
+
+@pytest.mark.asyncio
+async def test_cosmos_tree_node_store_keeps_removed_nodes_out_of_new_version() -> None:
+    container = FakeCosmosContainer()
+    first = CosmosTreeNodeStore(container, tenant_id="tenant-1", user_id="user-1", forest_version="v1")
+    second = CosmosTreeNodeStore(container, tenant_id="tenant-1", user_id="user-1", forest_version="v2")
+    await first.upsert_nodes([_tree_node_for_version("v1", "root"), _tree_node_for_version("v1", "removed")])
+    await second.upsert_nodes([_tree_node_for_version("v2", "root")])
+
+    assert {node.node_id for node in await first.list_nodes_in_tree("tree-1")} == {"root", "removed"}
+    assert {node.node_id for node in await second.list_nodes_in_tree("tree-1")} == {"root"}
 
 
 @pytest.mark.asyncio
