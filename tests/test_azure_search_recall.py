@@ -57,6 +57,7 @@ def test_azure_search_upsert_requires_embedding_and_dimension() -> None:
         forest_version="v1",
     )
     assert client.uploaded[0]["embedding"] == [0.1, 0.2]
+    assert client.uploaded[0]["content_sha256"]
 
     bad = RecallDocument(
         tenant_id="tenant-1",
@@ -170,3 +171,76 @@ def test_azure_search_upsert_rejects_missing_tenant() -> None:
 
     with pytest.raises(ValueError, match="tenant_id"):
         index.upsert_documents([doc])
+
+
+def test_recall_content_hash_is_stable_across_forest_versions() -> None:
+    first_client = FakeSearchClient()
+    second_client = FakeSearchClient()
+    index = AzureSearchRecallIndex(
+        endpoint="https://search.example",
+        index_name="memforest-recall",
+        vector_dimensions=2,
+        search_client=first_client,
+    )
+    second = AzureSearchRecallIndex(
+        endpoint="https://search.example",
+        index_name="memforest-recall",
+        vector_dimensions=2,
+        search_client=second_client,
+    )
+    doc_v1 = _document()
+    doc_v2 = RecallDocument(
+        tenant_id=doc_v1.tenant_id,
+        user_id=doc_v1.user_id,
+        tree_id=doc_v1.tree_id,
+        node_id=doc_v1.node_id,
+        tree_type=doc_v1.tree_type,
+        forest_version="v2",
+        embedding_model_version=doc_v1.embedding_model_version,
+        summary=doc_v1.summary,
+        embedding=doc_v1.embedding,
+    )
+
+    index.upsert_documents([doc_v1])
+    second.upsert_documents([doc_v2])
+
+    assert first_client.uploaded[0]["id"] != second_client.uploaded[0]["id"]
+    assert first_client.uploaded[0]["content_sha256"] == second_client.uploaded[0]["content_sha256"]
+
+
+def test_recall_content_hash_changes_with_embedding_model_or_vector() -> None:
+    client = FakeSearchClient()
+    index = AzureSearchRecallIndex(
+        endpoint="https://search.example",
+        index_name="memforest-recall",
+        vector_dimensions=2,
+        search_client=client,
+    )
+    base = _document()
+    model_changed = RecallDocument(
+        tenant_id=base.tenant_id,
+        user_id=base.user_id,
+        tree_id=base.tree_id,
+        node_id=base.node_id,
+        tree_type=base.tree_type,
+        forest_version=base.forest_version,
+        embedding_model_version="embed-v2",
+        summary=base.summary,
+        embedding=base.embedding,
+    )
+    vector_changed = RecallDocument(
+        tenant_id=base.tenant_id,
+        user_id=base.user_id,
+        tree_id=base.tree_id,
+        node_id=base.node_id,
+        tree_type=base.tree_type,
+        forest_version=base.forest_version,
+        embedding_model_version=base.embedding_model_version,
+        summary=base.summary,
+        embedding=(0.2, 0.3),
+    )
+
+    index.upsert_documents([base, model_changed, vector_changed])
+
+    hashes = {item["content_sha256"] for item in client.uploaded}
+    assert len(hashes) == 3

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any
 
 from src.cloud.contracts import RecallCandidate, RecallDocument
@@ -176,6 +178,7 @@ def build_recall_search_index(index_name: str, vector_dimensions: int):
             SimpleField(name="forest_version", type=SearchFieldDataType.String, filterable=True),
             SimpleField(name="embedding_model_version", type=SearchFieldDataType.String, filterable=True),
             SimpleField(name="schema_version", type=SearchFieldDataType.Int32, filterable=True),
+            SimpleField(name="content_sha256", type=SearchFieldDataType.String, filterable=True),
             SearchableField(name="summary", type=SearchFieldDataType.String),
             SearchField(
                 name=VECTOR_FIELD_NAME,
@@ -241,9 +244,24 @@ def _document_to_search_payload(document: RecallDocument, vector_dimensions: int
         "forest_version": document.forest_version,
         "embedding_model_version": document.embedding_model_version,
         "schema_version": document.schema_version,
+        "content_sha256": document.content_sha256 or _recall_content_sha256(document),
         "summary": document.summary,
         VECTOR_FIELD_NAME: list(document.embedding),
     }
+
+
+def _recall_content_sha256(document: RecallDocument) -> str:
+    payload = {
+        "tenant_id": document.tenant_id,
+        "user_id": document.user_id,
+        "tree_id": document.tree_id,
+        "node_id": document.node_id,
+        "tree_type": document.tree_type,
+        "embedding_model_version": document.embedding_model_version,
+        "summary": document.summary,
+        "embedding": [float(value) for value in document.embedding],
+    }
+    return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
 def _filter_expression(filters: dict[str, Any]) -> str:
