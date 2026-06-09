@@ -23,7 +23,12 @@ class BrowseEmbeddingRecord:
 
 
 class CosmosBrowseEmbeddingStore:
-    """Browse embeddings scoped to one tenant/user/forest/model version."""
+    """Browse embeddings scoped to one tenant/user/model version.
+
+    The logical row is keyed by node_id + embedding model so unchanged node
+    embeddings can be reused across forest versions instead of rewritten on
+    every materialization.
+    """
 
     def __init__(
         self,
@@ -72,7 +77,11 @@ class CosmosBrowseEmbeddingStore:
             raise ValueError("model_version does not match CosmosBrowseEmbeddingStore scope.")
 
         async def _upsert(record: BrowseEmbeddingRecord) -> None:
-            await _maybe_await(self.container.upsert_item(_record_to_doc(record, self)))
+            document = _record_to_doc(record, self)
+            existing = await self._read_existing(record.node_id)
+            if _same_logical_record(existing, document):
+                return
+            await _maybe_await(self.container.upsert_item(document))
 
         await run_bounded(records, _upsert)
 
@@ -96,9 +105,24 @@ class CosmosBrowseEmbeddingStore:
         return (
             item.get("tenant_id") == self.tenant_id
             and item.get("user_id") == self.user_id
-            and item.get("forest_version") == self.forest_version
             and item.get("embedding_model_version") == self.embedding_model_version
         )
+
+    async def _read_existing(self, node_id: str) -> dict[str, Any] | None:
+        try:
+            item = await _maybe_await(
+                self.container.read_item(
+                    item=_embedding_id(node_id, self.embedding_model_version),
+                    partition_key=self.tenant_user_key,
+                )
+            )
+        except Exception as exc:
+            if _is_not_found(exc):
+                return None
+            raise
+        if not self._in_scope(item) or item.get("tombstoned"):
+            return None
+        return item
 
 
 def _record_to_doc(record: BrowseEmbeddingRecord, store: CosmosBrowseEmbeddingStore) -> dict[str, Any]:
@@ -114,6 +138,7 @@ def _record_to_doc(record: BrowseEmbeddingRecord, store: CosmosBrowseEmbeddingSt
         "tree_id": record.tree_id,
         "tree_type": record.tree_type,
         "embedding": list(record.embedding),
+        "embedding_sha256": _embedding_sha256(record.embedding),
         "tombstoned": False,
         "updated_at_unix": time.time(),
     }
@@ -122,6 +147,24 @@ def _record_to_doc(record: BrowseEmbeddingRecord, store: CosmosBrowseEmbeddingSt
 def _embedding_id(node_id: str, embedding_model_version: str) -> str:
     digest = hashlib.sha256(f"{node_id}\x1f{embedding_model_version}".encode("utf-8")).hexdigest()
     return f"browse_embedding_{digest}"
+
+
+def _embedding_sha256(embedding: tuple[float, ...]) -> str:
+    raw = ",".join(repr(float(value)) for value in embedding)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _same_logical_record(existing: dict[str, Any] | None, document: dict[str, Any]) -> bool:
+    if existing is None:
+        return False
+    existing_hash = existing.get("embedding_sha256")
+    if not existing_hash:
+        existing_hash = _embedding_sha256(tuple(float(value) for value in existing.get("embedding", [])))
+    return (
+        existing.get("tree_id") == document.get("tree_id")
+        and existing.get("tree_type") == document.get("tree_type")
+        and existing_hash == document.get("embedding_sha256")
+    )
 
 
 async def _maybe_await(value: Any):
