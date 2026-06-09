@@ -65,6 +65,25 @@ class CosmosTreeNodeStore:
                     break
         return roots
 
+    async def list_tree_ids(self, *, limit: int = 10000) -> list[str]:
+        query = (
+            "SELECT DISTINCT VALUE c.tree_id FROM c WHERE c.tenant_user_key=@pk "
+            "AND c.forest_version=@forest_version AND c.doc_kind=@doc_kind"
+        )
+        params = [
+            {"name": "@pk", "value": self.tenant_user_key},
+            {"name": "@forest_version", "value": self.forest_version},
+            {"name": "@doc_kind", "value": "tree_node_membership"},
+        ]
+        tree_ids: list[str] = []
+        async for tree_id in _aiter(self.container.query_items(query=query, parameters=params, partition_key=self.tenant_user_key)):
+            value = str(tree_id or "").strip()
+            if value and value not in tree_ids:
+                tree_ids.append(value)
+                if len(tree_ids) >= limit:
+                    break
+        return tree_ids
+
     async def list_nodes_in_tree(self, tree_id: str, *, limit: int = 1000) -> list[StoredTreeNode]:
         query = (
             "SELECT * FROM c WHERE c.tenant_user_key=@pk AND c.tree_id=@tree_id "

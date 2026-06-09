@@ -35,6 +35,7 @@ class FakeCosmosContainer:
     def query_items(self, *, query, parameters, partition_key):
         params = {param["name"]: param["value"] for param in parameters}
         result = []
+        distinct_tree_ids = "SELECT DISTINCT VALUE c.tree_id" in query
         for (pk, _id), item in self.items.items():
             if pk != partition_key:
                 continue
@@ -42,7 +43,13 @@ class FakeCosmosContainer:
                 continue
             if "@forest_version" in params and item.get("forest_version") != params["@forest_version"]:
                 continue
+            if "@doc_kind" in params and item.get("doc_kind") != params["@doc_kind"]:
+                continue
             if "@fact_ids" in params and item.get("fact_id") not in params["@fact_ids"]:
+                continue
+            if distinct_tree_ids:
+                if item.get("tree_id") not in result:
+                    result.append(item.get("tree_id"))
                 continue
             result.append({"id": item["id"]} if "SELECT c.id" in query else dict(item))
         return result
@@ -178,6 +185,18 @@ async def test_cosmos_tree_node_store_reuses_stable_body_across_versions() -> No
     assert len(container.items) == 3  # one stable body, two version memberships
     assert container.upsert_count == 3
     assert (await second.get_node("tree-1", "node-1")).summary == "summary"
+
+
+@pytest.mark.asyncio
+async def test_cosmos_tree_node_store_lists_tree_ids_for_committed_version_memberships() -> None:
+    container = FakeCosmosContainer()
+    first = CosmosTreeNodeStore(container, tenant_id="tenant-1", user_id="user-1", forest_version="v1")
+    second = CosmosTreeNodeStore(container, tenant_id="tenant-1", user_id="user-1", forest_version="v2")
+    await first.upsert_nodes([_tree_node_for_version("v1", tree_id="tree-1"), _tree_node_for_version("v1", tree_id="tree-2")])
+    await second.upsert_nodes([_tree_node_for_version("v2", tree_id="tree-2")])
+
+    assert await first.list_tree_ids() == ["tree-1", "tree-2"]
+    assert await second.list_tree_ids() == ["tree-2"]
 
 
 @pytest.mark.asyncio
