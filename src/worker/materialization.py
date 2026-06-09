@@ -46,6 +46,9 @@ class MaterializationProjection:
     browse_embedding_records: list[BrowseEmbeddingRecord]
     summary_cache_entries: list[SummaryCacheEntry]
     snapshot_payload: bytes
+    changed_tree_ids: frozenset[str] | None = None
+    deleted_tree_ids: frozenset[str] = frozenset()
+    baseline_forest_version: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -892,6 +895,9 @@ def project_forest_snapshot(
             generation=generation,
             embedding_model_version=embedding_model_version,
         ),
+        changed_tree_ids=snapshot.changed_tree_ids,
+        deleted_tree_ids=snapshot.deleted_tree_ids,
+        baseline_forest_version=snapshot.baseline_forest_version,
     )
 
 
@@ -1010,6 +1016,12 @@ def _materialization_fingerprint_metadata(
                 for entry in sorted(projection.summary_cache_entries, key=lambda item: item.content_hash)
             ]
         ),
+        "projection_delta": {
+            "changed_tree_ids": None if projection.changed_tree_ids is None else sorted(projection.changed_tree_ids),
+            "deleted_tree_ids": sorted(projection.deleted_tree_ids),
+            "baseline_forest_version": projection.baseline_forest_version,
+            "full_projection_required": projection.changed_tree_ids is None,
+        },
     }
     return {
         "materialization_fingerprint": _hash_json(inputs),
@@ -1023,6 +1035,10 @@ def _materialization_fingerprint_metadata(
         "recall_document_hash": inputs["recall_document_hash"],
         "browse_embedding_hash": inputs["browse_embedding_hash"],
         "summary_cache_hash": inputs["summary_cache_hash"],
+        "projection_delta_changed_tree_ids": None if projection.changed_tree_ids is None else sorted(projection.changed_tree_ids),
+        "projection_delta_deleted_tree_ids": sorted(projection.deleted_tree_ids),
+        "projection_delta_baseline_forest_version": projection.baseline_forest_version,
+        "projection_delta_full_required": projection.changed_tree_ids is None,
     }, inputs
 
 

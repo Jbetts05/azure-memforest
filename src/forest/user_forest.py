@@ -58,12 +58,20 @@ class IngestResult:
 
 @dataclass(frozen=True)
 class ForestMaterializationSnapshot:
-    """Point-in-time forest view used by cloud worker projection."""
+    """Point-in-time forest view used by cloud worker projection.
+
+    ``changed_tree_ids=None`` means the delta is unknown and consumers must
+    treat the snapshot as requiring full projection. An empty frozenset means a
+    known no-op delta.
+    """
 
     facts: list["ManagedFact"]
     trees: list["MemTree"]
     node_embeddings: dict[str, list[float]]
     summary_cache: dict[str, str]
+    changed_tree_ids: frozenset[str] | None = None
+    deleted_tree_ids: frozenset[str] = frozenset()
+    baseline_forest_version: str | None = None
 
 
 # ── serialization helpers ─────────────────────────────────────────────────────
@@ -159,6 +167,8 @@ class UserForest:
         )
         self._cell_store: dict[str, MemCell] = {}
         self._summary_cache: dict[str, str] = {}
+        self._last_changed_tree_ids: frozenset[str] | None = None
+        self._last_deleted_tree_ids: frozenset[str] = frozenset()
 
     # ── ingest ────────────────────────────────────────────────────────────────
 
@@ -177,6 +187,7 @@ class UserForest:
             IngestResult with extraction and tree-update counts.
         """
         with self._lock:
+            self._mark_projection_delta_unknown()
             # 1. Extract cells + memory items
             extraction_result = self._extraction_pipeline.extract_session(
                 session_id, turns
@@ -227,6 +238,10 @@ class UserForest:
                     vector_dim=self._config.api.embedding.dimension,
                 )
                 self._rewire_query_pipeline()
+            self._record_projection_delta(
+                changed_tree_ids={br.tree_id for br in build_results},
+                deleted_tree_ids=set(),
+            )
 
             # 7. Register with SessionRegistry
             self._registry.register_session(
@@ -252,6 +267,7 @@ class UserForest:
     def delete_session(self, session_id: str) -> None:
         """Mark session deleted and apply local tree deletions with lazy summary flush."""
         with self._lock:
+            self._mark_projection_delta_unknown()
             result = self._registry.delete_session(session_id)
             orphaned = self._registry.compute_orphaned_facts(
                 {f.fact_id for f in self._fact_manager.iter_facts()}
@@ -264,6 +280,7 @@ class UserForest:
     def delete_turn(self, session_id: str, turn_id: str) -> None:
         """Mark turn deleted and apply local tree deletions with lazy summary flush."""
         with self._lock:
+            self._mark_projection_delta_unknown()
             result = self._registry.delete_turn(session_id, turn_id)
             orphaned = self._registry.compute_orphaned_facts(
                 {f.fact_id for f in self._fact_manager.iter_facts()}
@@ -333,6 +350,8 @@ class UserForest:
                 trees=trees,
                 node_embeddings=node_embeddings,
                 summary_cache=dict(self._summary_cache),
+                changed_tree_ids=self._last_changed_tree_ids,
+                deleted_tree_ids=self._last_deleted_tree_ids,
             )
 
     @property
@@ -471,6 +490,7 @@ class UserForest:
         affected_cell_ids: set[str],
     ) -> None:
         touched_tree_ids: set[str] = set()
+        deleted_tree_ids: set[str] = set()
         current_cache = _extract_summary_cache_from_trees(self._tree_builder.trees)
         self._summary_cache = {**self._summary_cache, **current_cache}
         self._tree_builder.set_summary_cache(self._summary_cache)
@@ -487,6 +507,8 @@ class UserForest:
             tree = self._tree_builder._trees.get(tree_id)
             if tree is not None and delete_cell(tree, cell_id):
                 touched_tree_ids.add(tree_id)
+                if not tree.nodes:
+                    deleted_tree_ids.add(tree_id)
             self._cell_store.pop(cell_id, None)
 
         if orphaned_fact_ids:
@@ -512,6 +534,8 @@ class UserForest:
                     deleted_any = delete_fact(tree, fact_id) or deleted_any
                 if deleted_any:
                     touched_tree_ids.add(tree_id)
+                    if not tree.nodes:
+                        deleted_tree_ids.add(tree_id)
 
         build_results = self._tree_builder.flush_dirty_trees(tree_ids=touched_tree_ids)
         flushed_tree_ids = {result.tree_id for result in build_results}
@@ -534,6 +558,15 @@ class UserForest:
             self._summary_cache.update(refreshed_cache)
             self._tree_builder.set_summary_cache(self._summary_cache)
         self._rewire_query_pipeline()
+        self._record_projection_delta(changed_tree_ids=touched_tree_ids, deleted_tree_ids=deleted_tree_ids)
+
+    def _mark_projection_delta_unknown(self) -> None:
+        self._last_changed_tree_ids = None
+        self._last_deleted_tree_ids = frozenset()
+
+    def _record_projection_delta(self, *, changed_tree_ids: set[str], deleted_tree_ids: set[str]) -> None:
+        self._last_changed_tree_ids = frozenset(changed_tree_ids)
+        self._last_deleted_tree_ids = frozenset(deleted_tree_ids)
 
     def _refresh_node_index_for_trees(self, tree_ids: set[str]) -> None:
         from src.build.node_index import NodeEntry

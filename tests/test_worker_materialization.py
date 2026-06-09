@@ -128,6 +128,9 @@ def test_project_forest_snapshot_tags_cloud_artifacts() -> None:
             "session-root": [0.0, 1.0],
         },
         summary_cache={"abc": "cached summary"},
+        changed_tree_ids=frozenset({"entity:alice"}),
+        deleted_tree_ids=frozenset({"entity:old"}),
+        baseline_forest_version="v1",
     )
 
     projection = project_forest_snapshot(
@@ -150,6 +153,31 @@ def test_project_forest_snapshot_tags_cloud_artifacts() -> None:
     assert set(projection.browse_embeddings) == {"entity-root", "entity-leaf", "session-root"}
     assert projection.summary_cache_entries[0].content_hash == "abc"
     assert b'"forest_version":"v2"' in projection.snapshot_payload
+    assert projection.changed_tree_ids == frozenset({"entity:alice"})
+    assert projection.deleted_tree_ids == frozenset({"entity:old"})
+    assert projection.baseline_forest_version == "v1"
+
+
+def test_project_forest_snapshot_defaults_to_full_projection_required() -> None:
+    snapshot = ForestMaterializationSnapshot(
+        facts=[],
+        trees=[],
+        node_embeddings={},
+        summary_cache={},
+    )
+
+    projection = project_forest_snapshot(
+        snapshot,
+        tenant_id="tenant-1",
+        user_id="user-1",
+        forest_version="v1",
+        generation=1,
+        embedding_model_version="embed-v1",
+    )
+
+    assert projection.changed_tree_ids is None
+    assert projection.deleted_tree_ids == frozenset()
+    assert projection.baseline_forest_version is None
 
 
 class FakeLeaseStore:
@@ -779,6 +807,9 @@ async def test_materialization_handler_commits_snapshot_pointer_metadata() -> No
     assert metadata["prompt_config_hash"] == "prompt-hash"
     assert "materialization_fingerprint_inputs" not in metadata
     assert metadata["fingerprint_inputs_id"].endswith(f"{manifest_store.latest.forest_version}.fingerprint.json")
+    assert metadata["projection_delta_full_required"] is True
+    assert metadata["projection_delta_changed_tree_ids"] is None
+    assert metadata["projection_delta_deleted_tree_ids"] == []
 
 
 @pytest.mark.asyncio
