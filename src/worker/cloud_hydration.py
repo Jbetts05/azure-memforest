@@ -462,7 +462,7 @@ def _ordered_leaf_payloads(nodes: dict[str, MemTreeNode]) -> list[str]:
 def _session_leaves_from_nodes(nodes: dict[str, MemTreeNode], stored_nodes: list[Any], *, tree_id: str, tree_key: str) -> dict[str, SessionLeaf]:
     stored_by_node_id = {str(getattr(node, "node_id", "")): node for node in stored_nodes}
     leaves: dict[str, SessionLeaf] = {}
-    session_id = tree_key.removeprefix("session:") or tree_id.removeprefix("session:")
+    default_session_id = tree_key.removeprefix("session:") or tree_id.removeprefix("session:")
     for leaf in sorted((node for node in nodes.values() if node.level == 0), key=lambda node: (node.time_start, node.time_end, node.node_id)):
         if not leaf.child_ids:
             continue
@@ -470,7 +470,7 @@ def _session_leaves_from_nodes(nodes: dict[str, MemTreeNode], stored_nodes: list
         stored = stored_by_node_id.get(leaf.node_id)
         leaves[cell_id] = SessionLeaf(
             cell_id=cell_id,
-            session_id=session_id,
+            session_id=_session_id_from_cell_id(cell_id, default_session_id),
             cell_index=_cell_index_from_id(cell_id),
             time_start=leaf.time_start,
             time_end=leaf.time_end,
@@ -486,6 +486,15 @@ def _cell_index_from_id(cell_id: str) -> int:
 
     match = re.search(r"cell[_-](\d+)", str(cell_id))
     return int(match.group(1)) if match else 0
+
+
+def _session_id_from_cell_id(cell_id: str, default_session_id: str) -> str:
+    text = str(cell_id or "")
+    if "#" in text:
+        prefix = text.split("#", 1)[0]
+        if prefix:
+            return prefix
+    return default_session_id
 
 
 def _refresh_tree_bounds(tree: MemTree, root: MemTreeNode) -> None:
@@ -567,6 +576,7 @@ def _apply_cloud_state_locked(user_forest: Any, state: CloudUserForestState) -> 
     from src.forest.memforest import _populate_registry_from_trees
 
     _populate_registry_from_trees(user_forest._registry, user_forest._tree_store)
+    _populate_session_alias_map(user_forest, state.trees)
 
     user_forest._node_index = _node_index_from_cloud_embeddings(
         user_forest,
@@ -593,6 +603,19 @@ def _clear_fact_manager(fact_manager: Any) -> None:
         fact_manager._duplicate_records = []
         fact_manager._exact_index = {}
         fact_manager._index = faiss.IndexFlatIP(fact_manager.vector_dim)
+
+
+def _populate_session_alias_map(user_forest: Any, trees: list[MemTree]) -> None:
+        alias_map: dict[str, str] = {}
+        for tree in trees:
+            if tree.tree_type != "session":
+                continue
+            alias = str(tree.tree_key or tree.tree_id).removeprefix("session:")
+            for leaf in tree.session_leaves.values():
+                raw_session_id = str(getattr(leaf, "session_id", "") or "")
+                if raw_session_id:
+                    alias_map[raw_session_id] = alias
+        user_forest._tree_builder._session_alias_map = alias_map
 
 
 def _reset_empty_user_forest(user_forest: Any) -> None:

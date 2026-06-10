@@ -657,6 +657,64 @@ async def test_cloud_hydration_registry_strips_session_tree_key_prefix(tmp_path)
     assert user_forest._registry._sessions["s1"].deleted is True
 
 
+@pytest.mark.asyncio
+async def test_cloud_hydration_registry_uses_public_session_id_from_cell_id(tmp_path) -> None:
+    dim = 4
+    user_forest = _user_forest(tmp_path, dim)
+    state = await load_cloud_user_forest_state(
+        tree_store=FakeTreeStore(
+            {
+                "session:sess_0001": [
+                    _node("session-leaf", level="L0", child_ids=("public-session#cell_0000_abcd",), fact_ids=("fact_1",), tree_id="session:sess_0001", tree_type="session", tree_key="sess_0001", tree_label="sess_0001"),
+                ],
+                "entity:user": [
+                    _node("entity-leaf", level="L0", child_ids=("fact_1",), tree_id="entity:user", tree_key="user", tree_label="user"),
+                ],
+            }
+        ),
+        fact_store=FakeFactStore({"fact_1": _fact("fact_1", dim)}),
+    )
+    apply_cloud_state_to_user_forest(user_forest, state)
+
+    user_forest.delete_session("public-session")
+
+    assert user_forest._fact_manager.get_fact("fact_1") is None
+
+
+@pytest.mark.asyncio
+async def test_cloud_hydration_restores_session_alias_map_for_future_ingest(tmp_path) -> None:
+    dim = 4
+    user_forest = _user_forest(tmp_path, dim)
+    state = await load_cloud_user_forest_state(
+        tree_store=FakeTreeStore(
+            {
+                "session:sess_0001": [
+                    _node("session-leaf-a", level="L0", child_ids=("alice-session#cell_0000_a",), fact_ids=("fact_1",), tree_id="session:sess_0001", tree_type="session", tree_key="sess_0001", tree_label="sess_0001"),
+                ],
+                "session:sess_0002": [
+                    _node("session-leaf-b", level="L0", child_ids=("bob-session#cell_0000_b",), fact_ids=("fact_2",), tree_id="session:sess_0002", tree_type="session", tree_key="sess_0002", tree_label="sess_0002"),
+                ],
+                "session:sess_0003": [
+                    _node("session-leaf-c", level="L0", child_ids=("carol-session#cell_0000_c",), fact_ids=("fact_3",), tree_id="session:sess_0003", tree_type="session", tree_key="sess_0003", tree_label="sess_0003"),
+                ],
+                "entity:user": [
+                    _node("entity-root", child_ids=("entity-leaf-a", "entity-leaf-b", "entity-leaf-c"), tree_id="entity:user", tree_key="user", tree_label="user"),
+                    _node("entity-leaf-a", parent_id="entity-root", level="L0", child_ids=("fact_1",), tree_id="entity:user", tree_key="user", tree_label="user"),
+                    _node("entity-leaf-b", parent_id="entity-root", level="L0", child_ids=("fact_2",), tree_id="entity:user", tree_key="user", tree_label="user"),
+                    _node("entity-leaf-c", parent_id="entity-root", level="L0", child_ids=("fact_3",), tree_id="entity:user", tree_key="user", tree_label="user"),
+                ],
+            }
+        ),
+        fact_store=FakeFactStore({"fact_1": _fact("fact_1", dim), "fact_2": _fact("fact_2", dim), "fact_3": _fact("fact_3", dim)}),
+    )
+    apply_cloud_state_to_user_forest(user_forest, state)
+
+    assert user_forest._tree_builder.session_alias_map["alice-session"] == "sess_0001"
+    assert user_forest._tree_builder.session_alias_map["bob-session"] == "sess_0002"
+    del user_forest._tree_builder._session_alias_map["alice-session"]
+    assert user_forest._tree_builder._public_session_id("new-session") == "sess_0004"
+
+
 def test_cloud_hydration_reembeds_fact_when_stored_embedding_dim_mismatches(tmp_path) -> None:
     dim = 4
     user_forest, client = _user_forest_with_client(tmp_path, dim)

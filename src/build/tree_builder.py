@@ -713,17 +713,35 @@ class TreeBuilder:
     def _ensure_session_aliases(self, session_ids) -> None:
         with self._lock:
             for session_id in session_ids:
-                if session_id not in self._session_alias_map:
-                    alias = f"sess_{len(self._session_alias_map) + 1:04d}"
-                    self._session_alias_map[str(session_id)] = alias
+                normalized = str(session_id)
+                if normalized not in self._session_alias_map:
+                    alias = self._next_session_alias_locked()
+                    self._session_alias_map[normalized] = alias
 
     def _public_session_id(self, session_id: str) -> str:
         with self._lock:
             alias = self._session_alias_map.get(str(session_id))
             if alias is None:
-                alias = f"sess_{len(self._session_alias_map) + 1:04d}"
+                alias = self._next_session_alias_locked()
                 self._session_alias_map[str(session_id)] = alias
             return alias
+
+    def _next_session_alias_locked(self) -> str:
+        existing = set(self._session_alias_map.values())
+        max_index = 0
+        for alias in existing:
+            text = str(alias)
+            if not text.startswith("sess_"):
+                continue
+            suffix = text[5:]
+            if suffix.isdigit():
+                max_index = max(max_index, int(suffix))
+        next_index = max_index + 1
+        while True:
+            alias = f"sess_{next_index:04d}"
+            if alias not in existing:
+                return alias
+            next_index += 1
 
     @staticmethod
     def _alias_cells(cells: list["MemCell"], public_session_id: str) -> list["MemCell"]:

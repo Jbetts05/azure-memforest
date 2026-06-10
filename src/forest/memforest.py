@@ -700,13 +700,15 @@ def _populate_registry_from_trees(registry, tree_store) -> None:
         tree = tree_store.get(tree_id)
         if tree is None or tree.tree_type != "session":
             continue
-        session_id = str(tree.tree_key or tree.tree_id).removeprefix("session:")
-        cell_ids = list(tree.session_leaves.keys())
-        cell_fact_ids: dict[str, list[str]] = {}
+        cells_by_session: dict[str, list[str]] = {}
+        cell_fact_ids_by_session: dict[str, dict[str, list[str]]] = {}
         for cell_id, leaf in tree.session_leaves.items():
-            cell_fact_ids[cell_id] = list(getattr(leaf, "fact_ids", []))
-        registry.register_synthetic_session(
-            session_id=session_id,
-            cell_ids=cell_ids,
-            cell_fact_ids=cell_fact_ids,
-        )
+            session_id = str(getattr(leaf, "session_id", "") or tree.tree_key or tree.tree_id).removeprefix("session:")
+            cells_by_session.setdefault(session_id, []).append(cell_id)
+            cell_fact_ids_by_session.setdefault(session_id, {})[cell_id] = list(getattr(leaf, "fact_ids", []))
+        for session_id, cell_ids in cells_by_session.items():
+            registry.register_synthetic_session(
+                session_id=session_id,
+                cell_ids=cell_ids,
+                cell_fact_ids=cell_fact_ids_by_session.get(session_id, {}),
+            )
