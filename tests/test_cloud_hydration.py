@@ -96,7 +96,7 @@ class FakeManifest:
         self.forest_version = str(metadata.get("forest_version") or "v1")
 
 
-def _node(node_id, *, parent_id=None, level="L1", child_ids=(), fact_ids=(), tree_id="tree-1"):
+def _node(node_id, *, parent_id=None, level="L1", child_ids=(), fact_ids=(), tree_id="tree-1", tree_type="entity", tree_key="entity:alice", tree_label="Alice"):
     return StoredTreeNode(
         tree_id=tree_id,
         node_id=node_id,
@@ -109,15 +109,23 @@ def _node(node_id, *, parent_id=None, level="L1", child_ids=(), fact_ids=(), tre
         forest_version="v1",
         metadata={
             "parent_id": parent_id,
-            "tree_type": "entity",
-            "tree_key": "entity:alice",
-            "tree_label": "Alice",
+            "tree_type": tree_type,
+            "tree_key": tree_key,
+            "tree_label": tree_label,
             "time_start": 1.0,
             "time_end": 2.0,
             "item_count": 1,
             "generation": 3,
         },
     )
+
+
+def _node_with_time(node_id, time_value, **kwargs):
+    node = _node(node_id, **kwargs)
+    metadata = dict(node.metadata)
+    metadata["time_start"] = time_value
+    metadata["time_end"] = time_value
+    return replace(node, metadata=metadata)
 
 
 def _embedding(dim):
@@ -441,6 +449,72 @@ async def test_cloud_hydration_marks_absent_required_stores_incomplete() -> None
 
 
 @pytest.mark.asyncio
+async def test_cloud_hydration_does_not_load_session_cell_ids_as_facts() -> None:
+    state = await load_cloud_user_forest_state(
+        tree_store=FakeTreeStore(
+            {
+                "session:s1": [
+                    _node("session-leaf", level="L0", child_ids=("s1#cell-1",), fact_ids=("fact_1",), tree_id="session:s1", tree_type="session", tree_key="s1", tree_label="s1"),
+                ]
+            }
+        ),
+        fact_store=FakeFactStore({"fact_1": _fact("fact_1", 4)}),
+    )
+
+    assert state.trees[0].tree_type == "session"
+    assert state.trees[0].fact_ids_ordered == []
+    assert state.trees[0].session_leaves["s1#cell-1"].fact_ids == ["fact_1"]
+    assert state.missing_fact_ids == ()
+
+
+@pytest.mark.asyncio
+async def test_cloud_hydration_applies_session_tree_with_reconstructed_leaves(tmp_path) -> None:
+    dim = 4
+    user_forest = _user_forest(tmp_path, dim)
+    state = await load_cloud_user_forest_state(
+        tree_store=FakeTreeStore(
+            {
+                "session:s1": [
+                    _node("session-leaf", level="L0", child_ids=("s1#cell-1",), fact_ids=("fact_1",), tree_id="session:s1", tree_type="session", tree_key="s1", tree_label="s1"),
+                ]
+            }
+        ),
+        fact_store=FakeFactStore({"fact_1": _fact("fact_1", dim)}),
+    )
+
+    result = apply_cloud_state_to_user_forest(user_forest, state)
+
+    assert result.tree_count == 1
+    assert user_forest._tree_store.get("session:s1").session_leaves["s1#cell-1"].fact_ids == ["fact_1"]
+
+
+@pytest.mark.asyncio
+async def test_cloud_hydration_applies_multi_leaf_session_tree(tmp_path) -> None:
+    dim = 4
+    user_forest = _user_forest(tmp_path, dim)
+    state = await load_cloud_user_forest_state(
+        tree_store=FakeTreeStore(
+            {
+                "session:s1": [
+                    _node("session-root", child_ids=("session-leaf-a", "session-leaf-b"), tree_id="session:s1", tree_type="session", tree_key="s1", tree_label="s1"),
+                    _node_with_time("session-leaf-a", 1.0, parent_id="session-root", level="L0", child_ids=("s1#cell-1",), fact_ids=("fact_1",), tree_id="session:s1", tree_type="session", tree_key="s1", tree_label="s1"),
+                    _node_with_time("session-leaf-b", 2.0, parent_id="session-root", level="L0", child_ids=("s1#cell-2",), fact_ids=("fact_2",), tree_id="session:s1", tree_type="session", tree_key="s1", tree_label="s1"),
+                ]
+            }
+        ),
+        fact_store=FakeFactStore({"fact_1": _fact("fact_1", dim), "fact_2": _fact("fact_2", dim)}),
+        summary_cache=FakeSummaryCache({_content_key(frozenset({"s1#cell-1", "s1#cell-2"})): "cached root"}),
+        browse_embedding_store=FakeBrowseEmbeddingStore({"session-root": _embedding(dim)}),
+    )
+
+    apply_cloud_state_to_user_forest(user_forest, state)
+
+    tree = user_forest._tree_store.get("session:s1")
+    assert tree.nodes["session-leaf-a"].next_leaf_id == "session-leaf-b"
+    assert tree.session_leaves["s1#cell-2"].fact_ids == ["fact_2"]
+
+
+@pytest.mark.asyncio
 async def test_cloud_hydration_applies_state_to_real_user_forest(tmp_path) -> None:
     dim = 4
     user_forest = _user_forest(tmp_path, dim)
@@ -469,6 +543,32 @@ async def test_cloud_hydration_applies_state_to_real_user_forest(tmp_path) -> No
     assert user_forest._node_index.get_embedding("root") is not None
     assert [fact.fact_id for fact in snapshot.facts] == ["fact_1"]
     assert [tree.tree_id for tree in snapshot.trees] == ["tree-1"]
+
+
+@pytest.mark.asyncio
+async def test_cloud_hydration_applies_multi_leaf_entity_tree(tmp_path) -> None:
+    dim = 4
+    user_forest = _user_forest(tmp_path, dim)
+    state = await load_cloud_user_forest_state(
+        tree_store=FakeTreeStore(
+            {
+                "tree-1": [
+                    _node("root", child_ids=("leaf-a", "leaf-b")),
+                    _node_with_time("leaf-a", 1.0, parent_id="root", level="L0", child_ids=("fact_a",), tree_id="tree-1"),
+                    _node_with_time("leaf-b", 2.0, parent_id="root", level="L0", child_ids=("fact_b",), tree_id="tree-1"),
+                ]
+            }
+        ),
+        fact_store=FakeFactStore({"fact_a": _fact("fact_a", dim), "fact_b": _fact("fact_b", dim)}),
+        summary_cache=FakeSummaryCache({_content_key(frozenset({"fact_a", "fact_b"})): "cached root"}),
+        browse_embedding_store=FakeBrowseEmbeddingStore({"root": _embedding(dim)}),
+    )
+
+    apply_cloud_state_to_user_forest(user_forest, state)
+
+    tree = user_forest._tree_store.get("tree-1")
+    assert tree.nodes["leaf-a"].next_leaf_id == "leaf-b"
+    assert tree.nodes["leaf-b"].prev_leaf_id == "leaf-a"
 
 
 def test_cloud_hydration_uses_stored_fact_embeddings_without_reembedding(tmp_path) -> None:

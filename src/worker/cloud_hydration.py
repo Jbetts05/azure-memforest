@@ -18,7 +18,7 @@ import numpy as np
 
 from src.build.node_index import NodeEntry, NodeIndex
 from src.build.tree import validate_tree_structure
-from src.build.tree_types import MemTree, MemTreeNode
+from src.build.tree_types import MemTree, MemTreeNode, SessionLeaf
 from src.forest.memforest import _content_key
 from src.utils.types import FactOccurrence, ManagedFact
 
@@ -218,20 +218,23 @@ async def load_memtrees_from_tree_store(tree_store: Any) -> list[MemTree]:
             )
             for node in stored_nodes
         }
+        _link_l0_leaves(nodes)
         root_node_id = _root_node_id(nodes)
         root = nodes[root_node_id]
         metadata = dict(next((node.metadata for node in stored_nodes if node.node_id == root_node_id), {}) or {})
+        tree_type = str(metadata.get("tree_type") or "entity")
+        session_leaves = _session_leaves_from_nodes(nodes, stored_nodes, tree_id=tree_id, tree_key=str(metadata.get("tree_key") or tree_id)) if tree_type == "session" else {}
         trees.append(
             MemTree(
                 tree_id=tree_id,
-                tree_type=str(metadata.get("tree_type") or "entity"),
+                tree_type=tree_type,
                 tree_key=str(metadata.get("tree_key") or tree_id),
                 label=str(metadata.get("tree_label") or metadata.get("tree_key") or tree_id),
                 k=int(metadata.get("k") or 3),
                 root_node_id=root_node_id,
                 nodes=nodes,
-                session_leaves={},
-                fact_ids_ordered=_ordered_leaf_payloads(nodes),
+                session_leaves=session_leaves,
+                fact_ids_ordered=[] if tree_type == "session" else _ordered_leaf_payloads(nodes),
                 centroid=None,
                 version=int(metadata.get("generation") or 1),
                 lifecycle_state="active",
@@ -438,12 +441,48 @@ def _root_node_id(nodes: dict[str, MemTreeNode]) -> str:
     return roots[0]
 
 
+def _link_l0_leaves(nodes: dict[str, MemTreeNode]) -> None:
+    leaves = sorted((node for node in nodes.values() if node.level == 0), key=lambda node: (node.time_start, node.time_end, node.child_ids[0] if node.child_ids else node.node_id))
+    for index, leaf in enumerate(leaves):
+        leaf.prev_leaf_id = leaves[index - 1].node_id if index > 0 else None
+        leaf.next_leaf_id = leaves[index + 1].node_id if index + 1 < len(leaves) else None
+
+
 def _ordered_leaf_payloads(nodes: dict[str, MemTreeNode]) -> list[str]:
     leaves = sorted((node for node in nodes.values() if node.level == 0), key=lambda node: (node.time_start, node.time_end, node.node_id))
     payloads: list[str] = []
     for leaf in leaves:
         payloads.extend(leaf.child_ids)
     return payloads
+
+
+def _session_leaves_from_nodes(nodes: dict[str, MemTreeNode], stored_nodes: list[Any], *, tree_id: str, tree_key: str) -> dict[str, SessionLeaf]:
+    stored_by_node_id = {str(getattr(node, "node_id", "")): node for node in stored_nodes}
+    leaves: dict[str, SessionLeaf] = {}
+    session_id = tree_key.removeprefix("session:") or tree_id.removeprefix("session:")
+    for leaf in sorted((node for node in nodes.values() if node.level == 0), key=lambda node: (node.time_start, node.time_end, node.node_id)):
+        if not leaf.child_ids:
+            continue
+        cell_id = str(leaf.child_ids[0])
+        stored = stored_by_node_id.get(leaf.node_id)
+        leaves[cell_id] = SessionLeaf(
+            cell_id=cell_id,
+            session_id=session_id,
+            cell_index=_cell_index_from_id(cell_id),
+            time_start=leaf.time_start,
+            time_end=leaf.time_end,
+            raw_turns=[],
+            raw_text=leaf.summary,
+            fact_ids=list(getattr(stored, "fact_ids", ()) if stored is not None else ()),
+        )
+    return leaves
+
+
+def _cell_index_from_id(cell_id: str) -> int:
+    import re
+
+    match = re.search(r"cell[_-](\d+)", str(cell_id))
+    return int(match.group(1)) if match else 0
 
 
 def _refresh_tree_bounds(tree: MemTree, root: MemTreeNode) -> None:
@@ -460,6 +499,8 @@ def _ordered_unique_payload_ids(trees: list[MemTree]) -> list[str]:
     seen: set[str] = set()
     ordered: list[str] = []
     for tree in trees:
+        if tree.tree_type == "session":
+            continue
         for payload_id in tree.fact_ids_ordered or _ordered_leaf_payloads(tree.nodes):
             if payload_id in seen:
                 continue
