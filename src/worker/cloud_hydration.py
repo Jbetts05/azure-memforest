@@ -20,6 +20,7 @@ from src.build.node_index import NodeEntry, NodeIndex
 from src.build.tree import validate_tree_structure
 from src.build.tree_types import MemTree, MemTreeNode, SessionLeaf
 from src.forest.memforest import _content_key
+from src.forest.session_registry import CellRecord, SessionRecord, TurnRecord
 from src.utils.types import FactOccurrence, ManagedFact
 
 try:
@@ -577,6 +578,7 @@ def _apply_cloud_state_locked(user_forest: Any, state: CloudUserForestState) -> 
 
     _populate_registry_from_trees(user_forest._registry, user_forest._tree_store)
     _populate_session_alias_map(user_forest, state.trees)
+    _populate_registry_from_fact_occurrences(user_forest._registry, facts)
 
     user_forest._node_index = _node_index_from_cloud_embeddings(
         user_forest,
@@ -616,6 +618,40 @@ def _populate_session_alias_map(user_forest: Any, trees: list[MemTree]) -> None:
                 if raw_session_id:
                     alias_map[raw_session_id] = alias
         user_forest._tree_builder._session_alias_map = alias_map
+
+
+def _populate_registry_from_fact_occurrences(registry: Any, facts: list[ManagedFact]) -> None:
+        with registry._lock:
+            for fact in facts:
+                for occurrence in fact.occurrences:
+                    session_id = str(occurrence.session_id or "")
+                    cell_id = str(occurrence.cell_id or "")
+                    if not session_id or not cell_id:
+                        continue
+                    session = registry._sessions.get(session_id)
+                    if session is None:
+                        registry._sessions[session_id] = SessionRecord(session_id=session_id, cell_ids=[cell_id], deleted=False)
+                    elif cell_id not in session.cell_ids:
+                        registry._sessions[session_id] = SessionRecord(
+                            session_id=session_id,
+                            cell_ids=[*session.cell_ids, cell_id],
+                            deleted=session.deleted,
+                        )
+
+                    turn_ids = [str(turn_id) for turn_id in occurrence.source_turn_ids if str(turn_id)]
+                    cell = registry._cells.get(cell_id)
+                    if cell is None:
+                        registry._cells[cell_id] = CellRecord(cell_id=cell_id, session_id=session_id, turn_ids=turn_ids, fact_ids=[fact.fact_id])
+                    else:
+                        registry._cells[cell_id] = CellRecord(
+                            cell_id=cell_id,
+                            session_id=cell.session_id or session_id,
+                            turn_ids=list(dict.fromkeys([*cell.turn_ids, *turn_ids])),
+                            fact_ids=list(dict.fromkeys([*cell.fact_ids, fact.fact_id])),
+                        )
+                    for turn_id in turn_ids:
+                        registry._turns[turn_id] = TurnRecord(turn_id=turn_id, session_id=session_id, cell_id=cell_id, deleted=False)
+                    registry._fact_to_cells.setdefault(fact.fact_id, set()).add(cell_id)
 
 
 def _reset_empty_user_forest(user_forest: Any) -> None:

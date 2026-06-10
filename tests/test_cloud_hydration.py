@@ -167,6 +167,17 @@ def _fact(fact_id, dim):
     )
 
 
+def _fact_for_cell(fact_id, dim, *, session_id, cell_id, turn_id=None):
+    fact = _fact(fact_id, dim)
+    occurrence = replace(
+        fact.occurrences[0],
+        session_id=session_id,
+        cell_id=cell_id,
+        source_turn_ids=[turn_id or f"{session_id}:0"],
+    )
+    return replace(fact, occurrences=[occurrence])
+
+
 def _memory_item(item_id="item-1"):
     return MemoryItem(
         item_id=item_id,
@@ -419,7 +430,7 @@ async def test_cloud_hydration_loads_user_forest_state_with_browse_embeddings() 
 
     state = await load_cloud_user_forest_state(
         tree_store=store,
-        fact_store=FakeFactStore({"fact_1": _fact("fact_1", dim)}),
+        fact_store=FakeFactStore({"fact_1": _fact_for_cell("fact_1", dim, session_id="s1", cell_id="s1#cell-1")}),
         summary_cache=FakeSummaryCache({_content_key(frozenset({"fact_1"})): "cached root"}),
         browse_embedding_store=FakeBrowseEmbeddingStore({"root": _embedding(dim)}),
     )
@@ -479,7 +490,7 @@ async def test_cloud_hydration_applies_session_tree_with_reconstructed_leaves(tm
                 ]
             }
         ),
-        fact_store=FakeFactStore({"fact_1": _fact("fact_1", dim)}),
+        fact_store=FakeFactStore({"fact_1": _fact_for_cell("fact_1", dim, session_id="s1", cell_id="s1#cell-1")}),
     )
 
     result = apply_cloud_state_to_user_forest(user_forest, state)
@@ -527,7 +538,7 @@ async def test_cloud_hydration_applies_state_to_real_user_forest(tmp_path) -> No
                 ]
             }
         ),
-        fact_store=FakeFactStore({"fact_1": _fact("fact_1", dim)}),
+        fact_store=FakeFactStore({"fact_1": _fact_for_cell("fact_1", dim, session_id="s1", cell_id="s1#cell-1")}),
         summary_cache=FakeSummaryCache({_content_key(frozenset({"fact_1"})): "cached root"}),
         browse_embedding_store=FakeBrowseEmbeddingStore({"root": _embedding(dim)}),
     )
@@ -627,7 +638,7 @@ async def test_cloud_hydration_rebuilds_session_registry_for_delete(tmp_path) ->
                 ],
             }
         ),
-        fact_store=FakeFactStore({"fact_1": _fact("fact_1", dim)}),
+        fact_store=FakeFactStore({"fact_1": _fact_for_cell("fact_1", dim, session_id="s1", cell_id="s1#cell-1")}),
     )
     apply_cloud_state_to_user_forest(user_forest, state)
 
@@ -648,7 +659,7 @@ async def test_cloud_hydration_registry_strips_session_tree_key_prefix(tmp_path)
                 ]
             }
         ),
-        fact_store=FakeFactStore({"fact_1": _fact("fact_1", dim)}),
+        fact_store=FakeFactStore({"fact_1": _fact_for_cell("fact_1", dim, session_id="public-session", cell_id="public-session#cell_0000_abcd")}),
     )
     apply_cloud_state_to_user_forest(user_forest, state)
 
@@ -672,7 +683,39 @@ async def test_cloud_hydration_registry_uses_public_session_id_from_cell_id(tmp_
                 ],
             }
         ),
-        fact_store=FakeFactStore({"fact_1": _fact("fact_1", dim)}),
+        fact_store=FakeFactStore({"fact_1": _fact_for_cell("fact_1", dim, session_id="public-session", cell_id="public-session#cell_0000_abcd")}),
+    )
+    apply_cloud_state_to_user_forest(user_forest, state)
+
+    user_forest.delete_session("public-session")
+
+    assert user_forest._fact_manager.get_fact("fact_1") is None
+
+
+@pytest.mark.asyncio
+async def test_cloud_hydration_registry_uses_fact_occurrences_for_orphans(tmp_path) -> None:
+    dim = 4
+    user_forest = _user_forest(tmp_path, dim)
+    fact = _fact("fact_1", dim)
+    occurrence = replace(
+        fact.occurrences[0],
+        session_id="public-session",
+        cell_id="public-session#cell_0000_abcd",
+        source_turn_ids=["public-session:0"],
+    )
+    fact = replace(fact, occurrences=[occurrence])
+    state = await load_cloud_user_forest_state(
+        tree_store=FakeTreeStore(
+            {
+                "session:sess_0001": [
+                    _node("session-leaf", level="L0", child_ids=("public-session#cell_0000_abcd",), fact_ids=(), tree_id="session:sess_0001", tree_type="session", tree_key="sess_0001", tree_label="sess_0001"),
+                ],
+                "entity:user": [
+                    _node("entity-leaf", level="L0", child_ids=("fact_1",), tree_id="entity:user", tree_key="user", tree_label="user"),
+                ],
+            }
+        ),
+        fact_store=FakeFactStore({"fact_1": fact}),
     )
     apply_cloud_state_to_user_forest(user_forest, state)
 

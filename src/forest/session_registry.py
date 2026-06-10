@@ -130,8 +130,8 @@ class SessionRegistry:
         """Register a session imported from legacy snapshot (no turn data).
 
         Used by MemForest.import_user_from_legacy. CellRecords are created
-        with empty turn_ids; TurnRecords are NOT created (turn-level deletion
-        is unavailable for imported sessions).
+        with empty turn_ids; TurnRecords are NOT created unless a later
+        cloud-hydration pass supplements turn provenance from fact occurrences.
         """
         with self._lock:
             self._sessions[session_id] = SessionRecord(
