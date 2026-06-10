@@ -8,9 +8,10 @@ from src.cloud.contracts import StoredTreeNode
 from src.config.config import load_default_config
 from src.forest.memforest import _content_key
 from src.forest.user_forest import UserForest
-from src.utils.types import FactOccurrence, ManagedFact
+from src.utils.types import FactOccurrence, ManagedFact, MemoryItem
 from src.worker.cloud_hydration import (
     CloudStateHydratingUserForestCore,
+    CloudUserForestState,
     apply_cloud_state_to_user_forest,
     load_fact_ids_from_tree_store,
     load_cloud_hydration_prerequisites,
@@ -66,8 +67,10 @@ class FakeBrowseEmbeddingStore:
 class FakeModelClient:
     def __init__(self, dimension):
         self.dimension = dimension
+        self.embed_calls = 0
 
     def embed_texts(self, texts, *, batch_size=256):
+        self.embed_calls += 1
         return [[1.0] + [0.0] * (self.dimension - 1) for _ in texts]
 
     def generate_json(self, **kwargs):
@@ -150,6 +153,31 @@ def _fact(fact_id, dim):
     )
 
 
+def _memory_item(item_id="item-1"):
+    return MemoryItem(
+        item_id=item_id,
+        session_id="session-1",
+        cell_id="cell-1",
+        fact_text="Alice likes trail running.",
+        source_turn_ids=["turn-1"],
+        source_spans=[],
+        participants=["alice"],
+        origin="user",
+        semantic_role="preference",
+        entities=["alice"],
+        topics=["running"],
+        time_text="",
+        time_start=1.0,
+        time_end=2.0,
+        attribute_keys=[],
+        domain_keys=[],
+        collection_keys=[],
+        detail_level="atomic",
+        confidence=1.0,
+        metadata={},
+    )
+
+
 def _user_forest(tmp_path, dim):
     config = load_default_config()
     config = replace(config, api=replace(config.api, embedding=replace(config.api.embedding, dimension=dim)))
@@ -161,6 +189,20 @@ def _user_forest(tmp_path, dim):
         chat_client=client,
         embedding_client=client,
     )
+
+
+def _user_forest_with_client(tmp_path, dim):
+    config = load_default_config()
+    config = replace(config, api=replace(config.api, embedding=replace(config.api.embedding, dimension=dim)))
+    client = FakeModelClient(dim)
+    forest = UserForest(
+        "user-1",
+        tmp_path / "user-1",
+        config,
+        chat_client=client,
+        embedding_client=client,
+    )
+    return forest, client
 
 
 @pytest.mark.asyncio
@@ -421,6 +463,53 @@ async def test_cloud_hydration_applies_state_to_real_user_forest(tmp_path) -> No
     assert user_forest._node_index.get_embedding("root") is not None
     assert [fact.fact_id for fact in snapshot.facts] == ["fact_1"]
     assert [tree.tree_id for tree in snapshot.trees] == ["tree-1"]
+
+
+def test_cloud_hydration_uses_stored_fact_embeddings_without_reembedding(tmp_path) -> None:
+    dim = 4
+    user_forest, client = _user_forest_with_client(tmp_path, dim)
+    state = CloudUserForestState(
+        trees=[],
+        facts=[_fact("fact_1", dim)],
+        summary_cache={},
+        node_embeddings={},
+    )
+
+    apply_cloud_state_to_user_forest(user_forest, state)
+
+    assert client.embed_calls == 0
+    assert user_forest._fact_manager.get_fact("fact_1") is not None
+
+
+def test_materialization_snapshot_injects_fact_embeddings_without_mutating_local_fact(tmp_path) -> None:
+    dim = 4
+    user_forest, _client = _user_forest_with_client(tmp_path, dim)
+
+    write = user_forest._fact_manager.add_memory_items([_memory_item()])
+    fact = user_forest._fact_manager.get_fact(write.canonical_fact_ids[0])
+    snapshot = user_forest.snapshot_for_materialization()
+
+    assert fact is not None
+    assert "embedding" not in fact.metadata
+    assert snapshot.facts[0].metadata["embedding"] == _embedding(dim)
+
+
+def test_cloud_hydration_reembeds_fact_when_stored_embedding_dim_mismatches(tmp_path) -> None:
+    dim = 4
+    user_forest, client = _user_forest_with_client(tmp_path, dim)
+    fact = _fact("fact_1", dim)
+    fact = replace(fact, metadata={"embedding": [1.0, 0.0]})
+    state = CloudUserForestState(
+        trees=[],
+        facts=[fact],
+        summary_cache={},
+        node_embeddings={},
+    )
+
+    apply_cloud_state_to_user_forest(user_forest, state)
+
+    assert client.embed_calls == 1
+    assert user_forest._fact_manager.get_fact("fact_1") is not None
 
 
 def test_cloud_state_core_defaults_to_snapshot_fallback(tmp_path) -> None:

@@ -154,6 +154,25 @@ async def test_cosmos_fact_store_round_trips_managed_fact() -> None:
 
     assert fact == _fact()
     assert fact.occurrences[0].source_turn_ids == ["turn-1"]
+    stored = next(iter(store.container.items.values()))
+    assert stored["embedding"] == [0.1, 0.2]
+    assert "embedding" not in stored["metadata"]
+
+
+@pytest.mark.asyncio
+async def test_cosmos_fact_store_reads_legacy_top_level_embedding_into_metadata() -> None:
+    container = FakeContainer()
+    store = CosmosFactStore(container, tenant_id="tenant-1", user_id="user-1")
+    await store.upsert_facts([_fact()])
+    stored = next(iter(container.items.values()))
+    stored["metadata"] = {}
+    stored["embedding"] = [0.3, 0.4]
+    container.items[(stored["tenant_user_key"], stored["id"])] = stored
+
+    fact = await store.get_fact("fact-1")
+
+    assert fact is not None
+    assert fact.metadata["embedding"] == [0.3, 0.4]
 
 
 @pytest.mark.asyncio

@@ -529,7 +529,7 @@ def _load_facts_into_fact_manager(fact_manager: Any, facts: list[ManagedFact]) -
     missing_embeddings: list[ManagedFact] = []
     for fact in facts:
         embedding = _fact_embedding(fact)
-        if embedding:
+        if embedding and len(embedding) == fact_manager.vector_dim:
             embedded.append((fact, embedding))
         else:
             missing_embeddings.append(fact)

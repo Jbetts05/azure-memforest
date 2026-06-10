@@ -10,10 +10,18 @@ def test_cosmos_specs_match_bicep_container_names_and_partition_keys() -> None:
     bicep = Path("infra/main.bicep").read_text(encoding="utf-8")
     specs = cosmos_container_specs_by_name()
 
-    for name in ["sessions", "turns", "facts", "tree_nodes", "fact_locations", "browse_embeddings", "leases"]:
+    for name in ["sessions", "turns", "tree_nodes", "fact_locations", "browse_embeddings", "leases"]:
         assert name in specs
         assert specs[name].partition_key_path == "/tenant_user_key"
         assert f"'{name}'" in _array_block(bicep, "userScopedCosmosContainers")
+
+    facts_resource = _resource_block(bicep, "factsCosmosContainer")
+    assert "facts" in specs
+    assert specs["facts"].partition_key_path == "/tenant_user_key"
+    assert "name: 'facts'" in facts_resource
+    assert "'/tenant_user_key'" in facts_resource
+    assert "path: '/embedding/?'" in facts_resource
+    assert "path: '/embedding/*'" in facts_resource
 
     for name in ["manifests", "deletions"]:
         assert name in specs

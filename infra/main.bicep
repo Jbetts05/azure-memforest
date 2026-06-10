@@ -279,7 +279,6 @@ resource cosmosDatabase 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases@2024
 var userScopedCosmosContainers = [
   'sessions'
   'turns'
-  'facts'
   'tree_nodes'
   'fact_locations'
   'browse_embeddings'
@@ -306,6 +305,39 @@ resource userScopedCosmosContainersResource 'Microsoft.DocumentDB/databaseAccoun
     }
   }
 }]
+
+resource factsCosmosContainer 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-05-15' = {
+  name: 'facts'
+  parent: cosmosDatabase
+  properties: {
+    resource: {
+      id: 'facts'
+      partitionKey: {
+        paths: [
+          '/tenant_user_key'
+        ]
+        kind: 'Hash'
+      }
+      indexingPolicy: {
+        indexingMode: 'consistent'
+        automatic: true
+        includedPaths: [
+          {
+            path: '/*'
+          }
+        ]
+        excludedPaths: [
+          {
+            path: '/embedding/?'
+          }
+          {
+            path: '/embedding/*'
+          }
+        ]
+      }
+    }
+  }
+}
 
 resource tenantScopedCosmosContainersResource 'Microsoft.DocumentDB/databaseAccounts/sqlDatabases/containers@2024-05-15' = [for containerName in tenantScopedCosmosContainers: {
   name: containerName

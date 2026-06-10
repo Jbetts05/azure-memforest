@@ -14,7 +14,11 @@ from src.utils.types import FactOccurrence, ManagedFact, MemCell, MemoryItem, Se
 
 
 class TinyEmbeddingClient:
+    def __init__(self):
+        self.calls = 0
+
     def embed_texts(self, texts):
+        self.calls += 1
         return [[1.0, 0.0] for _ in texts]
 
 

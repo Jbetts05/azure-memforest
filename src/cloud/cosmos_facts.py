@@ -183,6 +183,10 @@ class CosmosFactStore:
 
 
 def _fact_to_doc(fact: ManagedFact, tenant_id: str, user_id: str, tenant_user_key: str) -> dict[str, Any]:
+    embedding = _fact_embedding(fact)
+    metadata = dict(fact.metadata)
+    if embedding is not None:
+        metadata.pop("embedding", None)
     return {
         "id": _fact_doc_id(fact.fact_id),
         "schema_version": SCHEMA_VERSION,
@@ -192,6 +196,7 @@ def _fact_to_doc(fact: ManagedFact, tenant_id: str, user_id: str, tenant_user_ke
         "fact_id": fact.fact_id,
         "fact_text": fact.fact_text,
         "embedding_id": fact.embedding_id,
+        "embedding": embedding,
         "origin": fact.origin,
         "semantic_role": fact.semantic_role,
         "entities": list(fact.entities),
@@ -204,7 +209,7 @@ def _fact_to_doc(fact: ManagedFact, tenant_id: str, user_id: str, tenant_user_ke
         "first_session_id": fact.first_session_id,
         "first_cell_id": fact.first_cell_id,
         "occurrences": [asdict(occurrence) for occurrence in fact.occurrences],
-        "metadata": dict(fact.metadata),
+        "metadata": metadata,
         "time_start": fact.time_start,
         "time_end": fact.time_end,
         "tombstoned": False,
@@ -222,6 +227,9 @@ def _validate_fact_temporality(fact: ManagedFact) -> None:
 
 def _fact_from_doc(item: dict[str, Any]) -> ManagedFact:
     occurrences = [FactOccurrence(**occurrence) for occurrence in item.get("occurrences", [])]
+    metadata = dict(item.get("metadata", {}))
+    if "embedding" not in metadata and isinstance(item.get("embedding"), list):
+        metadata["embedding"] = [float(value) for value in item["embedding"]]
     fact = ManagedFact(
         fact_id=item["fact_id"],
         fact_text=item["fact_text"],
@@ -238,12 +246,19 @@ def _fact_from_doc(item: dict[str, Any]) -> ManagedFact:
         first_session_id=item.get("first_session_id", ""),
         first_cell_id=item.get("first_cell_id", ""),
         occurrences=occurrences,
-        metadata=dict(item.get("metadata", {})),
+        metadata=metadata,
         time_start=item.get("time_start"),
         time_end=item.get("time_end"),
     )
     _validate_fact_temporality(fact)
     return fact
+
+
+def _fact_embedding(fact: ManagedFact) -> list[float] | None:
+    embedding = dict(fact.metadata).get("embedding")
+    if not isinstance(embedding, list) or not embedding:
+        return None
+    return [float(value) for value in embedding]
 
 
 def _fact_doc_id(fact_id: str) -> str:
