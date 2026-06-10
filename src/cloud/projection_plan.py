@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Iterable, Mapping
@@ -119,3 +120,10 @@ def _same_content(projected: ProjectionRecordRef, committed: ProjectionRecordRef
 
 def _sort_key(record: ProjectionRecordRef) -> tuple[str, str]:
     return (record.record_kind, record.logical_id)
+
+
+def tree_node_body_content_id(*, tree_id: str, node_id: str, content_sha256: str) -> str:
+    """Return the durable tree-node body id for a content-addressed node body."""
+
+    raw = "\x1f".join(("tree_node_body", tree_id, node_id, content_sha256))
+    return f"tree_node_body_{hashlib.sha256(raw.encode('utf-8')).hexdigest()}"

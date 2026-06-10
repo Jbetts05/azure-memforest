@@ -18,7 +18,7 @@ from src.cloud.async_batch import run_bounded
 from src.cloud.cosmos_browse_embeddings import BrowseEmbeddingRecord
 from src.cloud.contracts import FactLocation, RecallDocument, StoredTreeNode
 from src.cloud.cosmos_leases import LeaseConflict
-from src.cloud.projection_plan import ProjectionRecordRef, ProjectionSkipPlan, plan_projection_skip
+from src.cloud.projection_plan import ProjectionRecordRef, ProjectionSkipPlan, plan_projection_skip, tree_node_body_content_id
 from src.cloud.schema import SCHEMA_VERSION
 from src.forest.memforest import _content_key
 from src.forest.user_forest import ForestMaterializationSnapshot
@@ -1074,7 +1074,11 @@ def _tree_node_stable_content_hash(node: StoredTreeNode) -> str:
 
 
 def _tree_node_stable_body_id(node: StoredTreeNode) -> str:
-    return _hash_json(["tree_node_body", node.tree_id, node.node_id, _tree_node_stable_content_hash(node)])
+    return tree_node_body_content_id(
+        tree_id=node.tree_id,
+        node_id=node.node_id,
+        content_sha256=_tree_node_stable_content_hash(node),
+    )
 
 
 def _fact_location_stable_content_hash(location: FactLocation) -> str:
