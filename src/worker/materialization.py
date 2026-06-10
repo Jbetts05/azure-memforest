@@ -615,8 +615,8 @@ class MemForestMaterializationHandler:
     ) -> dict[str, Any]:
         await asyncio.gather(
             self._call_store_method(self._stores.fact_store.upsert_facts, snapshot.facts),
-            self._call_store_method(self._tree_node_store(forest_version).upsert_nodes, projection.stored_nodes),
-            self._call_store_method(self._fact_location_index(forest_version).upsert_locations, projection.fact_locations),
+            self._write_tree_nodes(forest_version, projection),
+            self._write_fact_locations(forest_version, projection),
             self._write_browse_embeddings(forest_version, projection),
             self._write_summary_cache_entries(projection),
             self._write_recall_documents(projection),
@@ -692,7 +692,7 @@ class MemForestMaterializationHandler:
             baseline = await self._build_committed_projection_baseline(manifest, projection)
         except Exception:
             log.warning("failed to build committed projection baseline; falling back to full live writes", exc_info=True)
-            return projection
+            return _without_projection_skip_plans(projection)
         return _with_projection_skip_plans(
             projection,
             embedding_model_version=self._config.embedding_model_version,
@@ -709,6 +709,16 @@ class MemForestMaterializationHandler:
                 projection=projection,
                 embedding_model_version=self._config.embedding_model_version,
             )
+        baseline_tree_store = _baseline_store_for_version(
+            self._stores.tree_node_store,
+            self._stores.tree_node_store_factory,
+            scope.forest_version,
+        )
+        baseline_fact_location_store = _baseline_store_for_version(
+            self._stores.fact_location_index,
+            self._stores.fact_location_index_factory,
+            scope.forest_version,
+        )
         baseline_browse_store = _baseline_store_for_version(
             self._stores.browse_embedding_store,
             self._stores.browse_embedding_store_factory,
@@ -716,12 +726,40 @@ class MemForestMaterializationHandler:
         )
         baseline = await build_committed_projection_baseline(
             scope,
+            tree_nodes_container=_container_from_store(baseline_tree_store),
+            fact_locations_container=_container_from_store(baseline_fact_location_store),
             browse_embeddings_container=_container_from_store(baseline_browse_store),
         )
         summary_entries = await self._read_committed_summary_cache_entries(projection)
         if summary_entries:
             baseline = baseline.with_records("summary_cache", summary_cache_refs_from_entries(summary_entries))
         return baseline
+
+    async def _write_tree_nodes(self, forest_version: str, projection: MaterializationProjection) -> None:
+        tree_store = self._tree_node_store(forest_version)
+        plan = projection.projection_skip_plans.get("tree_node_membership")
+        if plan is not None and hasattr(tree_store, "upsert_nodes_delta"):
+            await self._call_store_method(
+                tree_store.upsert_nodes_delta,
+                _safe_upsert_tree_nodes(projection),
+                delete_keys=_tree_node_delete_keys(projection),
+                unchanged_keys=_tree_node_unchanged_keys(projection),
+            )
+            return
+        await self._call_store_method(tree_store.upsert_nodes, projection.stored_nodes)
+
+    async def _write_fact_locations(self, forest_version: str, projection: MaterializationProjection) -> None:
+        location_index = self._fact_location_index(forest_version)
+        plan = projection.projection_skip_plans.get("fact_location")
+        if plan is not None and hasattr(location_index, "upsert_locations_delta"):
+            await self._call_store_method(
+                location_index.upsert_locations_delta,
+                _safe_upsert_fact_locations(projection),
+                delete_keys=_fact_location_delete_keys(projection),
+                unchanged_keys=_fact_location_unchanged_keys(projection),
+            )
+            return
+        await self._call_store_method(location_index.upsert_locations, projection.fact_locations)
 
     async def _read_committed_summary_cache_entries(self, projection: MaterializationProjection) -> dict[str, str]:
         if self._stores.summary_cache is None:
@@ -1084,6 +1122,22 @@ def _with_projection_skip_plans(
     )
 
 
+def _without_projection_skip_plans(projection: MaterializationProjection) -> MaterializationProjection:
+    return MaterializationProjection(
+        stored_nodes=projection.stored_nodes,
+        fact_locations=projection.fact_locations,
+        recall_documents=projection.recall_documents,
+        browse_embeddings=projection.browse_embeddings,
+        browse_embedding_records=projection.browse_embedding_records,
+        summary_cache_entries=projection.summary_cache_entries,
+        snapshot_payload=projection.snapshot_payload,
+        changed_tree_ids=projection.changed_tree_ids,
+        deleted_tree_ids=projection.deleted_tree_ids,
+        baseline_forest_version=projection.baseline_forest_version,
+        projection_skip_plans={},
+    )
+
+
 def _retained_committed_projection_refs(
     projection: MaterializationProjection,
     projected: Mapping[str, tuple[ProjectionRecordRef, ...]],
@@ -1092,9 +1146,13 @@ def _retained_committed_projection_refs(
 ) -> dict[str, tuple[ProjectionRecordRef, ...]]:
     if committed_baseline is None:
         return {}
-    # Keep skip planning structurally limited to version-independent stores.
-    # Version-scoped records must be fully written for every new forest_version.
+    # Tree memberships and fact locations use generation-range MVCC, so
+    # unchanged records can remain visible without per-version copy-forward.
+    # Shared browse/summary stores are intersection-limited so per-job deletes
+    # stay GC/retention controlled.
     retained: dict[str, tuple[ProjectionRecordRef, ...]] = {}
+    for kind in ("tree_node_membership", "fact_location"):
+        retained[kind] = committed_baseline.records_for(kind)
     for kind in ("browse_embedding", "summary_cache"):
         projected_records = projected.get(kind, ())
         projected_keys = {record.key for record in projected_records}
@@ -1248,6 +1306,66 @@ def _safe_upsert_browse_embedding_records(projection: MaterializationProjection)
         return list(projection.browse_embedding_records)
     upsert_node_ids = {str(record.metadata.get("node_id") or "") for record in plan.upsert}
     return [record for record in projection.browse_embedding_records if record.node_id in upsert_node_ids]
+
+
+def _safe_upsert_tree_nodes(projection: MaterializationProjection) -> list[StoredTreeNode]:
+    plan = projection.projection_skip_plans.get("tree_node_membership")
+    if plan is None:
+        return list(projection.stored_nodes)
+    upsert_keys = {record.logical_id for record in plan.upsert}
+    return [node for node in projection.stored_nodes if f"{node.tree_id}/{node.node_id}" in upsert_keys]
+
+
+def _tree_node_delete_keys(projection: MaterializationProjection) -> list[tuple[str, str]]:
+    plan = projection.projection_skip_plans.get("tree_node_membership")
+    if plan is None:
+        return []
+    keys: list[tuple[str, str]] = []
+    for record in plan.delete:
+        tree_id = str(record.metadata.get("tree_id") or "")
+        node_id = str(record.metadata.get("node_id") or "")
+        if tree_id and node_id:
+            keys.append((tree_id, node_id))
+    return keys
+
+
+def _tree_node_unchanged_keys(projection: MaterializationProjection) -> list[tuple[str, str]]:
+    plan = projection.projection_skip_plans.get("tree_node_membership")
+    if plan is None:
+        return []
+    keys: list[tuple[str, str]] = []
+    for record in plan.unchanged:
+        tree_id = str(record.metadata.get("tree_id") or "")
+        node_id = str(record.metadata.get("node_id") or "")
+        if tree_id and node_id:
+            keys.append((tree_id, node_id))
+    return keys
+
+
+def _safe_upsert_fact_locations(projection: MaterializationProjection) -> list[FactLocation]:
+    plan = projection.projection_skip_plans.get("fact_location")
+    if plan is None:
+        return list(projection.fact_locations)
+    upsert_keys = {record.logical_id for record in plan.upsert}
+    return [
+        location
+        for location in projection.fact_locations
+        if f"{location.fact_id}/{location.tree_id}/{location.node_id}/{location.tree_type}/{location.level}" in upsert_keys
+    ]
+
+
+def _fact_location_delete_keys(projection: MaterializationProjection) -> list[str]:
+    plan = projection.projection_skip_plans.get("fact_location")
+    if plan is None:
+        return []
+    return [record.logical_id for record in plan.delete]
+
+
+def _fact_location_unchanged_keys(projection: MaterializationProjection) -> list[str]:
+    plan = projection.projection_skip_plans.get("fact_location")
+    if plan is None:
+        return []
+    return [record.logical_id for record in plan.unchanged]
 
 
 def _safe_upsert_summary_cache_entries(projection: MaterializationProjection) -> list[SummaryCacheEntry]:

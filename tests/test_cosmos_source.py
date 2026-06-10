@@ -41,6 +41,10 @@ class FakeCosmosContainer:
                 continue
             if "@tree_id" in params and item.get("tree_id") != params["@tree_id"]:
                 continue
+            if "@node_id" in params and item.get("node_id") != params["@node_id"]:
+                continue
+            if "@logical_id" in params and item.get("logical_id") != params["@logical_id"]:
+                continue
             if "@forest_version" in params and item.get("forest_version") != params["@forest_version"]:
                 continue
             if "@doc_kind" in params and item.get("doc_kind") != params["@doc_kind"]:
@@ -148,6 +152,35 @@ async def test_cosmos_tree_node_store_upsert_get_and_tombstone() -> None:
 
 
 @pytest.mark.asyncio
+async def test_cosmos_tree_node_store_tombstone_is_generation_isolated() -> None:
+    container = FakeCosmosContainer()
+    first = CosmosTreeNodeStore(container, tenant_id="tenant-1", user_id="user-1", forest_version="g5-first")
+    second = CosmosTreeNodeStore(container, tenant_id="tenant-1", user_id="user-1", forest_version="g6-second")
+    await first.upsert_nodes([_tree_node_for_version("g5-first")])
+
+    await second.tombstone_tree("tree-1", reason="deleted")
+
+    assert await first.get_node("tree-1", "node-1") is not None
+    assert await second.get_node("tree-1", "node-1") is None
+
+
+@pytest.mark.asyncio
+async def test_cosmos_tree_node_store_tombstone_hides_true_legacy_membership() -> None:
+    container = FakeCosmosContainer()
+    store = CosmosTreeNodeStore(container, tenant_id="tenant-1", user_id="user-1", forest_version="v1")
+    await store.upsert_nodes([_tree_node()])
+    for key, item in list(container.items.items()):
+        if item.get("doc_kind") == "tree_node_membership":
+            item.pop("valid_from_generation", None)
+            item.pop("valid_from_forest_version", None)
+            container.items[key] = item
+
+    await store.tombstone_tree("tree-1", reason="deleted")
+
+    assert await store.get_node("tree-1", "node-1") is None
+
+
+@pytest.mark.asyncio
 async def test_cosmos_tree_node_store_lists_roots_and_tree_nodes() -> None:
     container = FakeCosmosContainer()
     store = CosmosTreeNodeStore(container, tenant_id="tenant-1", user_id="user-1", forest_version="v1")
@@ -226,6 +259,43 @@ async def test_cosmos_tree_node_store_keeps_removed_nodes_out_of_new_version() -
 
 
 @pytest.mark.asyncio
+async def test_cosmos_tree_node_store_delta_reuses_unchanged_memberships_across_generations() -> None:
+    container = FakeCosmosContainer()
+    first = CosmosTreeNodeStore(container, tenant_id="tenant-1", user_id="user-1", forest_version="g1-first")
+    second = CosmosTreeNodeStore(container, tenant_id="tenant-1", user_id="user-1", forest_version="g2-second")
+    await first.upsert_nodes([
+        _tree_node_for_version("g1-first", "root"),
+        _tree_node_for_version("g1-first", "removed"),
+    ])
+
+    await second.upsert_nodes_delta(
+        [_tree_node_for_version("g2-second", "root", summary="new")],
+        delete_keys=[("tree-1", "removed")],
+    )
+
+    assert {node.node_id for node in await first.list_nodes_in_tree("tree-1")} == {"root", "removed"}
+    second_nodes = {node.node_id: node for node in await second.list_nodes_in_tree("tree-1")}
+    assert set(second_nodes) == {"root"}
+    assert second_nodes["root"].summary == "new"
+
+
+@pytest.mark.asyncio
+async def test_cosmos_tree_node_store_repairs_failed_pending_orphans_for_unchanged_keys() -> None:
+    container = FakeCosmosContainer()
+    committed = CosmosTreeNodeStore(container, tenant_id="tenant-1", user_id="user-1", forest_version="g5-committed")
+    failed = CosmosTreeNodeStore(container, tenant_id="tenant-1", user_id="user-1", forest_version="g6-failed")
+    retry = CosmosTreeNodeStore(container, tenant_id="tenant-1", user_id="user-1", forest_version="g6-retry")
+    later = CosmosTreeNodeStore(container, tenant_id="tenant-1", user_id="user-1", forest_version="g7-later")
+    await committed.upsert_nodes([_tree_node_for_version("g5-committed", "root", summary="old")])
+    await failed.upsert_nodes_delta([_tree_node_for_version("g6-failed", "root", summary="orphan")])
+
+    await retry.upsert_nodes_delta([], unchanged_keys=[("tree-1", "root")])
+
+    assert (await retry.get_node("tree-1", "root")).summary == "old"
+    assert (await later.get_node("tree-1", "root")).summary == "old"
+
+
+@pytest.mark.asyncio
 async def test_cosmos_tree_node_store_rejects_scope_mismatch() -> None:
     store = CosmosTreeNodeStore(FakeCosmosContainer(), tenant_id="tenant-1", user_id="user-1", forest_version="v1")
 
@@ -277,6 +347,39 @@ async def test_cosmos_fact_location_hash_is_stable_across_generation_metadata() 
     assert len({doc["content_sha256"] for doc in docs}) == 1
     assert (await first.get_locations(["fact-1"]))["fact-1"][0].forest_version == "v1"
     assert (await second.get_locations(["fact-1"]))["fact-1"][0].forest_version == "v2"
+
+
+@pytest.mark.asyncio
+async def test_cosmos_fact_location_delta_reuses_and_closes_generation_ranges() -> None:
+    container = FakeCosmosContainer()
+    first = CosmosFactLocationIndex(container, tenant_id="tenant-1", user_id="user-1", forest_version="g1-first")
+    second = CosmosFactLocationIndex(container, tenant_id="tenant-1", user_id="user-1", forest_version="g2-second")
+    await first.upsert_locations([
+        _fact_location_for_version("g1-first", "fact-1"),
+        _fact_location_for_version("g1-first", "removed"),
+    ])
+
+    await second.upsert_locations_delta([], delete_keys=["removed/tree-1/node-1/entity/L0"])
+
+    assert {loc.fact_id for loc in (await first.get_locations(["fact-1", "removed"]))["removed"]} == {"removed"}
+    assert (await second.get_locations(["fact-1"]))["fact-1"][0].forest_version == "g1-first"
+    assert (await second.get_locations(["removed"]))["removed"] == []
+
+
+@pytest.mark.asyncio
+async def test_cosmos_fact_location_repairs_failed_pending_orphans_for_unchanged_keys() -> None:
+    container = FakeCosmosContainer()
+    committed = CosmosFactLocationIndex(container, tenant_id="tenant-1", user_id="user-1", forest_version="g5-committed")
+    failed = CosmosFactLocationIndex(container, tenant_id="tenant-1", user_id="user-1", forest_version="g6-failed")
+    retry = CosmosFactLocationIndex(container, tenant_id="tenant-1", user_id="user-1", forest_version="g6-retry")
+    later = CosmosFactLocationIndex(container, tenant_id="tenant-1", user_id="user-1", forest_version="g7-later")
+    await committed.upsert_locations([_fact_location_for_version("g5-committed", "fact-1")])
+    await failed.upsert_locations_delta([_fact_location_for_version("g6-failed", "fact-1")])
+
+    await retry.upsert_locations_delta([], unchanged_keys=["fact-1/tree-1/node-1/entity/L0"])
+
+    assert [loc.node_id for loc in (await retry.get_locations(["fact-1"]))["fact-1"]] == ["node-1"]
+    assert [loc.node_id for loc in (await later.get_locations(["fact-1"]))["fact-1"]] == ["node-1"]
 
 
 @pytest.mark.asyncio

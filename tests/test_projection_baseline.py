@@ -18,6 +18,7 @@ class FakeManifest:
     tenant_id: str = "tenant-1"
     user_id: str = "user-1"
     forest_version: str = "v1"
+    generation: int = 1
     status: str = "committed"
 
 
@@ -73,13 +74,13 @@ def test_baseline_from_committed_docs_preserves_forest_version_isolation() -> No
     baseline = baseline_from_committed_docs(
         scope,
         tree_node_docs=[
-            _doc("tree_node_membership", tree_id="tree-1", node_id="node-1", body_id=body_id, content_sha256="node-hash"),
+            _mvcc_doc("tree_node_membership", tree_id="tree-1", node_id="node-1", body_id=body_id, content_sha256="node-hash"),
             _doc("tree_node_body", tree_id="tree-1", node_id="node-1", content_sha256="node-hash"),
             _doc("tree_node_membership", tree_id="tree-2", node_id="old", content_sha256="old", forest_version="v0"),
             _doc("tree_node_membership", tree_id="tree-3", node_id="gone", content_sha256="gone", tombstoned=True),
         ],
         fact_location_docs=[
-            _doc(
+            _mvcc_doc(
                 "fact_location",
                 fact_id="fact-1",
                 tree_id="tree-1",
@@ -123,7 +124,7 @@ def test_committed_baseline_can_be_compared_without_live_write_skip_side_effects
     baseline = baseline_from_committed_docs(
         scope,
         fact_location_docs=[
-            _doc(
+            _mvcc_doc(
                 "fact_location",
                 fact_id="fact-1",
                 tree_id="tree-1",
@@ -132,7 +133,7 @@ def test_committed_baseline_can_be_compared_without_live_write_skip_side_effects
                 level="L0",
                 content_sha256="same",
             ),
-            _doc(
+            _mvcc_doc(
                 "fact_location",
                 fact_id="removed",
                 tree_id="tree-1",
@@ -183,9 +184,9 @@ def test_summary_cache_refs_from_entries_hashes_existing_summaries() -> None:
 @pytest.mark.asyncio
 async def test_build_committed_projection_baseline_reads_only_fake_stores() -> None:
     scope = ProjectionBaselineScope.from_manifest(FakeManifest(), embedding_model_version="embed-v1")
-    tree_nodes = FakeContainer([_doc("tree_node_membership", tree_id="tree-1", node_id="node-1", content_sha256="node-hash")])
+    tree_nodes = FakeContainer([_mvcc_doc("tree_node_membership", tree_id="tree-1", node_id="node-1", content_sha256="node-hash")])
     fact_locations = FakeContainer(
-        [_doc("fact_location", fact_id="fact-1", tree_id="tree-1", node_id="node-1", tree_type="entity", level="L0", content_sha256="fact-hash")]
+        [_mvcc_doc("fact_location", fact_id="fact-1", tree_id="tree-1", node_id="node-1", tree_type="entity", level="L0", content_sha256="fact-hash")]
     )
     browse_embeddings = FakeContainer(
         [_doc(None, node_id="node-1", tree_id="tree-1", embedding_model_version="embed-v1", embedding_sha256="embedding-hash")]
@@ -208,6 +209,19 @@ async def test_build_committed_projection_baseline_reads_only_fake_stores() -> N
     }
     assert tree_nodes.upsert_count == fact_locations.upsert_count == browse_embeddings.upsert_count == 0
     assert tree_nodes.delete_count == fact_locations.delete_count == browse_embeddings.delete_count == 0
+
+
+def test_committed_baseline_skips_legacy_structural_docs_to_force_mvcc_rewrite() -> None:
+    scope = ProjectionBaselineScope.from_manifest(FakeManifest(), embedding_model_version="embed-v1")
+
+    baseline = baseline_from_committed_docs(
+        scope,
+        tree_node_docs=[_doc("tree_node_membership", tree_id="tree-1", node_id="node-1", content_sha256="node-hash")],
+        fact_location_docs=[_doc("fact_location", fact_id="fact-1", tree_id="tree-1", node_id="node-1", tree_type="entity", level="L0", content_sha256="fact-hash")],
+    )
+
+    assert baseline.records_for("tree_node_membership") == ()
+    assert baseline.records_for("fact_location") == ()
 
 
 @pytest.mark.asyncio
@@ -242,4 +256,13 @@ def _doc(doc_kind, **overrides):
     if doc_kind is not None:
         doc["doc_kind"] = doc_kind
     doc.update(overrides)
+    return doc
+
+
+def _mvcc_doc(doc_kind, **overrides):
+    doc = _doc(doc_kind, **overrides)
+    doc.setdefault("valid_from_generation", 1)
+    doc.setdefault("valid_from_forest_version", doc.get("forest_version", "v1"))
+    doc.setdefault("valid_to_generation", None)
+    doc.setdefault("valid_to_forest_version", None)
     return doc

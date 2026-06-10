@@ -21,6 +21,7 @@ class ProjectionBaselineScope:
     user_id: str
     forest_version: str
     embedding_model_version: str = ""
+    generation: int | None = None
 
     def __post_init__(self) -> None:
         for field_name in ("tenant_id", "user_id", "forest_version"):
@@ -30,6 +31,10 @@ class ProjectionBaselineScope:
         object.__setattr__(self, "user_id", str(self.user_id))
         object.__setattr__(self, "forest_version", str(self.forest_version))
         object.__setattr__(self, "embedding_model_version", str(self.embedding_model_version or ""))
+        generation = self.generation
+        if generation is None:
+            generation = _generation_from_forest_version(self.forest_version)
+        object.__setattr__(self, "generation", generation)
 
     @classmethod
     def from_manifest(cls, manifest: Any, *, embedding_model_version: str = "") -> "ProjectionBaselineScope":
@@ -41,6 +46,7 @@ class ProjectionBaselineScope:
             user_id=str(getattr(manifest, "user_id", "") or ""),
             forest_version=str(getattr(manifest, "forest_version", "") or ""),
             embedding_model_version=embedding_model_version,
+            generation=int(getattr(manifest, "generation", 0) or 0),
         )
 
 
@@ -125,13 +131,15 @@ async def build_committed_projection_baseline(
     tree_node_docs = await _query_cosmos_docs(
         tree_nodes_container,
         scope,
-        "SELECT * FROM c WHERE c.tenant_user_key=@pk AND c.forest_version=@forest_version",
+        "SELECT * FROM c WHERE c.tenant_user_key=@pk",
+        include_forest_version=False,
         limit=limit,
     )
     fact_location_docs = await _query_cosmos_docs(
         fact_locations_container,
         scope,
-        "SELECT * FROM c WHERE c.tenant_user_key=@pk AND c.forest_version=@forest_version",
+        "SELECT * FROM c WHERE c.tenant_user_key=@pk",
+        include_forest_version=False,
         limit=limit,
     )
     browse_embedding_docs = await _query_cosmos_docs(
@@ -166,6 +174,8 @@ def _tree_node_refs(scope: ProjectionBaselineScope, docs: Iterable[Mapping[str, 
         doc = dict(raw)
         if _skip_doc(scope, doc) or doc.get("doc_kind") != "tree_node_membership":
             continue
+        if "valid_from_generation" not in doc:
+            continue
         tree_id = _required(doc, "tree_id", "tree_node_membership")
         node_id = _required(doc, "node_id", "tree_node_membership")
         content_hash = _required(doc, "content_sha256", "tree_node_membership")
@@ -184,6 +194,8 @@ def _fact_location_refs(scope: ProjectionBaselineScope, docs: Iterable[Mapping[s
         if _skip_doc(scope, doc):
             continue
         if doc.get("doc_kind") not in {None, "", "fact_location"}:
+            continue
+        if "valid_from_generation" not in doc:
             continue
         fact_id = _required(doc, "fact_id", "fact_location")
         tree_id = _required(doc, "tree_id", "fact_location")
@@ -251,13 +263,48 @@ def _skip_doc(scope: ProjectionBaselineScope, doc: Mapping[str, Any], *, require
     )
     if not in_scope:
         return True
-    if require_forest_version and str(doc.get("forest_version") or "") != scope.forest_version:
+    if require_forest_version and not _doc_visible_in_scope(scope, doc):
         return True
     return False
 
 
+def _doc_visible_in_scope(scope: ProjectionBaselineScope, doc: Mapping[str, Any]) -> bool:
+    if "valid_from_generation" not in doc:
+        return str(doc.get("forest_version") or "") == scope.forest_version
+    current_generation = int(scope.generation or 0)
+    from_generation = int(doc.get("valid_from_generation") or 0)
+    from_version = str(doc.get("valid_from_forest_version") or doc.get("forest_version") or "")
+    if from_generation > current_generation:
+        return False
+    if from_generation == current_generation and from_version != scope.forest_version:
+        return False
+    to_generation_raw = doc.get("valid_to_generation")
+    if to_generation_raw is None:
+        return True
+    to_generation = int(to_generation_raw)
+    to_version = str(doc.get("valid_to_forest_version") or "")
+    if to_generation > current_generation:
+        return True
+    if to_generation < current_generation:
+        return False
+    return to_version != scope.forest_version
+
+
 def _skip_embedding_model(scope: ProjectionBaselineScope, doc: Mapping[str, Any]) -> bool:
     return bool(scope.embedding_model_version) and str(doc.get("embedding_model_version") or "") != scope.embedding_model_version
+
+
+def _generation_from_forest_version(forest_version: str) -> int:
+    value = str(forest_version or "")
+    if value.startswith("g"):
+        digits = []
+        for char in value[1:]:
+            if not char.isdigit():
+                break
+            digits.append(char)
+        if digits:
+            return int("".join(digits))
+    return 0
 
 
 def _required(doc: Mapping[str, Any], field_name: str, record_kind: str) -> str:

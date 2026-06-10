@@ -291,9 +291,19 @@ class RecordingStore:
             raise RuntimeError("node write failed")
         self.items.extend(nodes)
 
+    async def upsert_nodes_delta(self, nodes, *, delete_keys=None, unchanged_keys=None):
+        self.calls.append(self.name)
+        if self.fail:
+            raise RuntimeError("node write failed")
+        self.items.append({"upsert_nodes": list(nodes), "delete_keys": list(delete_keys or []), "unchanged_keys": list(unchanged_keys or [])})
+
     async def upsert_locations(self, locations):
         self.calls.append(self.name)
         self.items.extend(locations)
+
+    async def upsert_locations_delta(self, locations, *, delete_keys=None, unchanged_keys=None):
+        self.calls.append(self.name)
+        self.items.append({"upsert_locations": list(locations), "delete_keys": list(delete_keys or []), "unchanged_keys": list(unchanged_keys or [])})
 
     def upsert_documents(self, documents):
         self.calls.append(self.name)
@@ -587,7 +597,12 @@ class MatchingProjectionBaselineProvider:
         )
 
 
-def _handler(*, manifest_store=None, lease_store=None, node_store=None, calls=None, core=None, deletion_log=None, job_store=None, config=None, baseline_provider=None):
+class FailingProjectionBaselineProvider:
+    def __call__(self, *, scope, projection):
+        raise RuntimeError("baseline unavailable")
+
+
+def _handler(*, manifest_store=None, lease_store=None, node_store=None, location_store=None, calls=None, core=None, deletion_log=None, job_store=None, config=None, baseline_provider=None):
     calls = calls if calls is not None else []
     return MemForestMaterializationHandler(
         stores=MaterializationStores(
@@ -596,7 +611,7 @@ def _handler(*, manifest_store=None, lease_store=None, node_store=None, calls=No
             source_turn_store=RecordingStore(calls, "source_turns"),
             fact_store=RecordingStore(calls, "facts"),
             tree_node_store=node_store or RecordingStore(calls, "tree_nodes"),
-            fact_location_index=RecordingStore(calls, "locations"),
+            fact_location_index=location_store or RecordingStore(calls, "locations"),
             manifest_store=manifest_store or FakeManifestStore(),
             recall_index=RecordingStore(calls, "recall"),
             browse_embedding_store=RecordingStore(calls, "browse_embeddings"),
@@ -1128,8 +1143,8 @@ async def test_materialization_handler_uses_authoritative_committed_baseline_for
     assert len(baseline_provider.calls) == 1
     assert manifest_store.latest is not None
     metadata = manifest_store.latest.metadata
-    assert metadata["projection_plan_counts"]["tree_node_membership"] == {"unchanged": 0, "upsert": 2, "delete": 0}
-    assert metadata["projection_plan_counts"]["fact_location"] == {"unchanged": 0, "upsert": 1, "delete": 0}
+    assert metadata["projection_plan_counts"]["tree_node_membership"] == {"unchanged": 2, "upsert": 0, "delete": 0}
+    assert metadata["projection_plan_counts"]["fact_location"] == {"unchanged": 1, "upsert": 0, "delete": 0}
     assert metadata["projection_plan_counts"]["recall_document"] == {"unchanged": 0, "upsert": 1, "delete": 0}
     assert metadata["projection_plan_counts"]["browse_embedding"] == {"unchanged": 1, "upsert": 0, "delete": 0}
     assert metadata["projection_plan_counts"]["summary_cache"] == {"unchanged": 1, "upsert": 0, "delete": 0}
@@ -1140,6 +1155,37 @@ async def test_materialization_handler_uses_authoritative_committed_baseline_for
     assert "recall" in calls
     assert "browse_embeddings" not in calls
     assert "summary_cache" not in calls
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_baseline_failure_uses_full_structural_writes() -> None:
+    calls = []
+    manifest_store = FakeManifestStore()
+    manifest_store.latest = ForestManifest(
+        manifest_id="manifest-v1",
+        tenant_id="tenant-1",
+        user_id="user-1",
+        forest_version="v1",
+        generation=1,
+        status="committed",
+        created_at_unix=1.0,
+        metadata={"job_id": "previous", "job_type": "ingest_session"},
+    )
+    tree_nodes = RecordingStore(calls, "tree_nodes")
+    locations = RecordingStore(calls, "locations")
+    handler = _handler(
+        manifest_store=manifest_store,
+        calls=calls,
+        node_store=tree_nodes,
+        location_store=locations,
+        core=FakeIngestCore(_unchanged_incremental_snapshot()),
+        baseline_provider=FailingProjectionBaselineProvider(),
+    )
+
+    await handler.handle(_envelope(), {"fencing_token": 1})
+
+    assert tree_nodes.items and all(not isinstance(item, dict) for item in tree_nodes.items)
+    assert locations.items and all(not isinstance(item, dict) for item in locations.items)
 
 
 @pytest.mark.asyncio
