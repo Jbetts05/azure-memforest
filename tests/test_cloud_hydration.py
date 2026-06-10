@@ -34,6 +34,11 @@ class FakeTreeStore:
         return list(self.nodes_by_tree.get(tree_id, []))[:limit]
 
 
+class FailingTreeStore:
+    async def list_tree_ids(self, *, limit=10000):
+        raise RuntimeError("transient tree read failure")
+
+
 class FakeFactStore:
     def __init__(self, facts_by_id):
         self.facts_by_id = facts_by_id
@@ -88,6 +93,7 @@ class FakeSnapshotStore:
 class FakeManifest:
     def __init__(self, metadata):
         self.metadata = metadata
+        self.forest_version = str(metadata.get("forest_version") or "v1")
 
 
 def _node(node_id, *, parent_id=None, level="L1", child_ids=(), fact_ids=(), tree_id="tree-1"):
@@ -538,6 +544,51 @@ def test_cloud_state_core_defaults_to_snapshot_fallback(tmp_path) -> None:
 
     assert core.last_hydration_result is not None
     assert core.last_hydration_result.used_snapshot_fallback
+
+
+def test_cloud_state_core_hydrates_complete_cloud_state_without_snapshot(tmp_path) -> None:
+    dim = 4
+    target = _user_forest(tmp_path / "target-root", dim)
+    fact = _fact("fact_1", dim)
+    core = CloudStateHydratingUserForestCore(
+        user_forest=target,
+        tree_store_factory=lambda forest_version: FakeTreeStore(
+            {
+                "tree-1": [
+                    _node("root", child_ids=("leaf",)),
+                    _node("leaf", parent_id="root", level="L0", child_ids=("fact_1",)),
+                ]
+            }
+        ),
+        fact_store=FakeFactStore({"fact_1": fact}),
+        summary_cache=FakeSummaryCache({_content_key(frozenset({"fact_1"})): "cached root"}),
+        browse_embedding_store_factory=lambda forest_version: FakeBrowseEmbeddingStore({"root": _embedding(dim)}),
+        snapshot_store=None,
+        enable_cloud_state_hydration=True,
+    )
+
+    core.hydrate_from_manifest(FakeManifest({"forest_version": "v7", "embedding_model_version": "embed-v1"}))
+
+    assert core.last_hydration_result is not None
+    assert core.last_hydration_result.used_snapshot_fallback is False
+    assert core.last_hydration_result.tree_count == 1
+    assert core.last_hydration_result.fact_count == 1
+    assert target._fact_manager.get_fact("fact_1") is not None
+    assert target._node_index.get_embedding("root") is not None
+
+
+def test_cloud_state_core_without_snapshot_surfaces_cloud_read_errors(tmp_path) -> None:
+    target = _user_forest(tmp_path / "target-root", 4)
+    core = CloudStateHydratingUserForestCore(
+        user_forest=target,
+        tree_store=FailingTreeStore(),
+        snapshot_store=None,
+        enable_cloud_state_hydration=True,
+        cloud_state_read_attempts=2,
+    )
+
+    with pytest.raises(RuntimeError, match="transient tree read failure"):
+        core.hydrate_from_manifest(FakeManifest({"forest_version": "v7", "embedding_model_version": "embed-v1"}))
 
 
 def test_cloud_state_core_falls_back_when_cloud_state_is_incomplete(tmp_path) -> None:

@@ -21,6 +21,7 @@ from src.worker.materialization import (
     MaterializationStores,
     MemForestMaterializationHandler,
     SNAPSHOT_POLICY_ALWAYS,
+    SNAPSHOT_POLICY_CLOUD_CHECKPOINT,
     project_forest_snapshot,
 )
 from src.worker.consumer import PermanentHandlerError
@@ -912,6 +913,44 @@ async def test_materialization_handler_writes_core_snapshot_payload() -> None:
     assert handler._config.snapshot_policy == SNAPSHOT_POLICY_ALWAYS
     assert snapshot_store.items[0][1] == b"full-archive"
     assert len(snapshot_store.items) == 2
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_cloud_checkpoint_skips_archive_snapshot_payload() -> None:
+    calls = []
+    snapshot_store = RecordingStore(calls, "snapshot")
+    manifest_store = FakeManifestStore()
+    handler = MemForestMaterializationHandler(
+        stores=MaterializationStores(
+            lease_store=FakeLeaseStore(),
+            source_session_store=RecordingStore(calls, "source_session"),
+            source_turn_store=RecordingStore(calls, "source_turns"),
+            fact_store=RecordingStore(calls, "facts"),
+            tree_node_store=RecordingStore(calls, "tree_nodes"),
+            fact_location_index=RecordingStore(calls, "locations"),
+            manifest_store=manifest_store,
+            recall_index=RecordingStore(calls, "recall"),
+            snapshot_store=snapshot_store,
+        ),
+        ingest_core=FakeIngestCore(_snapshot()),
+        config=MaterializationHandlerConfig(
+            owner_id="worker-1",
+            embedding_model_version="embed-v1",
+            code_version="test-sha",
+            prompt_config_hash="prompt-hash",
+            lease_renewal_seconds=9999,
+            snapshot_policy=SNAPSHOT_POLICY_CLOUD_CHECKPOINT,
+            cloud_checkpoint_hydration_supported=True,
+        ),
+    )
+
+    await handler.handle(_envelope(), {"fencing_token": 1})
+
+    assert manifest_store.latest is not None
+    assert manifest_store.latest.metadata["snapshot_policy"] == SNAPSHOT_POLICY_CLOUD_CHECKPOINT
+    assert "snapshot_id" not in manifest_store.latest.metadata
+    assert len(snapshot_store.items) == 1
+    assert snapshot_store.items[0][0].endswith(".fingerprint.json")
 
 
 @pytest.mark.asyncio

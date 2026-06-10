@@ -20,6 +20,7 @@ from src.cloud.cosmos_leases import CosmosUserLeaseStore
 from src.cloud.cosmos_manifests import CosmosDeletionLog, CosmosManifestStore
 from src.cloud.cosmos_sessions import CosmosSessionStore, CosmosTurnStore
 from src.cloud.cosmos_source import CosmosFactLocationIndex, CosmosTreeNodeStore
+from src.cloud.cosmos_summary_cache import CosmosSummaryCache
 from src.config.api import APISettings, ChatCompletionConfig, EmbeddingConfig
 from src.config.config import load_default_config
 from src.service.jobs import WriteJobEnvelope
@@ -145,7 +146,12 @@ def cosmos_materialization_store_factory(
             ),
             recall_index=recall_index,
             browse_embedding_store=browse_embedding_store,
-            summary_cache=summary_cache,
+            summary_cache=summary_cache
+            or CosmosSummaryCache(
+                database_client.get_container_client("summary_cache"),
+                tenant_id=tenant_id,
+                user_id=user_id,
+            ),
             snapshot_store=snapshot_store,
             deletion_log=CosmosDeletionLog(database_client.get_container_client("deletions"), tenant_id=tenant_id),
             job_store=CosmosJobStore(database_client.get_container_client("jobs")),
@@ -289,12 +295,15 @@ def build_scoped_materialization_handler_from_env(
         embedding_model_version=values["AZURE_OPENAI_EMBEDDING_MODEL_VERSION"],
         snapshot_store=snapshot_store,
     )
+    cloud_checkpoint_hydration_supported = _env_flag(values.get("AZURE_MEMFOREST_CLOUD_CHECKPOINT_HYDRATION_SUPPORTED", ""))
     core_factory = hydrating_user_forest_core_factory(
         config=memforest_config,
         chat_client=model_client,
         embedding_client=model_client,
         snapshot_store=snapshot_store,
         scratch_root=Path(values.get("AZURE_MEMFOREST_WORKER_SCRATCH_ROOT", "/tmp/azure-memforest-worker")),
+        store_factory=store_factory,
+        enable_cloud_state_hydration=cloud_checkpoint_hydration_supported,
     )
     resolved_owner_id = owner_id or values.get("AZURE_MEMFOREST_WORKER_OWNER_ID") or values.get("HOSTNAME") or "worker"
     handler = ScopedMaterializationHandler(
@@ -310,9 +319,9 @@ def build_scoped_materialization_handler_from_env(
             ingest_timeout_seconds=float(values.get("AZURE_MEMFOREST_INGEST_TIMEOUT_SECONDS", "1800")),
             extract_heartbeat_seconds=float(values.get("AZURE_MEMFOREST_EXTRACT_HEARTBEAT_SECONDS", "60")),
             extract_stack_dump_seconds=float(values.get("AZURE_MEMFOREST_EXTRACT_STACK_DUMP_SECONDS", "0")),
-            exit_on_ingest_timeout=str(values.get("AZURE_MEMFOREST_EXIT_ON_INGEST_TIMEOUT", "")).strip().lower() in {"1", "true", "yes", "on"},
+            exit_on_ingest_timeout=_env_flag(values.get("AZURE_MEMFOREST_EXIT_ON_INGEST_TIMEOUT", "")),
             snapshot_policy=values.get("AZURE_MEMFOREST_SNAPSHOT_POLICY", "always"),
-            cloud_checkpoint_hydration_supported=str(values.get("AZURE_MEMFOREST_CLOUD_CHECKPOINT_HYDRATION_SUPPORTED", "")).strip().lower() in {"1", "true", "yes", "on"},
+            cloud_checkpoint_hydration_supported=cloud_checkpoint_hydration_supported,
         ),
     )
     return MaterializationRuntime(
@@ -329,9 +338,12 @@ def hydrating_user_forest_core_factory(
     embedding_client: Any,
     snapshot_store: Any,
     scratch_root: Path,
+    store_factory: StoreFactory | None = None,
+    enable_cloud_state_hydration: bool = False,
 ) -> CoreFactory:
-    def build(envelope: WriteJobEnvelope) -> ArchiveHydratingUserForestCore:
+    def build(envelope: WriteJobEnvelope) -> SyncIngestCore:
         from src.forest.user_forest import UserForest
+        from src.worker.cloud_hydration import CloudStateHydratingUserForestCore
 
         user_dir = scratch_root / _safe_scope_dir(envelope.tenant_id, envelope.user_id)
         user_forest = UserForest(
@@ -341,6 +353,20 @@ def hydrating_user_forest_core_factory(
             chat_client=chat_client,
             embedding_client=embedding_client,
         )
+        if enable_cloud_state_hydration:
+            if store_factory is None:
+                raise RuntimeError("store_factory is required for cloud state hydration")
+            stores = store_factory(envelope)
+            return CloudStateHydratingUserForestCore(
+                user_forest=user_forest,
+                tree_store_factory=stores.tree_node_store_factory,
+                fact_store=stores.fact_store,
+                summary_cache=stores.summary_cache,
+                browse_embedding_store_factory=stores.browse_embedding_store_factory,
+                snapshot_store=snapshot_store,
+                enable_cloud_state_hydration=True,
+                fallback_to_snapshot=True,
+            )
         return ArchiveHydratingUserForestCore(user_forest=user_forest, snapshot_store=snapshot_store)
 
     return build
@@ -355,6 +381,10 @@ def _reap_interval_seconds(value: str | float | int) -> float:
     if interval <= 0:
         return 0.0
     return max(10.0, interval)
+
+
+def _env_flag(value: str | None) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _worker_memforest_config(environ: dict[str, str]):

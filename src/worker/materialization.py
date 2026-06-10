@@ -631,7 +631,7 @@ class MemForestMaterializationHandler:
             prompt_config_hash=self._config.prompt_config_hash,
         )
         metadata: dict[str, Any] = dict(fingerprint_metadata)
-        if self._stores.snapshot_store is not None:
+        if self._stores.snapshot_store is not None and self._should_write_archive_snapshot():
             snapshot_payload = await self._snapshot_payload(projection)
             snapshot_id = _snapshot_id(
                 tenant_id=envelope.tenant_id,
@@ -657,6 +657,10 @@ class MemForestMaterializationHandler:
                 "snapshot_id": snapshot_id,
                 "snapshot_content_sha256": snapshot_hash,
                 "snapshot_size_bytes": len(snapshot_payload),
+            }
+        if self._stores.snapshot_store is not None:
+            metadata = {
+                **metadata,
                 "fingerprint_inputs_id": _fingerprint_inputs_id(
                     tenant_id=envelope.tenant_id,
                     user_id=envelope.user_id,
@@ -677,6 +681,9 @@ class MemForestMaterializationHandler:
                 },
             )
         return metadata
+
+    def _should_write_archive_snapshot(self) -> bool:
+        return self._config.snapshot_policy == SNAPSHOT_POLICY_ALWAYS
 
     async def _apply_committed_projection_baseline(self, manifest: Any | None, projection: MaterializationProjection) -> MaterializationProjection:
         if not _projection_baseline_is_authoritative(manifest, projection):

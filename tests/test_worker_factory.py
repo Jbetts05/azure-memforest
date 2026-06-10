@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 from src.service.auth import ActorContext, TenantContext
@@ -141,3 +143,37 @@ def test_hydrating_core_factory_uses_safe_scope_directory(tmp_path) -> None:
     assert core.user_forest.user_id == "user-1"
     assert core.user_forest.snapshot_dir.parent == tmp_path
     assert core.user_forest.snapshot_dir.name.startswith("user-")
+
+
+def test_hydrating_core_factory_can_select_cloud_state_core(tmp_path) -> None:
+    stores = SimpleNamespace(
+        tree_node_store_factory=lambda forest_version: ("tree", forest_version),
+        fact_store="facts",
+        summary_cache="summaries",
+        browse_embedding_store_factory=lambda forest_version: ("browse", forest_version),
+    )
+    store_factory = RecordingStoreFactory()
+    store_factory.return_value = stores
+
+    def build_stores(envelope):
+        store_factory.envelopes.append(envelope)
+        return stores
+
+    factory = hydrating_user_forest_core_factory(
+        config=load_default_config(),
+        chat_client="chat",
+        embedding_client="embedding",
+        snapshot_store="snapshots",
+        scratch_root=tmp_path,
+        store_factory=build_stores,
+        enable_cloud_state_hydration=True,
+    )
+
+    core = factory(_envelope())
+
+    assert core.enable_cloud_state_hydration is True
+    assert core.tree_store_factory("v1") == ("tree", "v1")
+    assert core.fact_store == "facts"
+    assert core.summary_cache == "summaries"
+    assert core.browse_embedding_store_factory("v1") == ("browse", "v1")
+    assert len(store_factory.envelopes) == 1

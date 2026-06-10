@@ -282,6 +282,7 @@ var userScopedCosmosContainers = [
   'tree_nodes'
   'fact_locations'
   'browse_embeddings'
+  'summary_cache'
   'leases'
 ]
 

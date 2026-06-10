@@ -79,46 +79,45 @@ class CloudStateHydratingUserForestCore:
         *,
         user_forest: Any,
         tree_store: Any | None = None,
+        tree_store_factory: Any | None = None,
         fact_store: Any | None = None,
         summary_cache: Any | None = None,
         browse_embedding_store: Any | None = None,
+        browse_embedding_store_factory: Any | None = None,
         snapshot_store: Any | None = None,
         enable_cloud_state_hydration: bool = False,
         fallback_to_snapshot: bool = True,
+        cloud_state_read_attempts: int = 2,
     ) -> None:
         self.user_forest = user_forest
         self.tree_store = tree_store
+        self.tree_store_factory = tree_store_factory
         self.fact_store = fact_store
         self.summary_cache = summary_cache
         self.browse_embedding_store = browse_embedding_store
+        self.browse_embedding_store_factory = browse_embedding_store_factory
         self.snapshot_store = snapshot_store
         self.enable_cloud_state_hydration = bool(enable_cloud_state_hydration)
         self.fallback_to_snapshot = bool(fallback_to_snapshot)
+        self.cloud_state_read_attempts = max(1, int(cloud_state_read_attempts))
         self.last_hydration_result: CloudHydrationApplyResult | None = None
 
     def hydrate_from_manifest(self, manifest: Any) -> None:
         if not self.enable_cloud_state_hydration:
             self.last_hydration_result = self._snapshot_fallback(manifest)
             return
-        if self.tree_store is None:
-            if not self.fallback_to_snapshot:
-                raise ValueError("tree_store is required for cloud state hydration")
-            self.last_hydration_result = self._snapshot_fallback(manifest)
-            return
         try:
-            state = asyncio.run(
-                load_cloud_user_forest_state(
-                    tree_store=self.tree_store,
-                    fact_store=self.fact_store,
-                    summary_cache=self.summary_cache,
-                    browse_embedding_store=self.browse_embedding_store,
-                )
-            )
+            forest_version = _manifest_forest_version(manifest)
+            tree_store = _store_for_manifest_version(self.tree_store, self.tree_store_factory, forest_version)
+            browse_embedding_store = _store_for_manifest_version(self.browse_embedding_store, self.browse_embedding_store_factory, forest_version)
+            if tree_store is None:
+                raise CloudStateHydrationIncomplete("tree_store is required for cloud state hydration")
+            state = self._load_cloud_state_with_retry(tree_store=tree_store, browse_embedding_store=browse_embedding_store)
             if _cloud_state_missing_prerequisites(state):
-                raise ValueError("cloud state hydration is incomplete")
+                raise CloudStateHydrationIncomplete("cloud state hydration is incomplete")
             self.last_hydration_result = apply_cloud_state_to_user_forest(self.user_forest, state)
         except Exception:
-            if not self.fallback_to_snapshot:
+            if not self.fallback_to_snapshot or not _manifest_has_snapshot(manifest):
                 raise
             self.last_hydration_result = self._snapshot_fallback(manifest)
 
@@ -138,6 +137,23 @@ class CloudStateHydratingUserForestCore:
 
         return build_user_forest_archive(self.user_forest)
 
+    def _load_cloud_state_with_retry(self, *, tree_store: Any, browse_embedding_store: Any | None) -> CloudUserForestState:
+        last_error: Exception | None = None
+        for _attempt in range(self.cloud_state_read_attempts):
+            try:
+                return asyncio.run(
+                    load_cloud_user_forest_state(
+                        tree_store=tree_store,
+                        fact_store=self.fact_store,
+                        summary_cache=self.summary_cache,
+                        browse_embedding_store=browse_embedding_store,
+                    )
+                )
+            except Exception as exc:
+                last_error = exc
+        assert last_error is not None
+        raise last_error
+
     def _snapshot_fallback(self, manifest: Any) -> CloudHydrationApplyResult:
         if self.snapshot_store is None or restore_user_forest_from_manifest is None:
             raise ValueError("snapshot_store is required when cloud hydration falls back to Blob snapshots")
@@ -151,8 +167,34 @@ class CloudStateHydratingUserForestCore:
         )
 
 
+class CloudStateHydrationIncomplete(ValueError):
+    """Cloud state is readable but missing required facts, summaries, or embeddings."""
+
+
 def _cloud_state_missing_prerequisites(state: CloudUserForestState) -> bool:
     return bool(state.missing_fact_ids or state.missing_summary_cache_keys or state.missing_node_embedding_ids)
+
+
+def _manifest_forest_version(manifest: Any) -> str:
+    forest_version = str(getattr(manifest, "forest_version", "") or "")
+    if forest_version:
+        return forest_version
+    metadata = getattr(manifest, "metadata", {}) or {}
+    forest_version = str(metadata.get("forest_version") or "")
+    if not forest_version:
+        raise ValueError("manifest forest_version is required for cloud state hydration")
+    return forest_version
+
+
+def _store_for_manifest_version(store: Any | None, factory: Any | None, forest_version: str) -> Any | None:
+    if factory is not None:
+        return factory(forest_version)
+    return store
+
+
+def _manifest_has_snapshot(manifest: Any) -> bool:
+    metadata = getattr(manifest, "metadata", {}) or {}
+    return bool(metadata.get("snapshot_id") and metadata.get("snapshot_content_sha256"))
 
 
 async def load_memtrees_from_tree_store(tree_store: Any) -> list[MemTree]:
