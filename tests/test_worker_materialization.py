@@ -10,6 +10,7 @@ from src.cloud.contracts import Lease
 from src.cloud.cosmos_manifests import ForestManifest
 from src.cloud.projection_baseline import CommittedProjectionBaseline
 from src.cloud.projection_plan import ProjectionRecordRef
+from src.evaluation.incremental_cloud_validation import ProjectionWriteCounts, compare_projection_write_reduction
 from src.forest.user_forest import ForestMaterializationSnapshot
 from src.service.auth import ActorContext, TenantContext
 from src.service.jobs import build_write_job_envelope
@@ -627,6 +628,22 @@ def _handler(*, manifest_store=None, lease_store=None, node_store=None, location
     )
 
 
+def _actual_projection_write_counts(tree_nodes, locations, recall, browse, summary) -> ProjectionWriteCounts:
+    return ProjectionWriteCounts(
+        stored_nodes=sum(
+            len(item["upsert_nodes"]) if isinstance(item, dict) else 1
+            for item in tree_nodes.items
+        ),
+        fact_locations=sum(
+            len(item["upsert_locations"]) if isinstance(item, dict) else 1
+            for item in locations.items
+        ),
+        recall_documents=len(recall.items),
+        browse_embeddings=len(browse.items),
+        summary_cache_entries=len(summary.items),
+    )
+
+
 @pytest.mark.asyncio
 async def test_materialization_handler_commits_after_projection_writes() -> None:
     calls = []
@@ -1186,6 +1203,85 @@ async def test_materialization_handler_baseline_failure_uses_full_structural_wri
 
     assert tree_nodes.items and all(not isinstance(item, dict) for item in tree_nodes.items)
     assert locations.items and all(not isinstance(item, dict) for item in locations.items)
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_actual_write_counts_show_pre_recall_mvcc_reduction() -> None:
+    full_calls = []
+    full_tree_nodes = RecordingStore(full_calls, "tree_nodes")
+    full_locations = RecordingStore(full_calls, "locations")
+    full_recall = RecordingStore(full_calls, "recall")
+    full_browse = RecordingStore(full_calls, "browse_embeddings")
+    full_summary = SummaryCacheRecordingStore(full_calls, {})
+    full_handler = MemForestMaterializationHandler(
+        stores=MaterializationStores(
+            lease_store=FakeLeaseStore(),
+            source_session_store=RecordingStore(full_calls, "source_session"),
+            source_turn_store=RecordingStore(full_calls, "source_turns"),
+            fact_store=RecordingStore(full_calls, "facts"),
+            tree_node_store=full_tree_nodes,
+            fact_location_index=full_locations,
+            manifest_store=FakeManifestStore(),
+            recall_index=full_recall,
+            browse_embedding_store=full_browse,
+            summary_cache=full_summary,
+            snapshot_store=RecordingStore(full_calls, "snapshot"),
+        ),
+        ingest_core=FakeIngestCore(_unchanged_incremental_snapshot()),
+        config=MaterializationHandlerConfig(owner_id="worker-1", embedding_model_version="embed-v1", code_version="test-sha", prompt_config_hash="prompt-hash", lease_renewal_seconds=9999),
+    )
+
+    await full_handler.handle(_envelope(), {"fencing_token": 1})
+    full = _actual_projection_write_counts(full_tree_nodes, full_locations, full_recall, full_browse, full_summary)
+
+    calls = []
+    manifest_store = FakeManifestStore()
+    manifest_store.latest = ForestManifest(
+        manifest_id="manifest-v1",
+        tenant_id="tenant-1",
+        user_id="user-1",
+        forest_version="v1",
+        generation=1,
+        status="committed",
+        created_at_unix=1.0,
+        metadata={"job_id": "previous", "job_type": "ingest_session"},
+    )
+    tree_nodes = RecordingStore(calls, "tree_nodes")
+    locations = RecordingStore(calls, "locations")
+    recall = RecordingStore(calls, "recall")
+    browse = RecordingStore(calls, "browse_embeddings")
+    summary = SummaryCacheRecordingStore(calls, {"k": "summary"})
+    handler = MemForestMaterializationHandler(
+        stores=MaterializationStores(
+            lease_store=FakeLeaseStore(),
+            source_session_store=RecordingStore(calls, "source_session"),
+            source_turn_store=RecordingStore(calls, "source_turns"),
+            fact_store=RecordingStore(calls, "facts"),
+            tree_node_store=tree_nodes,
+            fact_location_index=locations,
+            manifest_store=manifest_store,
+            recall_index=recall,
+            browse_embedding_store=browse,
+            summary_cache=summary,
+            snapshot_store=RecordingStore(calls, "snapshot"),
+            baseline_provider=MatchingProjectionBaselineProvider(),
+        ),
+        ingest_core=FakeIngestCore(_unchanged_incremental_snapshot()),
+        config=MaterializationHandlerConfig(owner_id="worker-1", embedding_model_version="embed-v1", code_version="test-sha", prompt_config_hash="prompt-hash", lease_renewal_seconds=9999),
+    )
+
+    await handler.handle(_envelope(), {"fencing_token": 1})
+
+    actual = _actual_projection_write_counts(tree_nodes, locations, recall, browse, summary)
+    result = compare_projection_write_reduction(
+        baseline_full=full,
+        candidate_incremental=actual,
+        min_total_reduction_ratio=0.5,
+    )
+
+    assert full == ProjectionWriteCounts(stored_nodes=2, fact_locations=1, recall_documents=1, browse_embeddings=1, summary_cache_entries=1)
+    assert actual == ProjectionWriteCounts(stored_nodes=0, fact_locations=0, recall_documents=1, browse_embeddings=0, summary_cache_entries=0)
+    assert result.ok
 
 
 @pytest.mark.asyncio
