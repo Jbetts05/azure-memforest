@@ -170,7 +170,9 @@ class CloudStateHydrationIncomplete(ValueError):
 
 
 def _cloud_state_missing_prerequisites(state: CloudUserForestState) -> bool:
-    return bool(state.missing_fact_ids or state.missing_summary_cache_keys or state.missing_node_embedding_ids)
+    # Node summaries are persisted on tree nodes; the content-hash cache is a
+    # rebuild optimization and can self-heal when affected nodes are dirtied.
+    return bool(state.missing_fact_ids or state.missing_node_embedding_ids)
 
 
 def _manifest_forest_version(manifest: Any) -> str:

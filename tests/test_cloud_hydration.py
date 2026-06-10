@@ -745,3 +745,31 @@ async def test_cloud_state_core_falls_back_when_cloud_state_is_incomplete(tmp_pa
 
     assert core.last_hydration_result is not None
     assert core.last_hydration_result.used_snapshot_fallback
+
+
+@pytest.mark.asyncio
+async def test_cloud_state_core_allows_missing_summary_cache_entries(tmp_path) -> None:
+    dim = 4
+    target = _user_forest(tmp_path / "target-root", dim)
+    core = CloudStateHydratingUserForestCore(
+        user_forest=target,
+        tree_store=FakeTreeStore(
+            {
+                "tree-1": [
+                    _node("root", child_ids=("leaf",)),
+                    _node("leaf", parent_id="root", level="L0", child_ids=("fact_1",)),
+                ]
+            }
+        ),
+        fact_store=FakeFactStore({"fact_1": _fact("fact_1", dim)}),
+        summary_cache=FakeSummaryCache({}),
+        browse_embedding_store=FakeBrowseEmbeddingStore({"root": _embedding(dim)}),
+        snapshot_store=None,
+        enable_cloud_state_hydration=True,
+    )
+
+    await core.hydrate_from_manifest(FakeManifest({"forest_version": "v7", "embedding_model_version": "embed-v1"}))
+
+    assert core.last_hydration_result is not None
+    assert core.last_hydration_result.used_snapshot_fallback is False
+    assert core.last_hydration_result.missing_summary_cache_keys
