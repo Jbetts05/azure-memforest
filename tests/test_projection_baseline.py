@@ -8,6 +8,7 @@ from src.cloud.projection_baseline import (
     ProjectionBaselineScope,
     baseline_from_committed_docs,
     build_committed_projection_baseline,
+    summary_cache_refs_from_entries,
 )
 from src.cloud.projection_plan import ProjectionRecordKey, ProjectionRecordRef, plan_projection_skip, tree_node_body_content_id
 
@@ -167,6 +168,16 @@ def test_baseline_rejects_duplicate_committed_record_keys() -> None:
                 _doc(None, tree_id="tree-1", node_id="root", content_sha256="b"),
             ],
         )
+
+
+def test_summary_cache_refs_from_entries_hashes_existing_summaries() -> None:
+    refs = summary_cache_refs_from_entries({"summary-key": "cached summary"})
+    plan = plan_projection_skip(
+        projected_records=[ProjectionRecordRef("summary_cache", "summary-key", content_hash=refs[0].content_hash)],
+        retained_committed_records=refs,
+    )
+
+    assert plan.unchanged_keys == frozenset({ProjectionRecordKey("summary_cache", "summary-key")})
 
 
 @pytest.mark.asyncio

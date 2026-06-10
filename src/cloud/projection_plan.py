@@ -127,3 +127,26 @@ def tree_node_body_content_id(*, tree_id: str, node_id: str, content_sha256: str
 
     raw = "\x1f".join(("tree_node_body", tree_id, node_id, content_sha256))
     return f"tree_node_body_{hashlib.sha256(raw.encode('utf-8')).hexdigest()}"
+
+
+def browse_embedding_content_hash(
+    *,
+    node_id: str,
+    tree_id: str,
+    tree_type: str,
+    embedding_sha256: str = "",
+    embedding: Iterable[float] | None = None,
+) -> str:
+    """Return the stable logical content hash for a browse embedding row."""
+
+    if not embedding_sha256:
+        if embedding is None:
+            raise ValueError("embedding_sha256 or embedding is required")
+        embedding_sha256 = _embedding_sha256(tuple(float(value) for value in embedding))
+    payload = "\x1f".join(("browse_embedding", str(node_id), str(tree_id), str(tree_type), str(embedding_sha256)))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _embedding_sha256(embedding: tuple[float, ...]) -> str:
+    raw = ",".join(repr(float(value)) for value in embedding)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()

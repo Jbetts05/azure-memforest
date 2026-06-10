@@ -9,12 +9,24 @@ snapshots from every ingest.
 from __future__ import annotations
 
 import inspect
+import asyncio
 import time
 from dataclasses import dataclass, field
 from typing import Any
 
+import faiss
+import numpy as np
+
+from src.build.node_index import NodeEntry, NodeIndex
+from src.build.tree import validate_tree_structure
 from src.build.tree_types import MemTree, MemTreeNode
 from src.forest.memforest import _content_key
+from src.utils.types import FactOccurrence, ManagedFact
+
+try:
+    from src.worker.snapshot_hydration import restore_user_forest_from_manifest
+except ImportError:  # pragma: no cover - defensive for partial imports
+    restore_user_forest_from_manifest = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +38,121 @@ class CloudHydrationPrerequisites:
     summary_cache: dict[str, str] = field(default_factory=dict)
     missing_fact_ids: tuple[str, ...] = field(default_factory=tuple)
     missing_summary_cache_keys: tuple[str, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True, slots=True)
+class CloudUserForestState:
+    """Cloud state sufficient to seed a local ``UserForest`` read/query graph."""
+
+    trees: list[MemTree]
+    facts: list[ManagedFact] = field(default_factory=list)
+    summary_cache: dict[str, str] = field(default_factory=dict)
+    node_embeddings: dict[str, list[float]] = field(default_factory=dict)
+    missing_fact_ids: tuple[str, ...] = field(default_factory=tuple)
+    missing_summary_cache_keys: tuple[str, ...] = field(default_factory=tuple)
+    missing_node_embedding_ids: tuple[str, ...] = field(default_factory=tuple)
+
+
+@dataclass(frozen=True, slots=True)
+class CloudHydrationApplyResult:
+    """Result of applying cloud state to a local ``UserForest``."""
+
+    tree_count: int
+    fact_count: int
+    summary_cache_count: int
+    node_embedding_count: int
+    missing_fact_ids: tuple[str, ...] = field(default_factory=tuple)
+    missing_summary_cache_keys: tuple[str, ...] = field(default_factory=tuple)
+    missing_node_embedding_ids: tuple[str, ...] = field(default_factory=tuple)
+    used_snapshot_fallback: bool = False
+
+
+class CloudStateHydratingUserForestCore:
+    """Gated worker core that can hydrate from cloud state, with Blob fallback.
+
+    The feature is disabled unless ``enable_cloud_state_hydration`` is true, so
+    the existing archive snapshot path remains the default production behavior.
+    """
+
+    def __init__(
+        self,
+        *,
+        user_forest: Any,
+        tree_store: Any | None = None,
+        fact_store: Any | None = None,
+        summary_cache: Any | None = None,
+        browse_embedding_store: Any | None = None,
+        snapshot_store: Any | None = None,
+        enable_cloud_state_hydration: bool = False,
+        fallback_to_snapshot: bool = True,
+    ) -> None:
+        self.user_forest = user_forest
+        self.tree_store = tree_store
+        self.fact_store = fact_store
+        self.summary_cache = summary_cache
+        self.browse_embedding_store = browse_embedding_store
+        self.snapshot_store = snapshot_store
+        self.enable_cloud_state_hydration = bool(enable_cloud_state_hydration)
+        self.fallback_to_snapshot = bool(fallback_to_snapshot)
+        self.last_hydration_result: CloudHydrationApplyResult | None = None
+
+    def hydrate_from_manifest(self, manifest: Any) -> None:
+        if not self.enable_cloud_state_hydration:
+            self.last_hydration_result = self._snapshot_fallback(manifest)
+            return
+        if self.tree_store is None:
+            if not self.fallback_to_snapshot:
+                raise ValueError("tree_store is required for cloud state hydration")
+            self.last_hydration_result = self._snapshot_fallback(manifest)
+            return
+        try:
+            state = asyncio.run(
+                load_cloud_user_forest_state(
+                    tree_store=self.tree_store,
+                    fact_store=self.fact_store,
+                    summary_cache=self.summary_cache,
+                    browse_embedding_store=self.browse_embedding_store,
+                )
+            )
+            if _cloud_state_missing_prerequisites(state):
+                raise ValueError("cloud state hydration is incomplete")
+            self.last_hydration_result = apply_cloud_state_to_user_forest(self.user_forest, state)
+        except Exception:
+            if not self.fallback_to_snapshot:
+                raise
+            self.last_hydration_result = self._snapshot_fallback(manifest)
+
+    def ingest_session(self, *, session_id: str, turns: list[dict[str, Any]], metadata: dict[str, Any]) -> Any:
+        self.user_forest.ingest_session(session_id, turns)
+        return self.user_forest.snapshot_for_materialization()
+
+    def delete_session(self, *, session_id: str) -> Any:
+        self.user_forest.delete_session(session_id)
+        return self.user_forest.snapshot_for_materialization()
+
+    def snapshot_for_materialization(self) -> Any:
+        return self.user_forest.snapshot_for_materialization()
+
+    def snapshot_payload(self) -> bytes:
+        from src.worker.snapshot_hydration import build_user_forest_archive
+
+        return build_user_forest_archive(self.user_forest)
+
+    def _snapshot_fallback(self, manifest: Any) -> CloudHydrationApplyResult:
+        if self.snapshot_store is None or restore_user_forest_from_manifest is None:
+            raise ValueError("snapshot_store is required when cloud hydration falls back to Blob snapshots")
+        restore_user_forest_from_manifest(self.user_forest, self.snapshot_store, manifest)
+        return CloudHydrationApplyResult(
+            tree_count=0,
+            fact_count=0,
+            summary_cache_count=0,
+            node_embedding_count=0,
+            used_snapshot_fallback=True,
+        )
+
+
+def _cloud_state_missing_prerequisites(state: CloudUserForestState) -> bool:
+    return bool(state.missing_fact_ids or state.missing_summary_cache_keys or state.missing_node_embedding_ids)
 
 
 async def load_memtrees_from_tree_store(tree_store: Any) -> list[MemTree]:
@@ -181,13 +308,17 @@ async def load_cloud_hydration_prerequisites(
     facts: list[Any] = []
     missing_fact_ids: tuple[str, ...] = ()
     if fact_store is not None:
-        fact_ids = await load_fact_ids_from_tree_store(tree_store)
+        fact_ids = _ordered_unique_payload_ids(trees)
         facts, missing_fact_ids = await load_facts_by_id(fact_store, fact_ids)
+    else:
+        missing_fact_ids = tuple(_ordered_unique_payload_ids(trees))
 
     summaries: dict[str, str] = {}
     missing_summary_keys: tuple[str, ...] = ()
     if summary_cache is not None:
         summaries, missing_summary_keys = await load_summary_cache_for_memtrees(summary_cache, trees)
+    else:
+        missing_summary_keys = tuple(_summary_cache_keys_for_memtrees(trees))
 
     return CloudHydrationPrerequisites(
         trees=trees,
@@ -196,6 +327,55 @@ async def load_cloud_hydration_prerequisites(
         missing_fact_ids=missing_fact_ids,
         missing_summary_cache_keys=missing_summary_keys,
     )
+
+
+async def load_cloud_user_forest_state(
+    *,
+    tree_store: Any,
+    fact_store: Any | None = None,
+    summary_cache: Any | None = None,
+    browse_embedding_store: Any | None = None,
+) -> CloudUserForestState:
+    """Load cloud state that can be applied to a local ``UserForest`` instance."""
+
+    prerequisites = await load_cloud_hydration_prerequisites(
+        tree_store=tree_store,
+        fact_store=fact_store,
+        summary_cache=summary_cache,
+    )
+    node_ids = _node_ids_requiring_embeddings(prerequisites.trees)
+    node_embeddings: dict[str, list[float]] = {}
+    if browse_embedding_store is not None and node_ids:
+        if hasattr(browse_embedding_store, "get_embeddings"):
+            values = await _maybe_await(browse_embedding_store.get_embeddings(node_ids))
+            node_embeddings = {str(key): [float(v) for v in value] for key, value in dict(values or {}).items()}
+        elif hasattr(browse_embedding_store, "get_embedding"):
+            for node_id in node_ids:
+                value = await _maybe_await(browse_embedding_store.get_embedding(node_id))
+                if value is not None:
+                    node_embeddings[node_id] = [float(v) for v in value]
+        else:
+            raise TypeError("browse_embedding_store must provide get_embedding(node_id) or get_embeddings(node_ids)")
+    missing_node_ids = tuple(node_id for node_id in node_ids if node_id not in node_embeddings)
+    return CloudUserForestState(
+        trees=prerequisites.trees,
+        facts=[_managed_fact_from_any(fact) for fact in prerequisites.facts],
+        summary_cache=prerequisites.summary_cache,
+        node_embeddings=node_embeddings,
+        missing_fact_ids=prerequisites.missing_fact_ids,
+        missing_summary_cache_keys=prerequisites.missing_summary_cache_keys,
+        missing_node_embedding_ids=missing_node_ids,
+    )
+
+
+def apply_cloud_state_to_user_forest(user_forest: Any, state: CloudUserForestState) -> CloudHydrationApplyResult:
+    """Seed a local ``UserForest`` from cloud trees, facts, summaries, and node embeddings."""
+
+    lock = getattr(user_forest, "_lock", None)
+    if lock is None:
+        return _apply_cloud_state_locked(user_forest, state)
+    with lock:
+        return _apply_cloud_state_locked(user_forest, state)
 
 
 def _level_int(level: str | int) -> int:
@@ -286,6 +466,172 @@ def _fact_id(fact: Any) -> str:
     if isinstance(fact, dict):
         return str(fact.get("fact_id") or "")
     return str(getattr(fact, "fact_id", "") or "")
+
+
+def _apply_cloud_state_locked(user_forest: Any, state: CloudUserForestState) -> CloudHydrationApplyResult:
+    _reset_empty_user_forest(user_forest)
+    _clear_fact_manager(user_forest._fact_manager)
+    facts = [_managed_fact_from_any(fact) for fact in state.facts]
+    _load_facts_into_fact_manager(user_forest._fact_manager, facts)
+    user_forest._summary_cache = dict(state.summary_cache)
+    user_forest._tree_builder.set_summary_cache(user_forest._summary_cache)
+    user_forest._tree_builder._fact_catalog = {fact.fact_id: fact for fact in facts}
+
+    for tree in state.trees:
+        validate_tree_structure(tree)
+        user_forest._tree_builder._trees[tree.tree_id] = tree
+        user_forest._tree_store.register(tree)
+
+    user_forest._node_index = _node_index_from_cloud_embeddings(
+        user_forest,
+        state.trees,
+        state.node_embeddings,
+    )
+    user_forest._rewire_query_pipeline()
+    user_forest._record_projection_delta(changed_tree_ids=set(), deleted_tree_ids=set())
+    return CloudHydrationApplyResult(
+        tree_count=len(state.trees),
+        fact_count=len(facts),
+        summary_cache_count=len(state.summary_cache),
+        node_embedding_count=len(state.node_embeddings),
+        missing_fact_ids=state.missing_fact_ids,
+        missing_summary_cache_keys=state.missing_summary_cache_keys,
+        missing_node_embedding_ids=state.missing_node_embedding_ids,
+    )
+
+
+def _clear_fact_manager(fact_manager: Any) -> None:
+    with fact_manager._lock:
+        fact_manager._facts = {}
+        fact_manager._faiss_ids = []
+        fact_manager._duplicate_records = []
+        fact_manager._exact_index = {}
+        fact_manager._index = faiss.IndexFlatIP(fact_manager.vector_dim)
+
+
+def _reset_empty_user_forest(user_forest: Any) -> None:
+    user_id = user_forest.user_id
+    user_dir = user_forest._dir
+    config = user_forest._config
+    chat_client = user_forest._chat_client
+    embedding_client = user_forest._embedding_client
+    user_forest.__init__(
+        user_id=user_id,
+        user_dir=user_dir,
+        config=config,
+        chat_client=chat_client,
+        embedding_client=embedding_client,
+    )
+
+
+def _load_facts_into_fact_manager(fact_manager: Any, facts: list[ManagedFact]) -> None:
+    embedded: list[tuple[ManagedFact, list[float]]] = []
+    missing_embeddings: list[ManagedFact] = []
+    for fact in facts:
+        embedding = _fact_embedding(fact)
+        if embedding:
+            embedded.append((fact, embedding))
+        else:
+            missing_embeddings.append(fact)
+
+    if missing_embeddings:
+        fact_manager.load_managed_facts(missing_embeddings)
+
+    if not embedded:
+        return
+    with fact_manager._lock:
+        for fact, embedding in embedded:
+            if fact.fact_id in fact_manager._facts:
+                continue
+            arr = np.asarray(embedding, dtype="float32")
+            if arr.ndim != 1 or arr.shape[0] != fact_manager.vector_dim:
+                raise ValueError(f"fact embedding dim for {fact.fact_id} does not match FactManager vector_dim")
+            if fact_manager.normalize_embeddings:
+                arr = fact_manager._normalize_vector(arr)
+            fact_manager._facts[fact.fact_id] = fact
+            fact_manager._faiss_ids.append(fact.fact_id)
+            fact_manager._exact_index[fact_manager._normalize_fact_text(fact.fact_text)] = fact.fact_id
+            fact_manager._index.add(arr.reshape(1, -1))
+
+
+def _node_index_from_cloud_embeddings(
+    user_forest: Any,
+    trees: list[MemTree],
+    embeddings: dict[str, list[float]],
+) -> NodeIndex:
+    index = NodeIndex(index_dir=user_forest._dir / "node_index", vector_dim=user_forest._config.api.embedding.dimension)
+    for tree in trees:
+        root_id = tree.root_node_id
+        root = tree.nodes.get(root_id)
+        is_depth0_scene = tree.tree_type == "scene" and root is not None and root.level == 0
+        for node_id, embedding in embeddings.items():
+            node = tree.nodes.get(node_id)
+            if node is None or node.level == 0:
+                continue
+            index.add_node(
+                NodeEntry(node_id=node_id, tree_id=tree.tree_id, level=_node_index_level(tree, node)),
+                embedding,
+                searchable=(node_id == root_id and not is_depth0_scene),
+            )
+    return index
+
+
+def _node_index_level(tree: MemTree, node: MemTreeNode) -> str:
+    if node.node_id == tree.root_node_id:
+        return "root"
+    return f"L{node.level}"
+
+
+def _node_ids_requiring_embeddings(trees: list[MemTree]) -> list[str]:
+    seen: set[str] = set()
+    node_ids: list[str] = []
+    for tree in trees:
+        for node in tree.nodes.values():
+            if node.level == 0 or not node.summary or node.node_id in seen:
+                continue
+            seen.add(node.node_id)
+            node_ids.append(node.node_id)
+    return node_ids
+
+
+def _managed_fact_from_any(value: Any) -> ManagedFact:
+    if isinstance(value, ManagedFact):
+        return value
+    if not isinstance(value, dict):
+        raise TypeError("cloud fact records must be ManagedFact instances or dictionaries")
+    data = dict(value)
+    occurrences = [
+        occurrence if isinstance(occurrence, FactOccurrence) else FactOccurrence(**dict(occurrence))
+        for occurrence in data.get("occurrences", [])
+    ]
+    data["occurrences"] = occurrences
+    return ManagedFact(
+        fact_id=str(data["fact_id"]),
+        fact_text=str(data.get("fact_text", "")),
+        embedding_id=str(data.get("embedding_id", "")),
+        origin=str(data.get("origin", "")),
+        semantic_role=str(data.get("semantic_role", "")),
+        entities=list(data.get("entities", [])),
+        topics=list(data.get("topics", [])),
+        attribute_keys=list(data.get("attribute_keys", [])),
+        domain_keys=list(data.get("domain_keys", [])),
+        collection_keys=list(data.get("collection_keys", [])),
+        detail_level=str(data.get("detail_level", "")),
+        confidence=float(data.get("confidence", 1.0)),
+        first_session_id=str(data.get("first_session_id", "")),
+        first_cell_id=str(data.get("first_cell_id", "")),
+        occurrences=occurrences,
+        metadata=dict(data.get("metadata", {})),
+        time_start=data.get("time_start"),
+        time_end=data.get("time_end"),
+    )
+
+
+def _fact_embedding(fact: ManagedFact) -> list[float] | None:
+    value = dict(fact.metadata).get("embedding")
+    if value is None:
+        return None
+    return [float(item) for item in value]
 
 
 async def _maybe_await(value: Any) -> Any:

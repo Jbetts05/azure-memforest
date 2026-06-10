@@ -27,6 +27,21 @@ class AzureOpenAIConfig:
 
 
 @dataclass(frozen=True)
+class ProjectionGcConfig:
+    enabled: bool = False
+    retention_count: int = 0
+    live_delete_enabled: bool = False
+
+    def __post_init__(self) -> None:
+        if self.retention_count < 0:
+            raise ValueError("retention_count must not be negative")
+        if self.enabled and self.retention_count < 1:
+            raise ValueError("retention_count must be positive when projection GC is enabled")
+        if self.live_delete_enabled and not self.enabled:
+            raise ValueError("live_delete_enabled requires projection GC to be enabled")
+
+
+@dataclass(frozen=True)
 class CloudConfig:
     environment: str
     tenant_id: str
@@ -34,6 +49,7 @@ class CloudConfig:
     resource_group: str
     location: str
     azure_openai: AzureOpenAIConfig | None = None
+    projection_gc: ProjectionGcConfig = field(default_factory=ProjectionGcConfig)
 
 
 def load_cloud_config(environ: Mapping[str, str] | None = None) -> CloudConfig:
@@ -60,6 +76,14 @@ def load_cloud_config(environ: Mapping[str, str] | None = None) -> CloudConfig:
         resource_group=str(values.get("AZURE_RESOURCE_GROUP", "")).strip(),
         location=str(values.get("AZURE_LOCATION", "")).strip(),
         azure_openai=azure_openai,
+        projection_gc=ProjectionGcConfig(
+            enabled=_bool(values.get("AZURE_MEMFOREST_PROJECTION_GC_ENABLED"), default=False),
+            retention_count=_int(values.get("AZURE_MEMFOREST_PROJECTION_GC_RETENTION_COUNT"), default=0),
+            live_delete_enabled=_bool(
+                values.get("AZURE_MEMFOREST_PROJECTION_GC_LIVE_DELETE_ENABLED"),
+                default=False,
+            ),
+        ),
     )
 
 
@@ -91,6 +115,15 @@ def _optional_int(value: str | None) -> int | None:
         return int(value)
     except ValueError:
         return None
+
+
+def _int(value: str | None, *, default: int) -> int:
+    if value is None or value == "":
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
 
 
 def _bool(value: str | None, *, default: bool) -> bool:

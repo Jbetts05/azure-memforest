@@ -6,7 +6,7 @@ import pytest
 
 from src.api.json_parse import parse_json_object
 from src.cloud.azure_models import AzureOpenAIModelClient
-from src.cloud.config import AzureModelDeployment, AzureOpenAIConfig, load_cloud_config
+from src.cloud.config import AzureModelDeployment, AzureOpenAIConfig, ProjectionGcConfig, load_cloud_config
 from src.observability.model_telemetry import collect_model_telemetry, record_model_call, snapshot_model_telemetry
 
 
@@ -87,6 +87,30 @@ def test_load_cloud_config_reads_safe_env_without_api_key_value() -> None:
     assert config.azure_openai.api_key_env == "CUSTOM_KEY_ENV"
     assert config.azure_openai.embedding_dimension == 2
     assert config.azure_openai.chat_deployments["default"].deployment_name == "chat-deployment"
+    assert config.projection_gc.enabled is False
+    assert config.projection_gc.retention_count == 0
+    assert config.projection_gc.live_delete_enabled is False
+
+
+def test_load_cloud_config_reads_explicit_projection_gc_policy() -> None:
+    config = load_cloud_config(
+        {
+            "AZURE_MEMFOREST_PROJECTION_GC_ENABLED": "true",
+            "AZURE_MEMFOREST_PROJECTION_GC_RETENTION_COUNT": "3",
+            "AZURE_MEMFOREST_PROJECTION_GC_LIVE_DELETE_ENABLED": "true",
+        }
+    )
+
+    assert config.projection_gc == ProjectionGcConfig(
+        enabled=True,
+        retention_count=3,
+        live_delete_enabled=True,
+    )
+
+
+def test_projection_gc_config_rejects_enabled_zero_retention() -> None:
+    with pytest.raises(ValueError, match="retention_count"):
+        ProjectionGcConfig(enabled=True, retention_count=0)
 
 
 def test_azure_model_client_routes_role_to_deployment_and_parses_json() -> None:

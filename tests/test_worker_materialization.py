@@ -8,6 +8,8 @@ from src.build.tree_types import MemTree, MemTreeNode, SessionLeaf
 from src.cloud.cosmos_leases import LeaseConflict
 from src.cloud.contracts import Lease
 from src.cloud.cosmos_manifests import ForestManifest
+from src.cloud.projection_baseline import CommittedProjectionBaseline
+from src.cloud.projection_plan import ProjectionRecordRef
 from src.forest.user_forest import ForestMaterializationSnapshot
 from src.service.auth import ActorContext, TenantContext
 from src.service.jobs import build_write_job_envelope
@@ -18,6 +20,7 @@ from src.worker.materialization import (
     MaterializationHandlerConfig,
     MaterializationStores,
     MemForestMaterializationHandler,
+    SNAPSHOT_POLICY_ALWAYS,
     project_forest_snapshot,
 )
 from src.worker.consumer import PermanentHandlerError
@@ -308,6 +311,48 @@ class RecordingStore:
         self.items.append((snapshot_id, payload, metadata))
 
 
+class BaselineContainer:
+    def __init__(self, docs):
+        self.docs = list(docs)
+
+    def query_items(self, *, query, parameters, partition_key):
+        params = {param["name"]: param["value"] for param in parameters}
+        result = []
+        for doc in self.docs:
+            if doc.get("tenant_user_key", partition_key) != partition_key:
+                continue
+            if "@forest_version" in params and doc.get("forest_version") != params["@forest_version"]:
+                continue
+            if "@embedding_model_version" in params and doc.get("embedding_model_version") != params["@embedding_model_version"]:
+                continue
+            result.append(dict(doc))
+        return result
+
+
+class BaselineRecordingStore(RecordingStore):
+    def __init__(self, calls, name, docs):
+        super().__init__(calls, name)
+        self.container = BaselineContainer(docs)
+
+
+class BaselineRecall(RecordingStore):
+    def __init__(self, calls, docs):
+        super().__init__(calls, "recall")
+        self.docs = list(docs)
+
+    def search(self, **kwargs):
+        return list(self.docs)
+
+
+class SummaryCacheRecordingStore(RecordingStore):
+    def __init__(self, calls, entries):
+        super().__init__(calls, "summary_cache")
+        self.entries = dict(entries)
+
+    def get_many(self, keys):
+        return {key: self.entries[key] for key in keys if key in self.entries}
+
+
 class PurgeContainer:
     def __init__(self, docs):
         self.docs = {doc["id"]: dict(doc) for doc in docs}
@@ -487,7 +532,61 @@ def _envelope(job_type="ingest_session"):
     )
 
 
-def _handler(*, manifest_store=None, lease_store=None, node_store=None, calls=None, core=None, deletion_log=None, job_store=None, config=None):
+def test_materialization_config_defaults_to_always_snapshot_policy() -> None:
+    config = MaterializationHandlerConfig(owner_id="worker-1", embedding_model_version="embed-v1")
+
+    assert config.snapshot_policy == SNAPSHOT_POLICY_ALWAYS
+    assert config.cloud_checkpoint_hydration_supported is False
+
+
+def test_materialization_config_rejects_checkpoint_policy_without_hydration_support() -> None:
+    with pytest.raises(ValueError, match="requires explicit cloud checkpoint hydration support"):
+        MaterializationHandlerConfig(
+            owner_id="worker-1",
+            embedding_model_version="embed-v1",
+            snapshot_policy="cloud_checkpoint",
+        )
+
+
+def _baseline_doc(pk, doc_kind, **overrides):
+    doc = {
+        "tenant_id": "tenant-1",
+        "user_id": "user-1",
+        "tenant_user_key": pk,
+        "forest_version": "v1",
+        "tombstoned": False,
+    }
+    if doc_kind is not None:
+        doc["doc_kind"] = doc_kind
+    doc.update(overrides)
+    return doc
+
+
+class MatchingProjectionBaselineProvider:
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, *, scope, projection):
+        self.calls.append(scope)
+        records = {
+            kind: tuple(plan.upsert)
+            for kind, plan in projection.projection_skip_plans.items()
+        }
+        records["browse_embedding"] = (
+            *records["browse_embedding"],
+            ProjectionRecordRef("browse_embedding", "removed-node/embed-v1", content_hash="removed"),
+        )
+        records["summary_cache"] = (
+            *records["summary_cache"],
+            ProjectionRecordRef("summary_cache", "removed-summary", content_hash="removed"),
+        )
+        return CommittedProjectionBaseline(
+            scope=scope,
+            records=records,
+        )
+
+
+def _handler(*, manifest_store=None, lease_store=None, node_store=None, calls=None, core=None, deletion_log=None, job_store=None, config=None, baseline_provider=None):
     calls = calls if calls is not None else []
     return MemForestMaterializationHandler(
         stores=MaterializationStores(
@@ -504,6 +603,7 @@ def _handler(*, manifest_store=None, lease_store=None, node_store=None, calls=No
             snapshot_store=RecordingStore(calls, "snapshot"),
             deletion_log=deletion_log,
             job_store=job_store,
+            baseline_provider=baseline_provider,
         ),
         ingest_core=core or FakeIngestCore(_snapshot()),
         config=config
@@ -809,7 +909,9 @@ async def test_materialization_handler_writes_core_snapshot_payload() -> None:
 
     await handler.handle(_envelope(), {"fencing_token": 1})
 
+    assert handler._config.snapshot_policy == SNAPSHOT_POLICY_ALWAYS
     assert snapshot_store.items[0][1] == b"full-archive"
+    assert len(snapshot_store.items) == 2
 
 
 @pytest.mark.asyncio
@@ -861,6 +963,177 @@ async def test_materialization_handler_records_projection_plan_without_unsafe_li
     assert "tree_nodes" in calls
     assert "locations" in calls
     assert "recall" in calls
+    assert "browse_embeddings" in calls
+    assert "summary_cache" in calls
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_skips_only_safe_live_writes_from_committed_baseline() -> None:
+    calls = []
+    manifest_store = FakeManifestStore()
+    manifest_store.latest = ForestManifest(
+        manifest_id="manifest-v1",
+        tenant_id="tenant-1",
+        user_id="user-1",
+        forest_version="v1",
+        generation=1,
+        status="committed",
+        created_at_unix=1.0,
+        committed_at_unix=2.0,
+        metadata={"job_id": "previous", "job_type": "ingest_session", "embedding_model_version": "embed-v1"},
+    )
+    pk = "tenant-1:user-1"
+    tree_nodes = BaselineRecordingStore(
+        calls,
+        "tree_nodes",
+        [
+            _baseline_doc(pk, "tree_node_membership", tree_id="entity:alice", node_id="root", content_sha256="same-root"),
+            _baseline_doc(pk, "tree_node_membership", tree_id="entity:alice", node_id="leaf", content_sha256="same-leaf"),
+        ],
+    )
+    locations = BaselineRecordingStore(
+        calls,
+        "locations",
+        [_baseline_doc(pk, "fact_location", fact_id="fact-1", tree_id="entity:alice", node_id="leaf", tree_type="entity", level="L0", content_sha256="same-location")],
+    )
+    browse_embeddings = BaselineRecordingStore(
+        calls,
+        "browse_embeddings",
+        [
+            _baseline_doc(
+                pk,
+                None,
+                node_id="root",
+                tree_id="entity:alice",
+                tree_type="entity",
+                embedding=[1.0, 0.0],
+                embedding_model_version="embed-v1",
+                forest_version="v0",
+            ),
+            _baseline_doc(
+                pk,
+                None,
+                node_id="removed-node",
+                tree_id="entity:alice",
+                tree_type="entity",
+                embedding=[0.0, 1.0],
+                embedding_model_version="embed-v1",
+                forest_version="v0",
+            )
+        ],
+    )
+    recall = BaselineRecall(
+        calls,
+        [_baseline_doc(pk, None, tree_id="entity:alice", node_id="root", embedding_model_version="embed-v1", content_sha256="same-recall")],
+    )
+    summary_cache = SummaryCacheRecordingStore(calls, {"k": "summary"})
+    handler = MemForestMaterializationHandler(
+        stores=MaterializationStores(
+            lease_store=FakeLeaseStore(),
+            source_session_store=RecordingStore(calls, "source_session"),
+            source_turn_store=RecordingStore(calls, "source_turns"),
+            fact_store=RecordingStore(calls, "facts"),
+            tree_node_store=tree_nodes,
+            fact_location_index=locations,
+            manifest_store=manifest_store,
+            recall_index=recall,
+            browse_embedding_store=browse_embeddings,
+            summary_cache=summary_cache,
+            snapshot_store=RecordingStore(calls, "snapshot"),
+        ),
+        ingest_core=FakeIngestCore(_unchanged_incremental_snapshot()),
+        config=MaterializationHandlerConfig(owner_id="worker-1", embedding_model_version="embed-v1", code_version="test-sha", prompt_config_hash="prompt-hash", lease_renewal_seconds=9999),
+    )
+
+    await handler.handle(_envelope(), {"fencing_token": 1})
+
+    metadata = manifest_store.latest.metadata
+    assert metadata["projection_plan_counts"]["tree_node_membership"] == {"unchanged": 0, "upsert": 2, "delete": 0}
+    assert metadata["projection_plan_counts"]["fact_location"] == {"unchanged": 0, "upsert": 1, "delete": 0}
+    assert metadata["projection_plan_counts"]["recall_document"] == {"unchanged": 0, "upsert": 1, "delete": 0}
+    assert metadata["projection_plan_counts"]["browse_embedding"] == {"unchanged": 1, "upsert": 0, "delete": 0}
+    assert metadata["projection_plan_counts"]["summary_cache"] == {"unchanged": 1, "upsert": 0, "delete": 0}
+    assert metadata["projection_plan_live_skipped_browse_embedding_count"] == 1
+    assert metadata["projection_plan_live_skipped_summary_cache_count"] == 1
+    assert "tree_nodes" in calls
+    assert "locations" in calls
+    assert "recall" in calls
+    assert "browse_embeddings" not in calls
+    assert "summary_cache" not in calls
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_uses_authoritative_committed_baseline_for_counts_and_safe_skips() -> None:
+    calls = []
+    manifest_store = FakeManifestStore()
+    manifest_store.latest = ForestManifest(
+        manifest_id="manifest-v1",
+        tenant_id="tenant-1",
+        user_id="user-1",
+        forest_version="v1",
+        generation=1,
+        status="committed",
+        created_at_unix=1.0,
+        metadata={"job_id": "previous", "job_type": "ingest_session"},
+    )
+    baseline_provider = MatchingProjectionBaselineProvider()
+    handler = _handler(
+        manifest_store=manifest_store,
+        calls=calls,
+        core=FakeIngestCore(_unchanged_incremental_snapshot()),
+        baseline_provider=baseline_provider,
+    )
+
+    await handler.handle(_envelope(), {"fencing_token": 1})
+
+    assert len(baseline_provider.calls) == 1
+    assert manifest_store.latest is not None
+    metadata = manifest_store.latest.metadata
+    assert metadata["projection_plan_counts"]["tree_node_membership"] == {"unchanged": 0, "upsert": 2, "delete": 0}
+    assert metadata["projection_plan_counts"]["fact_location"] == {"unchanged": 0, "upsert": 1, "delete": 0}
+    assert metadata["projection_plan_counts"]["recall_document"] == {"unchanged": 0, "upsert": 1, "delete": 0}
+    assert metadata["projection_plan_counts"]["browse_embedding"] == {"unchanged": 1, "upsert": 0, "delete": 0}
+    assert metadata["projection_plan_counts"]["summary_cache"] == {"unchanged": 1, "upsert": 0, "delete": 0}
+    assert metadata["projection_plan_live_skipped_browse_embedding_count"] == 1
+    assert metadata["projection_plan_live_skipped_summary_cache_count"] == 1
+    assert "tree_nodes" in calls
+    assert "locations" in calls
+    assert "recall" in calls
+    assert "browse_embeddings" not in calls
+    assert "summary_cache" not in calls
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_ignores_committed_baseline_when_snapshot_has_no_authoritative_baseline() -> None:
+    calls = []
+    manifest_store = FakeManifestStore()
+    manifest_store.latest = ForestManifest(
+        manifest_id="manifest-v1",
+        tenant_id="tenant-1",
+        user_id="user-1",
+        forest_version="v1",
+        generation=1,
+        status="committed",
+        created_at_unix=1.0,
+        metadata={"job_id": "previous", "job_type": "ingest_session"},
+    )
+    baseline_provider = MatchingProjectionBaselineProvider()
+    handler = _handler(
+        manifest_store=manifest_store,
+        calls=calls,
+        core=FakeIngestCore(_snapshot()),
+        baseline_provider=baseline_provider,
+    )
+
+    await handler.handle(_envelope(), {"fencing_token": 1})
+
+    assert baseline_provider.calls == []
+    assert manifest_store.latest is not None
+    metadata = manifest_store.latest.metadata
+    assert metadata["projection_plan_counts"]["browse_embedding"] == {"unchanged": 0, "upsert": 1, "delete": 0}
+    assert metadata["projection_plan_counts"]["summary_cache"] == {"unchanged": 0, "upsert": 1, "delete": 0}
+    assert metadata["projection_plan_live_skipped_browse_embedding_count"] == 0
+    assert metadata["projection_plan_live_skipped_summary_cache_count"] == 0
     assert "browse_embeddings" in calls
     assert "summary_cache" in calls
 

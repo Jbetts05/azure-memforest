@@ -110,6 +110,7 @@ def cosmos_materialization_store_factory(
     snapshot_store: Any | None = None,
     browse_embedding_store: Any | None = None,
     summary_cache: Any | None = None,
+    baseline_provider: Any | None = None,
 ) -> StoreFactory:
     """Create per-envelope Cosmos-backed MaterializationStores."""
 
@@ -148,6 +149,7 @@ def cosmos_materialization_store_factory(
             snapshot_store=snapshot_store,
             deletion_log=CosmosDeletionLog(database_client.get_container_client("deletions"), tenant_id=tenant_id),
             job_store=CosmosJobStore(database_client.get_container_client("jobs")),
+            baseline_provider=baseline_provider,
             browse_embedding_store_factory=lambda forest_version: CosmosBrowseEmbeddingStore(
                 database_client.get_container_client("browse_embeddings"),
                 tenant_id=tenant_id,
@@ -184,6 +186,8 @@ def fixed_materialization_config_factory(
     extract_heartbeat_seconds: float = 60.0,
     extract_stack_dump_seconds: float = 0.0,
     exit_on_ingest_timeout: bool = False,
+    snapshot_policy: str = "always",
+    cloud_checkpoint_hydration_supported: bool = False,
 ) -> Callable[[WriteJobEnvelope], MaterializationHandlerConfig]:
     def build(envelope: WriteJobEnvelope) -> MaterializationHandlerConfig:
         return MaterializationHandlerConfig(
@@ -197,6 +201,8 @@ def fixed_materialization_config_factory(
             extract_heartbeat_seconds=extract_heartbeat_seconds,
             extract_stack_dump_seconds=extract_stack_dump_seconds,
             exit_on_ingest_timeout=exit_on_ingest_timeout,
+            snapshot_policy=snapshot_policy,
+            cloud_checkpoint_hydration_supported=cloud_checkpoint_hydration_supported,
         )
 
     return build
@@ -305,6 +311,8 @@ def build_scoped_materialization_handler_from_env(
             extract_heartbeat_seconds=float(values.get("AZURE_MEMFOREST_EXTRACT_HEARTBEAT_SECONDS", "60")),
             extract_stack_dump_seconds=float(values.get("AZURE_MEMFOREST_EXTRACT_STACK_DUMP_SECONDS", "0")),
             exit_on_ingest_timeout=str(values.get("AZURE_MEMFOREST_EXIT_ON_INGEST_TIMEOUT", "")).strip().lower() in {"1", "true", "yes", "on"},
+            snapshot_policy=values.get("AZURE_MEMFOREST_SNAPSHOT_POLICY", "always"),
+            cloud_checkpoint_hydration_supported=str(values.get("AZURE_MEMFOREST_CLOUD_CHECKPOINT_HYDRATION_SUPPORTED", "")).strip().lower() in {"1", "true", "yes", "on"},
         ),
     )
     return MaterializationRuntime(

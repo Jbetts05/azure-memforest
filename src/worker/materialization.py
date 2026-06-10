@@ -18,7 +18,13 @@ from src.cloud.async_batch import run_bounded
 from src.cloud.cosmos_browse_embeddings import BrowseEmbeddingRecord
 from src.cloud.contracts import FactLocation, RecallDocument, StoredTreeNode
 from src.cloud.cosmos_leases import LeaseConflict
-from src.cloud.projection_plan import ProjectionRecordRef, ProjectionSkipPlan, plan_projection_skip, tree_node_body_content_id
+from src.cloud.projection_baseline import (
+    CommittedProjectionBaseline,
+    ProjectionBaselineScope,
+    build_committed_projection_baseline,
+    summary_cache_refs_from_entries,
+)
+from src.cloud.projection_plan import ProjectionRecordRef, ProjectionSkipPlan, browse_embedding_content_hash, plan_projection_skip, tree_node_body_content_id
 from src.cloud.schema import SCHEMA_VERSION
 from src.forest.memforest import _content_key
 from src.forest.user_forest import ForestMaterializationSnapshot
@@ -29,6 +35,11 @@ from src.observability.model_telemetry import collect_model_telemetry, snapshot_
 from src.worker.progress import JobProgressBudget, budget_for_envelope, budget_from_document
 
 log = logging.getLogger(__name__)
+
+
+SNAPSHOT_POLICY_ALWAYS = "always"
+SNAPSHOT_POLICY_CLOUD_CHECKPOINT = "cloud_checkpoint"
+SUPPORTED_SNAPSHOT_POLICIES = frozenset({SNAPSHOT_POLICY_ALWAYS, SNAPSHOT_POLICY_CLOUD_CHECKPOINT})
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +82,7 @@ class MaterializationStores:
     tree_node_store_factory: Any | None = None
     fact_location_index_factory: Any | None = None
     browse_embedding_store_factory: Any | None = None
+    baseline_provider: Any | None = None
 
 
 class SyncIngestCore(Protocol):
@@ -104,6 +116,21 @@ class MaterializationHandlerConfig:
     extract_heartbeat_seconds: float = 60.0
     extract_stack_dump_seconds: float = 0.0
     exit_on_ingest_timeout: bool = False
+    snapshot_policy: str = SNAPSHOT_POLICY_ALWAYS
+    cloud_checkpoint_hydration_supported: bool = False
+
+    def __post_init__(self) -> None:
+        policy = _normalize_snapshot_policy(self.snapshot_policy)
+        object.__setattr__(self, "snapshot_policy", policy)
+        if policy not in SUPPORTED_SNAPSHOT_POLICIES:
+            raise ValueError(
+                f"unsupported snapshot_policy {self.snapshot_policy!r}; "
+                f"expected one of {sorted(SUPPORTED_SNAPSHOT_POLICIES)}"
+            )
+        if policy != SNAPSHOT_POLICY_ALWAYS and not self.cloud_checkpoint_hydration_supported:
+            raise ValueError(
+                f"snapshot_policy {policy!r} requires explicit cloud checkpoint hydration support"
+            )
 
 
 class MemForestMaterializationHandler:
@@ -219,6 +246,7 @@ class MemForestMaterializationHandler:
                         "embedding_model_version": self._config.embedding_model_version,
                         "code_version": self._config.code_version,
                         "prompt_config_hash": self._config.prompt_config_hash,
+                        "snapshot_policy": self._config.snapshot_policy,
                         "fencing_token": lease.fencing_token,
                     },
                 )
@@ -232,6 +260,7 @@ class MemForestMaterializationHandler:
                 generation=generation,
                 embedding_model_version=self._config.embedding_model_version,
             )
+            projection = await self._apply_committed_projection_baseline(latest, projection)
             await self._update_job_stage(envelope, fencing_token=fencing_token, stage="write_projection", detail="Writing facts, trees, embeddings, recall documents, and snapshot.", telemetry=telemetry)
             projection_metadata = await self._write_projection(
                 envelope=envelope,
@@ -464,6 +493,7 @@ class MemForestMaterializationHandler:
                         "embedding_model_version": self._config.embedding_model_version,
                         "code_version": self._config.code_version,
                         "prompt_config_hash": self._config.prompt_config_hash,
+                        "snapshot_policy": self._config.snapshot_policy,
                         "fencing_token": lease.fencing_token,
                     },
                 )
@@ -480,6 +510,7 @@ class MemForestMaterializationHandler:
                 generation=generation,
                 embedding_model_version=self._config.embedding_model_version,
             )
+            projection = await self._apply_committed_projection_baseline(current, projection)
             projection_metadata = await self._write_projection(
                 envelope=envelope,
                 manifest_id=manifest.manifest_id,
@@ -646,6 +677,67 @@ class MemForestMaterializationHandler:
                 },
             )
         return metadata
+
+    async def _apply_committed_projection_baseline(self, manifest: Any | None, projection: MaterializationProjection) -> MaterializationProjection:
+        if not _projection_baseline_is_authoritative(manifest, projection):
+            return projection
+        try:
+            baseline = await self._build_committed_projection_baseline(manifest, projection)
+        except Exception:
+            log.warning("failed to build committed projection baseline; falling back to full live writes", exc_info=True)
+            return projection
+        return _with_projection_skip_plans(
+            projection,
+            embedding_model_version=self._config.embedding_model_version,
+            committed_baseline=baseline,
+        )
+
+    async def _build_committed_projection_baseline(self, manifest: Any, projection: MaterializationProjection) -> CommittedProjectionBaseline:
+        scope = ProjectionBaselineScope.from_manifest(manifest, embedding_model_version=self._config.embedding_model_version)
+        if self._stores.baseline_provider is not None:
+            return await _call_baseline_provider(
+                self._stores.baseline_provider,
+                scope=scope,
+                manifest=manifest,
+                projection=projection,
+                embedding_model_version=self._config.embedding_model_version,
+            )
+        baseline_browse_store = _baseline_store_for_version(
+            self._stores.browse_embedding_store,
+            self._stores.browse_embedding_store_factory,
+            scope.forest_version,
+        )
+        baseline = await build_committed_projection_baseline(
+            scope,
+            browse_embeddings_container=_container_from_store(baseline_browse_store),
+        )
+        summary_entries = await self._read_committed_summary_cache_entries(projection)
+        if summary_entries:
+            baseline = baseline.with_records("summary_cache", summary_cache_refs_from_entries(summary_entries))
+        return baseline
+
+    async def _read_committed_summary_cache_entries(self, projection: MaterializationProjection) -> dict[str, str]:
+        if self._stores.summary_cache is None:
+            return {}
+        keys = [entry.content_hash for entry in projection.summary_cache_entries]
+        if not keys:
+            return {}
+        cache = self._stores.summary_cache
+        if hasattr(cache, "get_many"):
+            values = await _maybe_await(cache.get_many(keys))
+            return {
+                str(key): str(value)
+                for key, value in dict(values or {}).items()
+                if key in set(keys) and value is not None
+            }
+        if not hasattr(cache, "get"):
+            return {}
+        entries: dict[str, str] = {}
+        for key in keys:
+            value = await _maybe_await(cache.get(key))
+            if value is not None:
+                entries[key] = str(value)
+        return entries
 
     async def _write_browse_embeddings(self, forest_version: str, projection: MaterializationProjection) -> None:
         browse_store = self._browse_embedding_store(forest_version)
@@ -930,10 +1022,18 @@ def _parse_ingest_request(envelope: WriteJobEnvelope) -> IngestSessionRequest:
         raise PermanentHandlerError("invalid ingest_session payload") from exc
 
 
+def _normalize_snapshot_policy(value: str) -> str:
+    policy = str(value or SNAPSHOT_POLICY_ALWAYS).strip().lower().replace("-", "_")
+    if policy == "checkpoint":
+        return SNAPSHOT_POLICY_CLOUD_CHECKPOINT
+    return policy
+
+
 def _build_projection_skip_plans(
     projection: MaterializationProjection,
     *,
     embedding_model_version: str,
+    committed_baseline: CommittedProjectionBaseline | None = None,
 ) -> dict[str, ProjectionSkipPlan]:
     projected = {
         "tree_node_membership": _tree_node_projection_refs(projection.stored_nodes),
@@ -945,22 +1045,58 @@ def _build_projection_skip_plans(
         ),
         "summary_cache": _summary_cache_projection_refs(projection.summary_cache_entries),
     }
-    retained = _retained_committed_projection_refs(projection, projected)
+    retained = _retained_committed_projection_refs(projection, projected, committed_baseline=committed_baseline)
     return {
         kind: plan_projection_skip(records, retained.get(kind, ()))
         for kind, records in projected.items()
     }
 
 
+def _with_projection_skip_plans(
+    projection: MaterializationProjection,
+    *,
+    embedding_model_version: str,
+    committed_baseline: CommittedProjectionBaseline | None = None,
+) -> MaterializationProjection:
+    return MaterializationProjection(
+        stored_nodes=projection.stored_nodes,
+        fact_locations=projection.fact_locations,
+        recall_documents=projection.recall_documents,
+        browse_embeddings=projection.browse_embeddings,
+        browse_embedding_records=projection.browse_embedding_records,
+        summary_cache_entries=projection.summary_cache_entries,
+        snapshot_payload=projection.snapshot_payload,
+        changed_tree_ids=projection.changed_tree_ids,
+        deleted_tree_ids=projection.deleted_tree_ids,
+        baseline_forest_version=projection.baseline_forest_version,
+        projection_skip_plans=_build_projection_skip_plans(
+            projection,
+            embedding_model_version=embedding_model_version,
+            committed_baseline=committed_baseline,
+        ),
+    )
+
+
 def _retained_committed_projection_refs(
     projection: MaterializationProjection,
     projected: Mapping[str, tuple[ProjectionRecordRef, ...]],
+    *,
+    committed_baseline: CommittedProjectionBaseline | None = None,
 ) -> dict[str, tuple[ProjectionRecordRef, ...]]:
-    # A real skip baseline must come from durable committed per-record hashes.
-    # Dirty tree metadata is only an optimization hint; using the current
-    # projection as its own baseline would make unchanged counts look better
-    # than the durable state can actually prove.
-    return {}
+    if committed_baseline is None:
+        return {}
+    # Keep skip planning structurally limited to version-independent stores.
+    # Version-scoped records must be fully written for every new forest_version.
+    retained: dict[str, tuple[ProjectionRecordRef, ...]] = {}
+    for kind in ("browse_embedding", "summary_cache"):
+        projected_records = projected.get(kind, ())
+        projected_keys = {record.key for record in projected_records}
+        retained[kind] = tuple(
+            record
+            for record in committed_baseline.records_for(kind)
+            if record.key in projected_keys
+        )
+    return retained
 
 
 def _tree_node_projection_refs(nodes: list[StoredTreeNode]) -> tuple[ProjectionRecordRef, ...]:
@@ -1025,6 +1161,78 @@ def _summary_cache_projection_refs(entries: list[SummaryCacheEntry]) -> tuple[Pr
         )
         for entry in entries
     )
+
+
+def _baseline_store_for_version(store: Any | None, factory: Any | None, forest_version: str) -> Any | None:
+    if factory is None:
+        return store
+    return factory(forest_version)
+
+
+def _container_from_store(store: Any | None) -> Any | None:
+    if store is None:
+        return None
+    if hasattr(store, "query_items"):
+        return store
+    container = getattr(store, "container", None)
+    if container is not None and hasattr(container, "query_items"):
+        return container
+    return None
+
+
+async def _call_baseline_provider(provider: Any, **kwargs: Any) -> CommittedProjectionBaseline:
+    method = provider
+    if not callable(method):
+        method = getattr(provider, "build_committed_projection_baseline", None) or getattr(provider, "build_baseline", None)
+    if method is None or not callable(method):
+        raise TypeError("baseline_provider must be callable or expose build_baseline")
+    baseline = await _maybe_await(_call_with_supported_kwargs(method, **kwargs))
+    if not isinstance(baseline, CommittedProjectionBaseline):
+        raise TypeError("baseline_provider must return CommittedProjectionBaseline")
+    return baseline
+
+
+def _call_with_supported_kwargs(method: Any, **kwargs: Any) -> Any:
+    signature = inspect.signature(method)
+    if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values()):
+        return method(**kwargs)
+    supported = {key: value for key, value in kwargs.items() if key in signature.parameters}
+    return method(**supported)
+
+
+def _projection_baseline_is_authoritative(manifest: Any | None, projection: MaterializationProjection) -> bool:
+    if manifest is None:
+        return False
+    if str(getattr(manifest, "status", "") or "") != "committed":
+        return False
+    baseline_forest_version = str(projection.baseline_forest_version or "")
+    manifest_forest_version = str(getattr(manifest, "forest_version", "") or "")
+    return bool(baseline_forest_version) and baseline_forest_version == manifest_forest_version
+
+
+def _baseline_recall_search_client(recall_index: Any | None) -> Any | None:
+    if recall_index is None:
+        return None
+    raw_client = getattr(recall_index, "_search_client", None)
+    if raw_client is not None and hasattr(raw_client, "search"):
+        return raw_client
+    client_factory = getattr(recall_index, "_client", None)
+    if client_factory is not None:
+        try:
+            raw_client = client_factory()
+        except Exception:
+            raw_client = None
+        if raw_client is not None and hasattr(raw_client, "search"):
+            return raw_client
+    search = getattr(recall_index, "search", None)
+    if search is None:
+        return None
+    try:
+        signature = inspect.signature(search)
+    except (TypeError, ValueError):
+        return None
+    accepts_keywords = any(param.kind is inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values())
+    return recall_index if accepts_keywords or "search_text" in signature.parameters else None
 
 
 def _safe_upsert_browse_embedding_records(projection: MaterializationProjection) -> list[BrowseEmbeddingRecord]:
@@ -1117,13 +1325,11 @@ def _recall_document_stable_content_hash(document: RecallDocument) -> str:
 
 
 def _browse_embedding_stable_content_hash(record: BrowseEmbeddingRecord) -> str:
-    return _hash_json(
-        {
-            "node_id": record.node_id,
-            "tree_id": record.tree_id,
-            "tree_type": record.tree_type,
-            "embedding": [float(value) for value in record.embedding],
-        }
+    return browse_embedding_content_hash(
+        node_id=record.node_id,
+        tree_id=record.tree_id,
+        tree_type=record.tree_type,
+        embedding=record.embedding,
     )
 
 

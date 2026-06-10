@@ -1,16 +1,25 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from src.cloud.contracts import StoredTreeNode
+from src.config.config import load_default_config
 from src.forest.memforest import _content_key
+from src.forest.user_forest import UserForest
+from src.utils.types import FactOccurrence, ManagedFact
 from src.worker.cloud_hydration import (
+    CloudStateHydratingUserForestCore,
+    apply_cloud_state_to_user_forest,
     load_fact_ids_from_tree_store,
     load_cloud_hydration_prerequisites,
+    load_cloud_user_forest_state,
     load_facts_for_memtrees,
     load_memtrees_from_tree_store,
     load_summary_cache_for_memtrees,
 )
+from src.worker.snapshot_hydration import build_user_forest_archive
 
 
 class FakeTreeStore:
@@ -44,6 +53,40 @@ class FakeSummaryCache:
         return self.summaries.get(content_hash)
 
 
+class FakeBrowseEmbeddingStore:
+    def __init__(self, embeddings):
+        self.embeddings = embeddings
+        self.requested = []
+
+    async def get_embeddings(self, node_ids):
+        self.requested.append(list(node_ids))
+        return {node_id: self.embeddings[node_id] for node_id in node_ids if node_id in self.embeddings}
+
+
+class FakeModelClient:
+    def __init__(self, dimension):
+        self.dimension = dimension
+
+    def embed_texts(self, texts, *, batch_size=256):
+        return [[1.0] + [0.0] * (self.dimension - 1) for _ in texts]
+
+    def generate_json(self, **kwargs):
+        return {}
+
+
+class FakeSnapshotStore:
+    def __init__(self, payloads):
+        self.payloads = payloads
+
+    def read_snapshot(self, snapshot_id):
+        return self.payloads[snapshot_id]
+
+
+class FakeManifest:
+    def __init__(self, metadata):
+        self.metadata = metadata
+
+
 def _node(node_id, *, parent_id=None, level="L1", child_ids=(), fact_ids=(), tree_id="tree-1"):
     return StoredTreeNode(
         tree_id=tree_id,
@@ -65,6 +108,58 @@ def _node(node_id, *, parent_id=None, level="L1", child_ids=(), fact_ids=(), tre
             "item_count": 1,
             "generation": 3,
         },
+    )
+
+
+def _embedding(dim):
+    return [1.0] + [0.0] * (dim - 1)
+
+
+def _fact(fact_id, dim):
+    return ManagedFact(
+        fact_id=fact_id,
+        fact_text=f"fact text {fact_id}",
+        embedding_id=f"emb-{fact_id}",
+        origin="assistant",
+        semantic_role="preference",
+        entities=["alice"],
+        topics=["topic"],
+        attribute_keys=[],
+        domain_keys=[],
+        collection_keys=[],
+        detail_level="atomic",
+        confidence=1.0,
+        first_session_id="session-1",
+        first_cell_id="cell-1",
+        occurrences=[
+            FactOccurrence(
+                session_id="session-1",
+                cell_id="cell-1",
+                item_id=f"item-{fact_id}",
+                source_turn_ids=["turn-1"],
+                source_spans=[],
+                participants=["alice"],
+                time_text="",
+                time_start=1.0,
+                time_end=2.0,
+            )
+        ],
+        metadata={"embedding": _embedding(dim)},
+        time_start=1.0,
+        time_end=2.0,
+    )
+
+
+def _user_forest(tmp_path, dim):
+    config = load_default_config()
+    config = replace(config, api=replace(config.api, embedding=replace(config.api.embedding, dimension=dim)))
+    client = FakeModelClient(dim)
+    return UserForest(
+        "user-1",
+        tmp_path / "user-1",
+        config,
+        chat_client=client,
+        embedding_client=client,
     )
 
 
@@ -252,3 +347,144 @@ async def test_cloud_hydration_prerequisites_reports_missing_state_without_mutat
     assert state.summary_cache == {}
     assert state.missing_fact_ids == ("fact-1",)
     assert state.missing_summary_cache_keys == (_content_key(frozenset({"fact-1"})),)
+
+
+@pytest.mark.asyncio
+async def test_cloud_hydration_loads_user_forest_state_with_browse_embeddings() -> None:
+    store = FakeTreeStore(
+        {
+            "tree-1": [
+                _node("root", child_ids=("leaf",)),
+                _node("leaf", parent_id="root", level="L0", child_ids=("fact_1",)),
+            ]
+        }
+    )
+    dim = 4
+
+    state = await load_cloud_user_forest_state(
+        tree_store=store,
+        fact_store=FakeFactStore({"fact_1": _fact("fact_1", dim)}),
+        summary_cache=FakeSummaryCache({_content_key(frozenset({"fact_1"})): "cached root"}),
+        browse_embedding_store=FakeBrowseEmbeddingStore({"root": _embedding(dim)}),
+    )
+
+    assert [fact.fact_id for fact in state.facts] == ["fact_1"]
+    assert set(state.node_embeddings) == {"root"}
+    assert state.missing_fact_ids == ()
+    assert state.missing_node_embedding_ids == ()
+
+
+@pytest.mark.asyncio
+async def test_cloud_hydration_marks_absent_required_stores_incomplete() -> None:
+    state = await load_cloud_user_forest_state(
+        tree_store=FakeTreeStore(
+            {
+                "tree-1": [
+                    _node("root", child_ids=("leaf",)),
+                    _node("leaf", parent_id="root", level="L0", child_ids=("fact_1",)),
+                ]
+            }
+        )
+    )
+
+    assert state.missing_fact_ids == ("fact_1",)
+    assert state.missing_summary_cache_keys == (_content_key(frozenset({"fact_1"})),)
+    assert state.missing_node_embedding_ids == ("root",)
+
+
+@pytest.mark.asyncio
+async def test_cloud_hydration_applies_state_to_real_user_forest(tmp_path) -> None:
+    dim = 4
+    user_forest = _user_forest(tmp_path, dim)
+    state = await load_cloud_user_forest_state(
+        tree_store=FakeTreeStore(
+            {
+                "tree-1": [
+                    _node("root", child_ids=("leaf",)),
+                    _node("leaf", parent_id="root", level="L0", child_ids=("fact_1",)),
+                ]
+            }
+        ),
+        fact_store=FakeFactStore({"fact_1": _fact("fact_1", dim)}),
+        summary_cache=FakeSummaryCache({_content_key(frozenset({"fact_1"})): "cached root"}),
+        browse_embedding_store=FakeBrowseEmbeddingStore({"root": _embedding(dim)}),
+    )
+
+    result = apply_cloud_state_to_user_forest(user_forest, state)
+    snapshot = user_forest.snapshot_for_materialization()
+
+    assert result.tree_count == 1
+    assert result.fact_count == 1
+    assert result.node_embedding_count == 1
+    assert user_forest._fact_manager.get_fact("fact_1") is not None
+    assert user_forest._tree_store.get("tree-1") is not None
+    assert user_forest._node_index.get_embedding("root") is not None
+    assert [fact.fact_id for fact in snapshot.facts] == ["fact_1"]
+    assert [tree.tree_id for tree in snapshot.trees] == ["tree-1"]
+
+
+def test_cloud_state_core_defaults_to_snapshot_fallback(tmp_path) -> None:
+    dim = 4
+    source = _user_forest(tmp_path / "source-root", dim)
+    source.save()
+    payload = build_user_forest_archive(source)
+    import hashlib
+
+    manifest = FakeManifest(
+        {
+            "snapshot_id": "snapshot-1",
+            "snapshot_content_sha256": hashlib.sha256(payload).hexdigest(),
+            "embedding_model_version": "embed-v1",
+            "materialization_fingerprint": "fingerprint",
+        }
+    )
+    target = _user_forest(tmp_path / "target-root", dim)
+    core = CloudStateHydratingUserForestCore(
+        user_forest=target,
+        tree_store=FakeTreeStore({}),
+        snapshot_store=FakeSnapshotStore({"snapshot-1": payload}),
+    )
+
+    core.hydrate_from_manifest(manifest)
+
+    assert core.last_hydration_result is not None
+    assert core.last_hydration_result.used_snapshot_fallback
+
+
+def test_cloud_state_core_falls_back_when_cloud_state_is_incomplete(tmp_path) -> None:
+    dim = 4
+    source = _user_forest(tmp_path / "source-root", dim)
+    source.save()
+    payload = build_user_forest_archive(source)
+    import hashlib
+
+    manifest = FakeManifest(
+        {
+            "snapshot_id": "snapshot-1",
+            "snapshot_content_sha256": hashlib.sha256(payload).hexdigest(),
+            "embedding_model_version": "embed-v1",
+            "materialization_fingerprint": "fingerprint",
+        }
+    )
+    target = _user_forest(tmp_path / "target-root", dim)
+    core = CloudStateHydratingUserForestCore(
+        user_forest=target,
+        tree_store=FakeTreeStore(
+            {
+                "tree-1": [
+                    _node("root", child_ids=("leaf",)),
+                    _node("leaf", parent_id="root", level="L0", child_ids=("missing-fact",)),
+                ]
+            }
+        ),
+        fact_store=FakeFactStore({}),
+        summary_cache=FakeSummaryCache({}),
+        browse_embedding_store=FakeBrowseEmbeddingStore({}),
+        snapshot_store=FakeSnapshotStore({"snapshot-1": payload}),
+        enable_cloud_state_hydration=True,
+    )
+
+    core.hydrate_from_manifest(manifest)
+
+    assert core.last_hydration_result is not None
+    assert core.last_hydration_result.used_snapshot_fallback

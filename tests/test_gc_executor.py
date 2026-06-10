@@ -16,6 +16,9 @@ def _plan() -> ProjectionGcPlan:
         retained_forest_versions=frozenset({"v2"}),
         dropped_forest_versions=frozenset({"v1"}),
         deletable_body_ids=frozenset({"body-b", "body-a"}),
+        policy_enabled=True,
+        retention_count=1,
+        live_delete_enabled=True,
     )
 
 
@@ -48,6 +51,10 @@ async def test_projection_gc_executor_dry_run_audits_without_delete_callback() -
     assert events[1].body_id == "body-a"
     assert events[1].tenant_id == "tenant-1"
     assert events[1].user_id == "user-1"
+    assert events[0].metadata["policy_enabled"] is True
+    assert events[0].metadata["retention_count"] == 1
+    assert events[0].metadata["policy_live_delete_enabled"] is True
+    assert events[0].metadata["execution_live_delete_enabled"] is False
 
 
 @pytest.mark.asyncio
@@ -73,12 +80,51 @@ async def test_projection_gc_executor_requires_plan_audit_reason_and_delete_call
             reason=None,  # type: ignore[arg-type]
         )
 
+    with pytest.raises(ValueError, match="live_delete_enabled"):
+        await execute_projection_gc_plan(
+            plan=_plan(),
+            audit_callback=lambda event: None,
+            reason="retention_window",
+            dry_run=False,
+        )
+
+    with pytest.raises(ValueError, match="enabled projection GC policy"):
+        await execute_projection_gc_plan(
+            plan=ProjectionGcPlan(
+                retained_forest_versions=frozenset({"v2"}),
+                dropped_forest_versions=frozenset({"v1"}),
+                deletable_body_ids=frozenset({"body-a"}),
+            ),
+            audit_callback=lambda event: None,
+            reason="retention_window",
+            dry_run=False,
+            live_delete_enabled=True,
+            delete_callback=lambda body_id: None,
+        )
+
+    with pytest.raises(ValueError, match="live-delete projection GC policy"):
+        await execute_projection_gc_plan(
+            plan=ProjectionGcPlan(
+                retained_forest_versions=frozenset({"v2"}),
+                dropped_forest_versions=frozenset({"v1"}),
+                deletable_body_ids=frozenset({"body-a"}),
+                policy_enabled=True,
+                retention_count=1,
+            ),
+            audit_callback=lambda event: None,
+            reason="retention_window",
+            dry_run=False,
+            live_delete_enabled=True,
+            delete_callback=lambda body_id: None,
+        )
+
     with pytest.raises(ValueError, match="delete_callback"):
         await execute_projection_gc_plan(
             plan=_plan(),
             audit_callback=lambda event: None,
             reason="retention_window",
             dry_run=False,
+            live_delete_enabled=True,
         )
 
 
@@ -101,6 +147,7 @@ async def test_projection_gc_executor_deletes_only_after_intent_audit() -> None:
         delete_callback=delete,
         reason="retention_window",
         dry_run=False,
+        live_delete_enabled=True,
     )
 
     assert deleted == ["body-a", "body-b"]
@@ -130,6 +177,7 @@ async def test_projection_gc_executor_does_not_delete_when_intent_audit_fails() 
             delete_callback=deleted.append,
             reason="retention_window",
             dry_run=False,
+            live_delete_enabled=True,
         )
 
     assert deleted == []
@@ -149,6 +197,7 @@ async def test_projection_gc_executor_audits_delete_failure() -> None:
             delete_callback=delete,
             reason="retention_window",
             dry_run=False,
+            live_delete_enabled=True,
         )
 
     assert exc.value.body_id == "body-a"
@@ -173,6 +222,7 @@ async def test_projection_gc_executor_preserves_delete_error_when_failure_audit_
             delete_callback=delete,
             reason="retention_window",
             dry_run=False,
+            live_delete_enabled=True,
         )
 
     assert exc.value.body_id == "body-a"

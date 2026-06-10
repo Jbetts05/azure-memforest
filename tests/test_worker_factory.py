@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from src.service.auth import ActorContext, TenantContext
 from src.service.jobs import build_write_job_envelope
 from src.config.config import load_default_config
@@ -91,6 +93,30 @@ def test_fixed_materialization_config_factory_sets_owner_and_embedding_version()
 
     assert config.owner_id == "worker-1"
     assert config.embedding_model_version == "embed-v1"
+    assert config.snapshot_policy == "always"
+
+
+def test_fixed_materialization_config_factory_fails_closed_for_checkpoint_policy() -> None:
+    config_factory = fixed_materialization_config_factory(
+        owner_id="worker-1",
+        embedding_model_version="embed-v1",
+        snapshot_policy="checkpoint",
+    )
+
+    with pytest.raises(ValueError, match="requires explicit cloud checkpoint hydration support"):
+        config_factory(_envelope())
+
+
+def test_fixed_materialization_config_factory_accepts_explicit_checkpoint_support() -> None:
+    config = fixed_materialization_config_factory(
+        owner_id="worker-1",
+        embedding_model_version="embed-v1",
+        snapshot_policy="checkpoint",
+        cloud_checkpoint_hydration_supported=True,
+    )(_envelope())
+
+    assert config.snapshot_policy == "cloud_checkpoint"
+    assert config.cloud_checkpoint_hydration_supported is True
 
 
 def test_missing_worker_env_reports_absent_required_values() -> None:

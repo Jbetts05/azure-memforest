@@ -79,6 +79,7 @@ async def execute_projection_gc_plan(
     reason: str,
     delete_callback: ProjectionGcDeleteCallback | None = None,
     dry_run: bool = True,
+    live_delete_enabled: bool = False,
     tenant_id: str | None = None,
     user_id: str | None = None,
     metadata: Mapping[str, Any] | None = None,
@@ -86,9 +87,9 @@ async def execute_projection_gc_plan(
     """Execute a projection GC plan through explicit audit and delete callbacks.
 
     The default is a dry run.  Non-dry-run execution refuses to proceed unless a
-    deletion callback is supplied.  Every deletion callback invocation is
-    preceded by a ``delete_intent`` audit event; if that audit fails, deletion is
-    not attempted.
+    deletion callback, explicit live-delete flag, and enabled retention policy are
+    supplied.  Every deletion callback invocation is preceded by a
+    ``delete_intent`` audit event; if that audit fails, deletion is not attempted.
     """
 
     if not isinstance(plan, ProjectionGcPlan):
@@ -98,8 +99,19 @@ async def execute_projection_gc_plan(
     reason = str(reason or "").strip()
     if not reason:
         raise ValueError("reason is required")
-    if not dry_run and delete_callback is None:
-        raise ValueError("delete_callback is required when dry_run is False")
+    if not dry_run:
+        if not live_delete_enabled:
+            raise ValueError("live_delete_enabled is required when dry_run is False")
+        if not plan.policy_enabled:
+            raise ValueError("an enabled projection GC policy is required when dry_run is False")
+        if not plan.live_delete_enabled:
+            raise ValueError("an explicit live-delete projection GC policy is required when dry_run is False")
+        if plan.retention_count < 1:
+            raise ValueError("retention_count must be positive when dry_run is False")
+        if not plan.retained_forest_versions:
+            raise ValueError("at least one retained forest version is required when dry_run is False")
+        if delete_callback is None:
+            raise ValueError("delete_callback is required when dry_run is False")
 
     body_ids = tuple(sorted(plan.deletable_body_ids))
     plan_sha256 = projection_gc_plan_sha256(plan)
@@ -112,7 +124,13 @@ async def execute_projection_gc_plan(
         "retained_forest_versions": tuple(sorted(plan.retained_forest_versions)),
         "dropped_forest_versions": tuple(sorted(plan.dropped_forest_versions)),
         "deletable_body_count": len(body_ids),
-        "metadata": dict(metadata or {}),
+        "metadata": {
+            **dict(metadata or {}),
+            "policy_enabled": plan.policy_enabled,
+            "retention_count": plan.retention_count,
+            "policy_live_delete_enabled": plan.live_delete_enabled,
+            "execution_live_delete_enabled": live_delete_enabled,
+        },
     }
     audit_count = 0
 
@@ -176,6 +194,9 @@ def projection_gc_plan_sha256(plan: ProjectionGcPlan) -> str:
         "retained_forest_versions": sorted(plan.retained_forest_versions),
         "dropped_forest_versions": sorted(plan.dropped_forest_versions),
         "deletable_body_ids": sorted(plan.deletable_body_ids),
+        "policy_enabled": plan.policy_enabled,
+        "retention_count": plan.retention_count,
+        "live_delete_enabled": plan.live_delete_enabled,
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()

@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Iterable, Mapping
 
-from src.cloud.projection_plan import ProjectionRecordKey, ProjectionRecordRef, tree_node_body_content_id
+from src.cloud.projection_plan import ProjectionRecordKey, ProjectionRecordRef, browse_embedding_content_hash, tree_node_body_content_id
 from src.cloud.schema import partition_key
 
 
@@ -66,6 +66,11 @@ class CommittedProjectionBaseline:
     def as_retained_committed_records(self) -> dict[str, tuple[ProjectionRecordRef, ...]]:
         return {kind: records for kind, records in self.records.items()}
 
+    def with_records(self, record_kind: str, records: Iterable[ProjectionRecordRef]) -> "CommittedProjectionBaseline":
+        merged = self.as_retained_committed_records()
+        merged[record_kind] = tuple(records)
+        return CommittedProjectionBaseline(scope=self.scope, records=merged)
+
 
 def baseline_from_committed_docs(
     scope: ProjectionBaselineScope,
@@ -84,6 +89,22 @@ def baseline_from_committed_docs(
         "browse_embedding": tuple(_browse_embedding_refs(scope, browse_embedding_docs)),
     }
     return CommittedProjectionBaseline(scope=scope, records=records)
+
+
+def summary_cache_refs_from_entries(entries: Mapping[str, str]) -> tuple[ProjectionRecordRef, ...]:
+    """Build committed refs for content-addressed summary cache entries."""
+
+    return _unique_sorted_records(
+        (
+            ProjectionRecordRef(
+                "summary_cache",
+                str(content_hash),
+                content_hash=_summary_sha256(str(summary)),
+            )
+            for content_hash, summary in entries.items()
+        ),
+        label="summary_cache_entries",
+    )
 
 
 async def build_committed_projection_baseline(
@@ -207,7 +228,12 @@ def _browse_embedding_refs(scope: ProjectionBaselineScope, docs: Iterable[Mappin
         yield ProjectionRecordRef(
             "browse_embedding",
             f"{node_id}/{model_version}",
-            content_hash=content_hash,
+            content_hash=browse_embedding_content_hash(
+                node_id=node_id,
+                tree_id=str(doc.get("tree_id") or ""),
+                tree_type=str(doc.get("tree_type") or ""),
+                embedding_sha256=content_hash,
+            ),
             metadata={
                 "tree_id": str(doc.get("tree_id") or ""),
                 "node_id": node_id,
@@ -255,6 +281,10 @@ def _unique_sorted_records(records: Iterable[ProjectionRecordRef], *, label: str
 def _embedding_sha256(embedding: tuple[float, ...]) -> str:
     raw = ",".join(repr(float(value)) for value in embedding)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _summary_sha256(summary: str) -> str:
+    return hashlib.sha256(summary.encode("utf-8")).hexdigest()
 
 
 async def _query_cosmos_docs(
