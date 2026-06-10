@@ -156,6 +156,16 @@ def test_project_forest_snapshot_tags_cloud_artifacts() -> None:
     assert projection.changed_tree_ids == frozenset({"entity:alice"})
     assert projection.deleted_tree_ids == frozenset({"entity:old"})
     assert projection.baseline_forest_version == "v1"
+    assert len(projection.projection_skip_plans["tree_node_membership"].unchanged) == 0
+    assert len(projection.projection_skip_plans["tree_node_membership"].upsert) == 4
+    assert len(projection.projection_skip_plans["fact_location"].unchanged) == 0
+    assert len(projection.projection_skip_plans["fact_location"].upsert) == 2
+    assert len(projection.projection_skip_plans["recall_document"].unchanged) == 0
+    assert len(projection.projection_skip_plans["recall_document"].upsert) == 2
+    assert len(projection.projection_skip_plans["browse_embedding"].unchanged) == 0
+    assert len(projection.projection_skip_plans["browse_embedding"].upsert) == 3
+    assert len(projection.projection_skip_plans["summary_cache"].unchanged) == 0
+    assert len(projection.projection_skip_plans["summary_cache"].upsert) == 1
 
 
 def test_project_forest_snapshot_defaults_to_full_projection_required() -> None:
@@ -451,6 +461,19 @@ def _snapshot():
 
 def _factless_snapshot():
     return ForestMaterializationSnapshot(facts=[], trees=[], node_embeddings={}, summary_cache={})
+
+
+def _unchanged_incremental_snapshot():
+    snapshot = _snapshot()
+    return ForestMaterializationSnapshot(
+        facts=snapshot.facts,
+        trees=snapshot.trees,
+        node_embeddings=snapshot.node_embeddings,
+        summary_cache=snapshot.summary_cache,
+        changed_tree_ids=frozenset(),
+        deleted_tree_ids=frozenset(),
+        baseline_forest_version="v1",
+    )
 
 
 def _envelope(job_type="ingest_session"):
@@ -810,6 +833,36 @@ async def test_materialization_handler_commits_snapshot_pointer_metadata() -> No
     assert metadata["projection_delta_full_required"] is True
     assert metadata["projection_delta_changed_tree_ids"] is None
     assert metadata["projection_delta_deleted_tree_ids"] == []
+    assert metadata["projection_plan_counts"]["tree_node_membership"]["upsert"] == 2
+    assert metadata["projection_plan_counts"]["browse_embedding"]["unchanged"] == 0
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_records_projection_plan_without_unsafe_live_skips() -> None:
+    calls = []
+    manifest_store = FakeManifestStore()
+    handler = _handler(
+        manifest_store=manifest_store,
+        calls=calls,
+        core=FakeIngestCore(_unchanged_incremental_snapshot()),
+    )
+
+    await handler.handle(_envelope(), {"fencing_token": 1})
+
+    assert manifest_store.latest is not None
+    metadata = manifest_store.latest.metadata
+    assert metadata["projection_plan_counts"]["tree_node_membership"] == {"unchanged": 0, "upsert": 2, "delete": 0}
+    assert metadata["projection_plan_counts"]["fact_location"] == {"unchanged": 0, "upsert": 1, "delete": 0}
+    assert metadata["projection_plan_counts"]["recall_document"] == {"unchanged": 0, "upsert": 1, "delete": 0}
+    assert metadata["projection_plan_counts"]["browse_embedding"] == {"unchanged": 0, "upsert": 1, "delete": 0}
+    assert metadata["projection_plan_counts"]["summary_cache"] == {"unchanged": 0, "upsert": 1, "delete": 0}
+    assert metadata["projection_plan_live_skipped_browse_embedding_count"] == 0
+    assert metadata["projection_plan_live_skipped_summary_cache_count"] == 0
+    assert "tree_nodes" in calls
+    assert "locations" in calls
+    assert "recall" in calls
+    assert "browse_embeddings" in calls
+    assert "summary_cache" in calls
 
 
 @pytest.mark.asyncio

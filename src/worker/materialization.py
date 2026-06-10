@@ -12,12 +12,13 @@ import logging
 import sys
 import time
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Mapping, Protocol
 
 from src.cloud.async_batch import run_bounded
 from src.cloud.cosmos_browse_embeddings import BrowseEmbeddingRecord
 from src.cloud.contracts import FactLocation, RecallDocument, StoredTreeNode
 from src.cloud.cosmos_leases import LeaseConflict
+from src.cloud.projection_plan import ProjectionRecordRef, ProjectionSkipPlan, plan_projection_skip
 from src.cloud.schema import SCHEMA_VERSION
 from src.forest.memforest import _content_key
 from src.forest.user_forest import ForestMaterializationSnapshot
@@ -49,6 +50,7 @@ class MaterializationProjection:
     changed_tree_ids: frozenset[str] | None = None
     deleted_tree_ids: frozenset[str] = frozenset()
     baseline_forest_version: str | None = None
+    projection_skip_plans: Mapping[str, ProjectionSkipPlan] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -649,21 +651,28 @@ class MemForestMaterializationHandler:
         browse_store = self._browse_embedding_store(forest_version)
         if browse_store is None:
             return
+        records = _safe_upsert_browse_embedding_records(projection)
+        if not records:
+            return
         if hasattr(browse_store, "upsert_records"):
             await self._call_store_method(
                 browse_store.upsert_records,
-                projection.browse_embedding_records,
+                records,
                 model_version=self._config.embedding_model_version,
             )
             return
+        embeddings = {record.node_id: list(record.embedding) for record in records}
         await self._call_store_method(
             browse_store.upsert_embeddings,
-            projection.browse_embeddings,
+            embeddings,
             model_version=self._config.embedding_model_version,
         )
 
     async def _write_summary_cache_entries(self, projection: MaterializationProjection) -> None:
         if self._stores.summary_cache is None:
+            return
+        entries = _safe_upsert_summary_cache_entries(projection)
+        if not entries:
             return
 
         async def _put(entry: SummaryCacheEntry) -> None:
@@ -674,7 +683,7 @@ class MemForestMaterializationHandler:
                 metadata=entry.metadata,
             )
 
-        await run_bounded(projection.summary_cache_entries, _put)
+        await run_bounded(entries, _put)
 
     async def _write_recall_documents(self, projection: MaterializationProjection) -> None:
         await self._call_store_method(self._stores.recall_index.upsert_documents, projection.recall_documents)
@@ -880,7 +889,7 @@ def project_forest_snapshot(
         for content_hash, summary in sorted(snapshot.summary_cache.items())
     ]
 
-    return MaterializationProjection(
+    projection = MaterializationProjection(
         stored_nodes=stored_nodes,
         fact_locations=fact_locations,
         recall_documents=recall_documents,
@@ -899,6 +908,19 @@ def project_forest_snapshot(
         deleted_tree_ids=snapshot.deleted_tree_ids,
         baseline_forest_version=snapshot.baseline_forest_version,
     )
+    return MaterializationProjection(
+        stored_nodes=projection.stored_nodes,
+        fact_locations=projection.fact_locations,
+        recall_documents=projection.recall_documents,
+        browse_embeddings=projection.browse_embeddings,
+        browse_embedding_records=projection.browse_embedding_records,
+        summary_cache_entries=projection.summary_cache_entries,
+        snapshot_payload=projection.snapshot_payload,
+        changed_tree_ids=projection.changed_tree_ids,
+        deleted_tree_ids=projection.deleted_tree_ids,
+        baseline_forest_version=projection.baseline_forest_version,
+        projection_skip_plans=_build_projection_skip_plans(projection, embedding_model_version=embedding_model_version),
+    )
 
 
 def _parse_ingest_request(envelope: WriteJobEnvelope) -> IngestSessionRequest:
@@ -906,6 +928,199 @@ def _parse_ingest_request(envelope: WriteJobEnvelope) -> IngestSessionRequest:
         return IngestSessionRequest.model_validate(envelope.payload)
     except Exception as exc:
         raise PermanentHandlerError("invalid ingest_session payload") from exc
+
+
+def _build_projection_skip_plans(
+    projection: MaterializationProjection,
+    *,
+    embedding_model_version: str,
+) -> dict[str, ProjectionSkipPlan]:
+    projected = {
+        "tree_node_membership": _tree_node_projection_refs(projection.stored_nodes),
+        "fact_location": _fact_location_projection_refs(projection.fact_locations),
+        "recall_document": _recall_document_projection_refs(projection.recall_documents),
+        "browse_embedding": _browse_embedding_projection_refs(
+            projection.browse_embedding_records,
+            embedding_model_version=embedding_model_version,
+        ),
+        "summary_cache": _summary_cache_projection_refs(projection.summary_cache_entries),
+    }
+    retained = _retained_committed_projection_refs(projection, projected)
+    return {
+        kind: plan_projection_skip(records, retained.get(kind, ()))
+        for kind, records in projected.items()
+    }
+
+
+def _retained_committed_projection_refs(
+    projection: MaterializationProjection,
+    projected: Mapping[str, tuple[ProjectionRecordRef, ...]],
+) -> dict[str, tuple[ProjectionRecordRef, ...]]:
+    # A real skip baseline must come from durable committed per-record hashes.
+    # Dirty tree metadata is only an optimization hint; using the current
+    # projection as its own baseline would make unchanged counts look better
+    # than the durable state can actually prove.
+    return {}
+
+
+def _tree_node_projection_refs(nodes: list[StoredTreeNode]) -> tuple[ProjectionRecordRef, ...]:
+    return tuple(
+        ProjectionRecordRef(
+            "tree_node_membership",
+            f"{node.tree_id}/{node.node_id}",
+            content_hash=_tree_node_stable_content_hash(node),
+            content_id=_tree_node_stable_body_id(node),
+            metadata={"tree_id": node.tree_id, "node_id": node.node_id},
+        )
+        for node in nodes
+    )
+
+
+def _fact_location_projection_refs(locations: list[FactLocation]) -> tuple[ProjectionRecordRef, ...]:
+    return tuple(
+        ProjectionRecordRef(
+            "fact_location",
+            f"{location.fact_id}/{location.tree_id}/{location.node_id}/{location.tree_type}/{location.level}",
+            content_hash=_fact_location_stable_content_hash(location),
+            metadata={"tree_id": location.tree_id, "node_id": location.node_id, "fact_id": location.fact_id},
+        )
+        for location in locations
+    )
+
+
+def _recall_document_projection_refs(documents: list[RecallDocument]) -> tuple[ProjectionRecordRef, ...]:
+    return tuple(
+        ProjectionRecordRef(
+            "recall_document",
+            f"{document.tree_id}/{document.node_id}",
+            content_hash=_recall_document_stable_content_hash(document),
+            metadata={"tree_id": document.tree_id, "node_id": document.node_id},
+        )
+        for document in documents
+    )
+
+
+def _browse_embedding_projection_refs(
+    records: list[BrowseEmbeddingRecord],
+    *,
+    embedding_model_version: str,
+) -> tuple[ProjectionRecordRef, ...]:
+    return tuple(
+        ProjectionRecordRef(
+            "browse_embedding",
+            f"{record.node_id}/{embedding_model_version}",
+            content_hash=_browse_embedding_stable_content_hash(record),
+            metadata={"tree_id": record.tree_id, "node_id": record.node_id},
+        )
+        for record in records
+    )
+
+
+def _summary_cache_projection_refs(entries: list[SummaryCacheEntry]) -> tuple[ProjectionRecordRef, ...]:
+    return tuple(
+        ProjectionRecordRef(
+            "summary_cache",
+            entry.content_hash,
+            content_hash=_sha256(entry.summary.encode("utf-8")),
+        )
+        for entry in entries
+    )
+
+
+def _safe_upsert_browse_embedding_records(projection: MaterializationProjection) -> list[BrowseEmbeddingRecord]:
+    plan = projection.projection_skip_plans.get("browse_embedding")
+    if plan is None:
+        return list(projection.browse_embedding_records)
+    upsert_node_ids = {str(record.metadata.get("node_id") or "") for record in plan.upsert}
+    return [record for record in projection.browse_embedding_records if record.node_id in upsert_node_ids]
+
+
+def _safe_upsert_summary_cache_entries(projection: MaterializationProjection) -> list[SummaryCacheEntry]:
+    plan = projection.projection_skip_plans.get("summary_cache")
+    if plan is None:
+        return list(projection.summary_cache_entries)
+    upsert_hashes = {record.logical_id for record in plan.upsert}
+    return [entry for entry in projection.summary_cache_entries if entry.content_hash in upsert_hashes]
+
+
+def _projection_plan_counts(projection: MaterializationProjection) -> dict[str, dict[str, int]]:
+    return {
+        kind: {
+            "unchanged": len(plan.unchanged),
+            "upsert": len(plan.upsert),
+            "delete": len(plan.delete),
+        }
+        for kind, plan in sorted(projection.projection_skip_plans.items())
+    }
+
+
+def _tree_node_stable_content_hash(node: StoredTreeNode) -> str:
+    metadata = {
+        key: value
+        for key, value in dict(node.metadata).items()
+        if key not in {"generation", "forest_version"}
+    }
+    return _hash_json(
+        {
+            "level": node.level,
+            "summary": node.summary,
+            "child_ids": list(node.child_ids),
+            "fact_ids": list(node.fact_ids),
+            "tree_id": node.tree_id,
+            "node_id": node.node_id,
+            "metadata": metadata,
+        }
+    )
+
+
+def _tree_node_stable_body_id(node: StoredTreeNode) -> str:
+    return _hash_json(["tree_node_body", node.tree_id, node.node_id, _tree_node_stable_content_hash(node)])
+
+
+def _fact_location_stable_content_hash(location: FactLocation) -> str:
+    metadata = {
+        key: value
+        for key, value in dict(location.metadata).items()
+        if key not in {"generation", "forest_version"}
+    }
+    return _hash_json(
+        {
+            "fact_id": location.fact_id,
+            "tree_id": location.tree_id,
+            "node_id": location.node_id,
+            "tree_type": location.tree_type,
+            "level": location.level,
+            "time_start": location.time_start,
+            "time_end": location.time_end,
+            "metadata": metadata,
+        }
+    )
+
+
+def _recall_document_stable_content_hash(document: RecallDocument) -> str:
+    return _hash_json(
+        {
+            "tenant_id": document.tenant_id,
+            "user_id": document.user_id,
+            "tree_id": document.tree_id,
+            "node_id": document.node_id,
+            "tree_type": document.tree_type,
+            "embedding_model_version": document.embedding_model_version,
+            "summary": document.summary,
+            "embedding": [float(value) for value in document.embedding],
+        }
+    )
+
+
+def _browse_embedding_stable_content_hash(record: BrowseEmbeddingRecord) -> str:
+    return _hash_json(
+        {
+            "node_id": record.node_id,
+            "tree_id": record.tree_id,
+            "tree_type": record.tree_type,
+            "embedding": [float(value) for value in record.embedding],
+        }
+    )
 
 
 async def _write_snapshot_idempotent(snapshot_store: Any, *, snapshot_id: str, payload: bytes, metadata: dict[str, str]) -> None:
@@ -1022,6 +1237,7 @@ def _materialization_fingerprint_metadata(
             "baseline_forest_version": projection.baseline_forest_version,
             "full_projection_required": projection.changed_tree_ids is None,
         },
+        "projection_plan_counts": _projection_plan_counts(projection),
     }
     return {
         "materialization_fingerprint": _hash_json(inputs),
@@ -1039,6 +1255,9 @@ def _materialization_fingerprint_metadata(
         "projection_delta_deleted_tree_ids": sorted(projection.deleted_tree_ids),
         "projection_delta_baseline_forest_version": projection.baseline_forest_version,
         "projection_delta_full_required": projection.changed_tree_ids is None,
+        "projection_plan_counts": inputs["projection_plan_counts"],
+        "projection_plan_live_skipped_browse_embedding_count": len(projection.projection_skip_plans.get("browse_embedding", ProjectionSkipPlan((), (), ())).unchanged),
+        "projection_plan_live_skipped_summary_cache_count": len(projection.projection_skip_plans.get("summary_cache", ProjectionSkipPlan((), (), ())).unchanged),
     }, inputs
 
 
