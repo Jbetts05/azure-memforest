@@ -612,6 +612,51 @@ def test_materialization_snapshot_preserves_cloud_hydration_baseline_after_delta
     assert snapshot.changed_tree_ids == frozenset({"tree-1"})
 
 
+@pytest.mark.asyncio
+async def test_cloud_hydration_rebuilds_session_registry_for_delete(tmp_path) -> None:
+    dim = 4
+    user_forest = _user_forest(tmp_path, dim)
+    state = await load_cloud_user_forest_state(
+        tree_store=FakeTreeStore(
+            {
+                "session:s1": [
+                    _node("session-leaf", level="L0", child_ids=("s1#cell-1",), fact_ids=("fact_1",), tree_id="session:s1", tree_type="session", tree_key="s1", tree_label="s1"),
+                ],
+                "entity:user": [
+                    _node("entity-leaf", level="L0", child_ids=("fact_1",), tree_id="entity:user", tree_key="user", tree_label="user"),
+                ],
+            }
+        ),
+        fact_store=FakeFactStore({"fact_1": _fact("fact_1", dim)}),
+    )
+    apply_cloud_state_to_user_forest(user_forest, state)
+
+    user_forest.delete_session("s1")
+
+    assert user_forest._fact_manager.get_fact("fact_1") is None
+
+
+@pytest.mark.asyncio
+async def test_cloud_hydration_registry_strips_session_tree_key_prefix(tmp_path) -> None:
+    dim = 4
+    user_forest = _user_forest(tmp_path, dim)
+    state = await load_cloud_user_forest_state(
+        tree_store=FakeTreeStore(
+            {
+                "session:s1": [
+                    _node("session-leaf", level="L0", child_ids=("s1#cell-1",), fact_ids=("fact_1",), tree_id="session:s1", tree_type="session", tree_key="session:s1", tree_label="s1"),
+                ]
+            }
+        ),
+        fact_store=FakeFactStore({"fact_1": _fact("fact_1", dim)}),
+    )
+    apply_cloud_state_to_user_forest(user_forest, state)
+
+    user_forest.delete_session("s1")
+
+    assert user_forest._registry._sessions["s1"].deleted is True
+
+
 def test_cloud_hydration_reembeds_fact_when_stored_embedding_dim_mismatches(tmp_path) -> None:
     dim = 4
     user_forest, client = _user_forest_with_client(tmp_path, dim)

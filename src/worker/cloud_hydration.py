@@ -564,6 +564,9 @@ def _apply_cloud_state_locked(user_forest: Any, state: CloudUserForestState) -> 
         validate_tree_structure(tree)
         user_forest._tree_builder._trees[tree.tree_id] = tree
         user_forest._tree_store.register(tree)
+    from src.forest.memforest import _populate_registry_from_trees
+
+    _populate_registry_from_trees(user_forest._registry, user_forest._tree_store)
 
     user_forest._node_index = _node_index_from_cloud_embeddings(
         user_forest,

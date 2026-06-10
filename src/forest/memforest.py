@@ -700,7 +700,7 @@ def _populate_registry_from_trees(registry, tree_store) -> None:
         tree = tree_store.get(tree_id)
         if tree is None or tree.tree_type != "session":
             continue
-        session_id = tree.tree_key
+        session_id = str(tree.tree_key or tree.tree_id).removeprefix("session:")
         cell_ids = list(tree.session_leaves.keys())
         cell_fact_ids: dict[str, list[str]] = {}
         for cell_id, leaf in tree.session_leaves.items():
