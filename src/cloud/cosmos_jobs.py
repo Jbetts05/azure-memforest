@@ -372,10 +372,7 @@ def _create_item(container: Any, document: dict[str, Any], *, partition_key: str
 
 
 def _query_items(container: Any, *, query: str, parameters: list[dict[str, Any]]):
-    try:
-        return container.query_items(query=query, parameters=parameters, enable_cross_partition_query=True)
-    except TypeError:
-        return container.query_items(query=query, parameters=parameters)
+    return container.query_items(query=query, parameters=parameters)
 
 
 async def _conditional_replace(container: Any, item: dict[str, Any], *, partition_key: str, etag: str | None):
