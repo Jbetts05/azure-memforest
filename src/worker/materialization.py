@@ -859,7 +859,10 @@ class MemForestMaterializationHandler:
             raise PermanentHandlerError("latest committed manifest embedding_model_version does not match worker configuration")
         hydrate = getattr(self._ingest_core, "hydrate_from_manifest", None)
         if hydrate is not None:
-            await asyncio.to_thread(hydrate, manifest)
+            if inspect.iscoroutinefunction(hydrate):
+                await hydrate(manifest)
+            else:
+                await asyncio.to_thread(hydrate, manifest)
 
     def _tree_node_store(self, forest_version: str) -> Any:
         if self._stores.tree_node_store_factory is not None:

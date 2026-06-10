@@ -518,7 +518,8 @@ def test_cloud_hydration_reembeds_fact_when_stored_embedding_dim_mismatches(tmp_
     assert user_forest._fact_manager.get_fact("fact_1") is not None
 
 
-def test_cloud_state_core_defaults_to_snapshot_fallback(tmp_path) -> None:
+@pytest.mark.asyncio
+async def test_cloud_state_core_defaults_to_snapshot_fallback(tmp_path) -> None:
     dim = 4
     source = _user_forest(tmp_path / "source-root", dim)
     source.save()
@@ -540,13 +541,14 @@ def test_cloud_state_core_defaults_to_snapshot_fallback(tmp_path) -> None:
         snapshot_store=FakeSnapshotStore({"snapshot-1": payload}),
     )
 
-    core.hydrate_from_manifest(manifest)
+    await core.hydrate_from_manifest(manifest)
 
     assert core.last_hydration_result is not None
     assert core.last_hydration_result.used_snapshot_fallback
 
 
-def test_cloud_state_core_hydrates_complete_cloud_state_without_snapshot(tmp_path) -> None:
+@pytest.mark.asyncio
+async def test_cloud_state_core_hydrates_complete_cloud_state_without_snapshot(tmp_path) -> None:
     dim = 4
     target = _user_forest(tmp_path / "target-root", dim)
     fact = _fact("fact_1", dim)
@@ -567,7 +569,7 @@ def test_cloud_state_core_hydrates_complete_cloud_state_without_snapshot(tmp_pat
         enable_cloud_state_hydration=True,
     )
 
-    core.hydrate_from_manifest(FakeManifest({"forest_version": "v7", "embedding_model_version": "embed-v1"}))
+    await core.hydrate_from_manifest(FakeManifest({"forest_version": "v7", "embedding_model_version": "embed-v1"}))
 
     assert core.last_hydration_result is not None
     assert core.last_hydration_result.used_snapshot_fallback is False
@@ -577,7 +579,8 @@ def test_cloud_state_core_hydrates_complete_cloud_state_without_snapshot(tmp_pat
     assert target._node_index.get_embedding("root") is not None
 
 
-def test_cloud_state_core_without_snapshot_surfaces_cloud_read_errors(tmp_path) -> None:
+@pytest.mark.asyncio
+async def test_cloud_state_core_without_snapshot_surfaces_cloud_read_errors(tmp_path) -> None:
     target = _user_forest(tmp_path / "target-root", 4)
     core = CloudStateHydratingUserForestCore(
         user_forest=target,
@@ -588,10 +591,11 @@ def test_cloud_state_core_without_snapshot_surfaces_cloud_read_errors(tmp_path) 
     )
 
     with pytest.raises(RuntimeError, match="transient tree read failure"):
-        core.hydrate_from_manifest(FakeManifest({"forest_version": "v7", "embedding_model_version": "embed-v1"}))
+        await core.hydrate_from_manifest(FakeManifest({"forest_version": "v7", "embedding_model_version": "embed-v1"}))
 
 
-def test_cloud_state_core_falls_back_when_cloud_state_is_incomplete(tmp_path) -> None:
+@pytest.mark.asyncio
+async def test_cloud_state_core_falls_back_when_cloud_state_is_incomplete(tmp_path) -> None:
     dim = 4
     source = _user_forest(tmp_path / "source-root", dim)
     source.save()
@@ -624,7 +628,7 @@ def test_cloud_state_core_falls_back_when_cloud_state_is_incomplete(tmp_path) ->
         enable_cloud_state_hydration=True,
     )
 
-    core.hydrate_from_manifest(manifest)
+    await core.hydrate_from_manifest(manifest)
 
     assert core.last_hydration_result is not None
     assert core.last_hydration_result.used_snapshot_fallback

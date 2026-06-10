@@ -9,7 +9,6 @@ snapshots from every ingest.
 from __future__ import annotations
 
 import inspect
-import asyncio
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -102,7 +101,7 @@ class CloudStateHydratingUserForestCore:
         self.cloud_state_read_attempts = max(1, int(cloud_state_read_attempts))
         self.last_hydration_result: CloudHydrationApplyResult | None = None
 
-    def hydrate_from_manifest(self, manifest: Any) -> None:
+    async def hydrate_from_manifest(self, manifest: Any) -> None:
         if not self.enable_cloud_state_hydration:
             self.last_hydration_result = self._snapshot_fallback(manifest)
             return
@@ -112,7 +111,7 @@ class CloudStateHydratingUserForestCore:
             browse_embedding_store = _store_for_manifest_version(self.browse_embedding_store, self.browse_embedding_store_factory, forest_version)
             if tree_store is None:
                 raise CloudStateHydrationIncomplete("tree_store is required for cloud state hydration")
-            state = self._load_cloud_state_with_retry(tree_store=tree_store, browse_embedding_store=browse_embedding_store)
+            state = await self._load_cloud_state_with_retry(tree_store=tree_store, browse_embedding_store=browse_embedding_store)
             if _cloud_state_missing_prerequisites(state):
                 raise CloudStateHydrationIncomplete("cloud state hydration is incomplete")
             self.last_hydration_result = apply_cloud_state_to_user_forest(self.user_forest, state)
@@ -137,17 +136,15 @@ class CloudStateHydratingUserForestCore:
 
         return build_user_forest_archive(self.user_forest)
 
-    def _load_cloud_state_with_retry(self, *, tree_store: Any, browse_embedding_store: Any | None) -> CloudUserForestState:
+    async def _load_cloud_state_with_retry(self, *, tree_store: Any, browse_embedding_store: Any | None) -> CloudUserForestState:
         last_error: Exception | None = None
         for _attempt in range(self.cloud_state_read_attempts):
             try:
-                return asyncio.run(
-                    load_cloud_user_forest_state(
-                        tree_store=tree_store,
-                        fact_store=self.fact_store,
-                        summary_cache=self.summary_cache,
-                        browse_embedding_store=browse_embedding_store,
-                    )
+                return await load_cloud_user_forest_state(
+                    tree_store=tree_store,
+                    fact_store=self.fact_store,
+                    summary_cache=self.summary_cache,
+                    browse_embedding_store=browse_embedding_store,
                 )
             except Exception as exc:
                 last_error = exc
