@@ -21,6 +21,7 @@ class FakeIndexClient:
     def __init__(self, existing=None, conflict_on_create=False):
         self.index = existing
         self.created = None
+        self.updated = None
         self.conflict_on_create = conflict_on_create
 
     def get_index(self, name):
@@ -32,6 +33,10 @@ class FakeIndexClient:
         if self.conflict_on_create:
             raise ExistsError()
         self.created = index
+        self.index = index
+
+    def create_or_update_index(self, index):
+        self.updated = index
         self.index = index
 
 
@@ -73,6 +78,34 @@ def test_ensure_index_validates_existing_dimension() -> None:
 
     with pytest.raises(ValueError, match="vector dimension"):
         recall.ensure_index()
+
+
+def test_ensure_index_updates_existing_index_missing_mvcc_fields() -> None:
+    index = build_recall_search_index("memforest-recall", 1536)
+    index.fields = [
+        field
+        for field in index.fields
+        if field.name
+        not in {
+            "valid_from_generation",
+            "valid_from_forest_version",
+            "valid_to_generation",
+            "valid_to_forest_version",
+        }
+    ]
+    fake = FakeIndexClient(existing=index)
+    recall = AzureSearchRecallIndex(
+        endpoint="https://search.example",
+        index_name="memforest-recall",
+        vector_dimensions=1536,
+        search_client=object(),
+        index_client=fake,
+    )
+
+    recall.ensure_index()
+
+    assert fake.updated is not None
+    validate_recall_search_index(fake.updated, vector_dimensions=1536)
 
 
 def test_ensure_index_handles_create_race_by_refetching() -> None:

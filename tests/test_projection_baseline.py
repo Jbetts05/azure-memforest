@@ -55,6 +55,12 @@ class FakeSearchClient:
 
     def search(self, **kwargs):
         self.calls.append(kwargs)
+        selected = kwargs.get("select")
+        if selected:
+            return [
+                {key: doc[key] for key in selected if key in doc}
+                for doc in self.docs
+            ]
         return list(self.docs)
 
 
@@ -91,7 +97,7 @@ def test_baseline_from_committed_docs_preserves_forest_version_isolation() -> No
             )
         ],
         recall_document_docs=[
-            _doc(None, tree_id="tree-1", node_id="node-1", content_sha256="recall-hash", embedding_model_version="embed-v1"),
+            _mvcc_doc(None, tree_id="tree-1", node_id="node-1", content_sha256="recall-hash", embedding_model_version="embed-v1"),
             _doc(None, tree_id="tree-1", node_id="other-model", content_sha256="skip", embedding_model_version="embed-v0"),
         ],
         browse_embedding_docs=[
@@ -165,8 +171,8 @@ def test_baseline_rejects_duplicate_committed_record_keys() -> None:
         baseline_from_committed_docs(
             scope,
             recall_document_docs=[
-                _doc(None, tree_id="tree-1", node_id="root", content_sha256="a"),
-                _doc(None, tree_id="tree-1", node_id="root", content_sha256="b"),
+                _mvcc_doc(None, tree_id="tree-1", node_id="root", content_sha256="a"),
+                _mvcc_doc(None, tree_id="tree-1", node_id="root", content_sha256="b"),
             ],
         )
 
@@ -191,7 +197,7 @@ async def test_build_committed_projection_baseline_reads_only_fake_stores() -> N
     browse_embeddings = FakeContainer(
         [_doc(None, node_id="node-1", tree_id="tree-1", embedding_model_version="embed-v1", embedding_sha256="embedding-hash")]
     )
-    recall = FakeSearchClient([_doc(None, tree_id="tree-1", node_id="node-1", embedding_model_version="embed-v1", content_sha256="recall-hash")])
+    recall = FakeSearchClient([_mvcc_doc(None, tree_id="tree-1", node_id="node-1", embedding_model_version="embed-v1", content_sha256="recall-hash")])
 
     baseline = await build_committed_projection_baseline(
         scope,
@@ -218,10 +224,12 @@ def test_committed_baseline_skips_legacy_structural_docs_to_force_mvcc_rewrite()
         scope,
         tree_node_docs=[_doc("tree_node_membership", tree_id="tree-1", node_id="node-1", content_sha256="node-hash")],
         fact_location_docs=[_doc("fact_location", fact_id="fact-1", tree_id="tree-1", node_id="node-1", tree_type="entity", level="L0", content_sha256="fact-hash")],
+        recall_document_docs=[_doc(None, tree_id="tree-1", node_id="root", content_sha256="recall-hash", embedding_model_version="embed-v1")],
     )
 
     assert baseline.records_for("tree_node_membership") == ()
     assert baseline.records_for("fact_location") == ()
+    assert baseline.records_for("recall_document") == ()
 
 
 @pytest.mark.asyncio
@@ -244,6 +252,36 @@ async def test_build_committed_projection_baseline_reads_browse_embeddings_acros
         "node-1/embed-v1",
         "node-2/embed-v1",
     }
+
+
+@pytest.mark.asyncio
+async def test_build_committed_projection_baseline_reads_carried_forward_recall_docs() -> None:
+    scope = ProjectionBaselineScope.from_manifest(
+        FakeManifest(forest_version="g2-current", generation=2),
+        embedding_model_version="embed-v1",
+    )
+    recall = FakeSearchClient(
+        [
+            _mvcc_doc(
+                None,
+                id="old-recall-doc",
+                tree_id="tree-1",
+                node_id="root",
+                forest_version="g1-old",
+                valid_from_generation=1,
+                valid_from_forest_version="g1-old",
+                embedding_model_version="embed-v1",
+                content_sha256="recall-hash",
+            )
+        ]
+    )
+
+    baseline = await build_committed_projection_baseline(scope, recall_search_client=recall)
+
+    assert baseline.records_for("recall_document")[0].metadata["id"] == "old-recall-doc"
+    assert " and forest_version eq 'g2-current'" not in recall.calls[0]["filter"]
+    assert "valid_from_generation le 2" in recall.calls[0]["filter"]
+    assert "valid_to_generation gt 2" in recall.calls[0]["filter"]
 
 
 def _doc(doc_kind, **overrides):

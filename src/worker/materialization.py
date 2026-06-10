@@ -619,7 +619,7 @@ class MemForestMaterializationHandler:
             self._write_fact_locations(forest_version, projection),
             self._write_browse_embeddings(forest_version, projection),
             self._write_summary_cache_entries(projection),
-            self._write_recall_documents(projection),
+            self._write_recall_documents(forest_version, projection),
         )
         fingerprint_metadata, fingerprint_payload = _materialization_fingerprint_metadata(
             projection=projection,
@@ -822,7 +822,16 @@ class MemForestMaterializationHandler:
 
         await run_bounded(entries, _put)
 
-    async def _write_recall_documents(self, projection: MaterializationProjection) -> None:
+    async def _write_recall_documents(self, forest_version: str, projection: MaterializationProjection) -> None:
+        plan = projection.projection_skip_plans.get("recall_document")
+        if plan is not None and hasattr(self._stores.recall_index, "upsert_documents_delta"):
+            await self._call_store_method(
+                self._stores.recall_index.upsert_documents_delta,
+                _safe_upsert_recall_documents(projection),
+                close_refs=_recall_close_refs(projection),
+                forest_version=forest_version,
+            )
+            return
         await self._call_store_method(self._stores.recall_index.upsert_documents, projection.recall_documents)
 
     async def _call_store_method(self, method: Any, *args: Any, **kwargs: Any) -> Any:
@@ -1151,7 +1160,7 @@ def _retained_committed_projection_refs(
     # Shared browse/summary stores are intersection-limited so per-job deletes
     # stay GC/retention controlled.
     retained: dict[str, tuple[ProjectionRecordRef, ...]] = {}
-    for kind in ("tree_node_membership", "fact_location"):
+    for kind in ("tree_node_membership", "fact_location", "recall_document"):
         retained[kind] = committed_baseline.records_for(kind)
     for kind in ("browse_embedding", "summary_cache"):
         projected_records = projected.get(kind, ())
@@ -1366,6 +1375,21 @@ def _fact_location_unchanged_keys(projection: MaterializationProjection) -> list
     if plan is None:
         return []
     return [record.logical_id for record in plan.unchanged]
+
+
+def _safe_upsert_recall_documents(projection: MaterializationProjection) -> list[RecallDocument]:
+    plan = projection.projection_skip_plans.get("recall_document")
+    if plan is None:
+        return list(projection.recall_documents)
+    upsert_keys = {record.logical_id for record in plan.upsert}
+    return [document for document in projection.recall_documents if f"{document.tree_id}/{document.node_id}" in upsert_keys]
+
+
+def _recall_close_refs(projection: MaterializationProjection) -> list[ProjectionRecordRef]:
+    plan = projection.projection_skip_plans.get("recall_document")
+    if plan is None:
+        return []
+    return [*plan.delete, *plan.superseded]
 
 
 def _safe_upsert_summary_cache_entries(projection: MaterializationProjection) -> list[SummaryCacheEntry]:

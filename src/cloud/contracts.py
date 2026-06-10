@@ -47,6 +47,10 @@ class RecallDocument:
     summary: str
     embedding: tuple[float, ...]
     content_sha256: str = ""
+    valid_from_generation: int | None = None
+    valid_from_forest_version: str = ""
+    valid_to_generation: int | None = None
+    valid_to_forest_version: str = ""
     schema_version: int = SCHEMA_VERSION
     metadata: Mapping[str, Any] = field(default_factory=dict)
 

@@ -75,6 +75,30 @@ class AzureSearchRecallIndex:
         if payload:
             self._client().upload_documents(payload)
 
+    def upsert_documents_delta(
+        self,
+        documents: list[RecallDocument],
+        *,
+        close_refs: list[Any] | tuple[Any, ...] = (),
+        forest_version: str = "",
+    ) -> None:
+        payload = [_document_to_search_payload(document, self.vector_dimensions) for document in documents]
+        if payload:
+            self._client().upload_documents(payload)
+        current_forest_version = forest_version or (documents[0].forest_version if documents else "")
+        upsert_ids = {item["id"] for item in payload}
+        close_payload = [
+            item
+            for item in (_close_payload(ref, current_forest_version) for ref in close_refs)
+            if item["id"] not in upsert_ids
+        ]
+        if close_payload:
+            client = self._client()
+            merge = getattr(client, "merge_documents", None)
+            if merge is None:
+                raise RuntimeError("Azure Search recall delta closes require merge_documents support.")
+            merge(close_payload)
+
     def delete_by_tree(self, tree_id: str, *, tenant_id: str | None = None) -> None:
         if not tenant_id:
             raise TenantScopeRequired("tenant_id is required when deleting recall documents by tree.")
@@ -129,7 +153,16 @@ class AzureSearchRecallIndex:
                 if not _is_conflict(create_exc):
                     raise
                 index = index_client.get_index(self.index_name)
-        validate_recall_search_index(index, vector_dimensions=self.vector_dimensions)
+        try:
+            validate_recall_search_index(index, vector_dimensions=self.vector_dimensions)
+        except ValueError as exc:
+            if "missing required fields" not in str(exc):
+                raise
+            create_or_update = getattr(index_client, "create_or_update_index", None)
+            if create_or_update is None:
+                raise
+            updated = create_or_update(build_recall_search_index(self.index_name, self.vector_dimensions))
+            validate_recall_search_index(updated or index_client.get_index(self.index_name), vector_dimensions=self.vector_dimensions)
 
     def _client(self):
         if self._search_client is not None:
@@ -176,6 +209,10 @@ def build_recall_search_index(index_name: str, vector_dimensions: int):
             SimpleField(name="node_id", type=SearchFieldDataType.String, filterable=True),
             SimpleField(name="tree_type", type=SearchFieldDataType.String, filterable=True),
             SimpleField(name="forest_version", type=SearchFieldDataType.String, filterable=True),
+            SimpleField(name="valid_from_generation", type=SearchFieldDataType.Int64, filterable=True),
+            SimpleField(name="valid_from_forest_version", type=SearchFieldDataType.String, filterable=True),
+            SimpleField(name="valid_to_generation", type=SearchFieldDataType.Int64, filterable=True),
+            SimpleField(name="valid_to_forest_version", type=SearchFieldDataType.String, filterable=True),
             SimpleField(name="embedding_model_version", type=SearchFieldDataType.String, filterable=True),
             SimpleField(name="schema_version", type=SearchFieldDataType.Int32, filterable=True),
             SimpleField(name="content_sha256", type=SearchFieldDataType.String, filterable=True),
@@ -205,6 +242,10 @@ def validate_recall_search_index(index: Any, *, vector_dimensions: int) -> None:
         "node_id",
         "tree_type",
         "forest_version",
+        "valid_from_generation",
+        "valid_from_forest_version",
+        "valid_to_generation",
+        "valid_to_forest_version",
         "embedding_model_version",
         "schema_version",
         "summary",
@@ -242,11 +283,34 @@ def _document_to_search_payload(document: RecallDocument, vector_dimensions: int
         "node_id": document.node_id,
         "tree_type": document.tree_type,
         "forest_version": document.forest_version,
+        "valid_from_generation": document.valid_from_generation if document.valid_from_generation is not None else _generation_from_forest_version(document.forest_version),
+        "valid_from_forest_version": document.valid_from_forest_version or document.forest_version,
+        "valid_to_generation": document.valid_to_generation,
+        "valid_to_forest_version": document.valid_to_forest_version,
         "embedding_model_version": document.embedding_model_version,
         "schema_version": document.schema_version,
         "content_sha256": document.content_sha256 or _recall_content_sha256(document),
         "summary": document.summary,
         VECTOR_FIELD_NAME: list(document.embedding),
+    }
+
+
+def _close_payload(ref: Any, current_forest_version: str) -> dict[str, Any]:
+    metadata = getattr(ref, "metadata", {}) or {}
+    doc_id = str(metadata.get("id") or "")
+    if not doc_id:
+        tenant_id = str(metadata.get("tenant_id") or "")
+        tree_id = str(metadata.get("tree_id") or "")
+        node_id = str(metadata.get("node_id") or "")
+        forest_version = str(metadata.get("forest_version") or "")
+        if tenant_id and tree_id and node_id and forest_version:
+            doc_id = recall_document_key(tenant_id=tenant_id, tree_id=tree_id, node_id=node_id, forest_version=forest_version)
+    if not doc_id:
+        raise ValueError("recall close ref missing Azure Search document id")
+    return {
+        "id": doc_id,
+        "valid_to_generation": _generation_from_forest_version(current_forest_version),
+        "valid_to_forest_version": current_forest_version,
     }
 
 
@@ -266,11 +330,42 @@ def _recall_content_sha256(document: RecallDocument) -> str:
 
 def _filter_expression(filters: dict[str, Any]) -> str:
     clauses = []
-    for field in ("tenant_id", "user_id", "tree_id", "tree_type", "forest_version", "embedding_model_version"):
+    forest_version = str(filters.get("forest_version") or "")
+    for field in ("tenant_id", "user_id", "tree_id", "tree_type", "embedding_model_version"):
         value = filters.get(field)
         if value:
             clauses.append(f"{field} eq '{_escape_filter_value(str(value))}'")
+    if forest_version:
+        generation = _generation_from_forest_version(forest_version)
+        escaped_version = _escape_filter_value(forest_version)
+        if generation > 0:
+            clauses.append(
+                "("
+                f"(forest_version eq '{escaped_version}' and valid_from_generation eq null) or "
+                "("
+                f"valid_from_generation le {generation} and "
+                f"(valid_from_generation lt {generation} or valid_from_forest_version eq '{escaped_version}') and "
+                f"(valid_to_generation eq null or valid_to_generation gt {generation} or "
+                f"(valid_to_generation eq {generation} and valid_to_forest_version ne '{escaped_version}'))"
+                ")"
+                ")"
+            )
+        else:
+            clauses.append(f"forest_version eq '{escaped_version}'")
     return " and ".join(clauses)
+
+
+def _generation_from_forest_version(forest_version: str) -> int:
+    value = str(forest_version or "")
+    if value.startswith("g"):
+        digits = []
+        for char in value[1:]:
+            if not char.isdigit():
+                break
+            digits.append(char)
+        if digits:
+            return int("".join(digits))
+    return 0
 
 
 def _escape_filter_value(value: str) -> str:

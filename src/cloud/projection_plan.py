@@ -51,6 +51,7 @@ class ProjectionSkipPlan:
     unchanged: tuple[ProjectionRecordRef, ...]
     upsert: tuple[ProjectionRecordRef, ...]
     delete: tuple[ProjectionRecordRef, ...]
+    superseded: tuple[ProjectionRecordRef, ...] = ()
 
     @property
     def unchanged_keys(self) -> frozenset[ProjectionRecordKey]:
@@ -91,11 +92,17 @@ def plan_projection_skip(
             upsert.append(record)
 
     delete = [record for key, record in committed.items() if key not in projected]
+    superseded = [
+        committed[key]
+        for key, record in projected.items()
+        if key in committed and not _same_content(record, committed[key])
+    ]
 
     return ProjectionSkipPlan(
         unchanged=tuple(sorted(unchanged, key=_sort_key)),
         upsert=tuple(sorted(upsert, key=_sort_key)),
         delete=tuple(sorted(delete, key=_sort_key)),
+        superseded=tuple(sorted(superseded, key=_sort_key)),
     )
 
 

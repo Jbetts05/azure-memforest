@@ -215,13 +215,22 @@ def _recall_document_refs(scope: ProjectionBaselineScope, docs: Iterable[Mapping
         doc = dict(raw)
         if _skip_doc(scope, doc) or _skip_embedding_model(scope, doc):
             continue
+        if "valid_from_generation" not in doc:
+            continue
         tree_id = _required(doc, "tree_id", "recall_document")
         node_id = _required(doc, "node_id", "recall_document")
         yield ProjectionRecordRef(
             "recall_document",
             f"{tree_id}/{node_id}",
             content_hash=_required(doc, "content_sha256", "recall_document"),
-            metadata={"tree_id": tree_id, "node_id": node_id, "forest_version": scope.forest_version},
+            metadata={
+                "id": str(doc.get("id") or ""),
+                "tree_id": tree_id,
+                "node_id": node_id,
+                "forest_version": str(doc.get("forest_version") or scope.forest_version),
+                "valid_from_generation": doc.get("valid_from_generation"),
+                "valid_from_forest_version": doc.get("valid_from_forest_version"),
+            },
         )
 
 
@@ -368,15 +377,39 @@ async def _query_recall_docs(search_client: Any | None, scope: ProjectionBaselin
     clauses = [
         f"tenant_id eq '{_escape_filter_value(scope.tenant_id)}'",
         f"user_id eq '{_escape_filter_value(scope.user_id)}'",
-        f"forest_version eq '{_escape_filter_value(scope.forest_version)}'",
     ]
+    if scope.generation and scope.generation > 0:
+        escaped_version = _escape_filter_value(scope.forest_version)
+        clauses.append(
+            "("
+            f"valid_from_generation le {scope.generation} and "
+            f"(valid_from_generation lt {scope.generation} or valid_from_forest_version eq '{escaped_version}') and "
+            f"(valid_to_generation eq null or valid_to_generation gt {scope.generation} or "
+            f"(valid_to_generation eq {scope.generation} and valid_to_forest_version ne '{escaped_version}'))"
+            ")"
+        )
+    else:
+        clauses.append(f"forest_version eq '{_escape_filter_value(scope.forest_version)}'")
     if scope.embedding_model_version:
         clauses.append(f"embedding_model_version eq '{_escape_filter_value(scope.embedding_model_version)}'")
     results = await _maybe_await(
         search_client.search(
             search_text="*",
             filter=" and ".join(clauses),
-            select=["tenant_id", "user_id", "tree_id", "node_id", "forest_version", "embedding_model_version", "content_sha256"],
+            select=[
+                "id",
+                "tenant_id",
+                "user_id",
+                "tree_id",
+                "node_id",
+                "forest_version",
+                "valid_from_generation",
+                "valid_from_forest_version",
+                "valid_to_generation",
+                "valid_to_forest_version",
+                "embedding_model_version",
+                "content_sha256",
+            ],
             top=limit,
         )
     )

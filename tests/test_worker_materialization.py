@@ -310,6 +310,10 @@ class RecordingStore:
         self.calls.append(self.name)
         self.items.extend(documents)
 
+    def upsert_documents_delta(self, documents, *, close_refs=None, forest_version=None):
+        self.calls.append(self.name)
+        self.items.append({"upsert_documents": list(documents), "close_refs": list(close_refs or []), "forest_version": forest_version})
+
     def upsert_embeddings(self, embeddings, *, model_version):
         self.calls.append(self.name)
         self.items.append((dict(embeddings), model_version))
@@ -638,7 +642,10 @@ def _actual_projection_write_counts(tree_nodes, locations, recall, browse, summa
             len(item["upsert_locations"]) if isinstance(item, dict) else 1
             for item in locations.items
         ),
-        recall_documents=len(recall.items),
+        recall_documents=sum(
+            len(item["upsert_documents"]) if isinstance(item, dict) else 1
+            for item in recall.items
+        ),
         browse_embeddings=len(browse.items),
         summary_cache_entries=len(summary.items),
     )
@@ -1162,7 +1169,7 @@ async def test_materialization_handler_uses_authoritative_committed_baseline_for
     metadata = manifest_store.latest.metadata
     assert metadata["projection_plan_counts"]["tree_node_membership"] == {"unchanged": 2, "upsert": 0, "delete": 0}
     assert metadata["projection_plan_counts"]["fact_location"] == {"unchanged": 1, "upsert": 0, "delete": 0}
-    assert metadata["projection_plan_counts"]["recall_document"] == {"unchanged": 0, "upsert": 1, "delete": 0}
+    assert metadata["projection_plan_counts"]["recall_document"] == {"unchanged": 1, "upsert": 0, "delete": 0}
     assert metadata["projection_plan_counts"]["browse_embedding"] == {"unchanged": 1, "upsert": 0, "delete": 0}
     assert metadata["projection_plan_counts"]["summary_cache"] == {"unchanged": 1, "upsert": 0, "delete": 0}
     assert metadata["projection_plan_live_skipped_browse_embedding_count"] == 1
@@ -1206,7 +1213,7 @@ async def test_materialization_handler_baseline_failure_uses_full_structural_wri
 
 
 @pytest.mark.asyncio
-async def test_materialization_handler_actual_write_counts_show_pre_recall_mvcc_reduction() -> None:
+async def test_materialization_handler_actual_write_counts_show_incremental_reduction() -> None:
     full_calls = []
     full_tree_nodes = RecordingStore(full_calls, "tree_nodes")
     full_locations = RecordingStore(full_calls, "locations")
@@ -1280,7 +1287,7 @@ async def test_materialization_handler_actual_write_counts_show_pre_recall_mvcc_
     )
 
     assert full == ProjectionWriteCounts(stored_nodes=2, fact_locations=1, recall_documents=1, browse_embeddings=1, summary_cache_entries=1)
-    assert actual == ProjectionWriteCounts(stored_nodes=0, fact_locations=0, recall_documents=1, browse_embeddings=0, summary_cache_entries=0)
+    assert actual == ProjectionWriteCounts(stored_nodes=0, fact_locations=0, recall_documents=0, browse_embeddings=0, summary_cache_entries=0)
     assert result.ok
 
 

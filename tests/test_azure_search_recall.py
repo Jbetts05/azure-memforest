@@ -11,6 +11,7 @@ class FakeSearchClient:
     def __init__(self) -> None:
         self.uploaded = []
         self.deleted = []
+        self.merged = []
         self.search_calls = []
         self.results = []
 
@@ -19,6 +20,9 @@ class FakeSearchClient:
 
     def delete_documents(self, documents):
         self.deleted.extend(documents)
+
+    def merge_documents(self, documents):
+        self.merged.extend(documents)
 
     def search(self, **kwargs):
         self.search_calls.append(kwargs)
@@ -58,6 +62,8 @@ def test_azure_search_upsert_requires_embedding_and_dimension() -> None:
     )
     assert client.uploaded[0]["embedding"] == [0.1, 0.2]
     assert client.uploaded[0]["content_sha256"]
+    assert client.uploaded[0]["valid_from_generation"] == 0
+    assert client.uploaded[0]["valid_from_forest_version"] == "v1"
 
     bad = RecallDocument(
         tenant_id="tenant-1",
@@ -103,13 +109,85 @@ def test_azure_search_search_requires_tenant_filter_and_maps_results(monkeypatch
     candidates = index.search(
         [0.1, 0.2],
         top_k=1,
-        filters={"tenant_id": "tenant-1", "tree_type": "entity"},
+        filters={"tenant_id": "tenant-1", "tree_type": "entity", "forest_version": "g7-current"},
     )
 
     assert candidates[0].score == 0.75
     assert candidates[0].tree_id == "tree-1"
     assert "tenant_id eq 'tenant-1'" in client.search_calls[0]["filter"]
     assert "tree_type eq 'entity'" in client.search_calls[0]["filter"]
+    assert "valid_from_generation le 7" in client.search_calls[0]["filter"]
+    assert "valid_to_generation gt 7" in client.search_calls[0]["filter"]
+
+
+def test_azure_search_upsert_delta_closes_superseded_recall_documents() -> None:
+    client = FakeSearchClient()
+    index = AzureSearchRecallIndex(
+        endpoint="https://search.example",
+        index_name="memforest-recall",
+        vector_dimensions=2,
+        search_client=client,
+    )
+    close_ref = type(
+        "Ref",
+        (),
+        {
+            "metadata": {
+                "id": "old-doc",
+                "forest_version": "g6-old",
+            }
+        },
+    )()
+    new_doc = RecallDocument(
+        tenant_id="tenant-1",
+        user_id="user-1",
+        tree_id="tree-1",
+        node_id="node-1",
+        tree_type="entity",
+        forest_version="g7-current",
+        embedding_model_version="embed-v1",
+        summary="summary",
+        embedding=(0.1, 0.2),
+    )
+
+    index.upsert_documents_delta([new_doc], close_refs=[close_ref], forest_version="g7-current")
+
+    assert client.uploaded[0]["valid_from_generation"] == 7
+    assert client.merged == [
+        {
+            "id": "old-doc",
+            "valid_to_generation": 7,
+            "valid_to_forest_version": "g7-current",
+        }
+    ]
+
+
+def test_azure_search_upsert_delta_does_not_close_current_upsert_id() -> None:
+    client = FakeSearchClient()
+    index = AzureSearchRecallIndex(
+        endpoint="https://search.example",
+        index_name="memforest-recall",
+        vector_dimensions=2,
+        search_client=client,
+    )
+    new_doc = RecallDocument(
+        tenant_id="tenant-1",
+        user_id="user-1",
+        tree_id="tree-1",
+        node_id="node-1",
+        tree_type="entity",
+        forest_version="g7-current",
+        embedding_model_version="embed-v1",
+        summary="summary",
+        embedding=(0.1, 0.2),
+    )
+    current_id = recall_document_key(tenant_id="tenant-1", tree_id="tree-1", node_id="node-1", forest_version="g7-current")
+    close_ref = type("Ref", (), {"metadata": {"id": current_id}})()
+
+    index.upsert_documents_delta([new_doc], close_refs=[close_ref], forest_version="g7-current")
+
+    assert len(client.uploaded) == 1
+    assert client.merged == []
 
 
 def test_azure_search_delete_by_tree_is_tenant_scoped() -> None:

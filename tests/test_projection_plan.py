@@ -27,6 +27,7 @@ def test_projection_skip_plan_splits_unchanged_upsert_and_delete_by_content_hash
         }
     )
     assert plan.delete_keys == frozenset({ProjectionRecordKey("recall_document", "tree-old/root")})
+    assert [record.logical_id for record in plan.superseded] == ["fact-1/tree-1/node-1"]
 
 
 def test_projection_skip_plan_compares_content_ids_for_stable_bodies() -> None:
@@ -97,4 +98,3 @@ def test_projection_skip_plan_rejects_records_without_content_identity() -> None
             projected_records=[ProjectionRecordRef("recall_document", "tree-1/root")],
             retained_committed_records=[],
         )
-
