@@ -115,6 +115,7 @@ class CloudStateHydratingUserForestCore:
             if _cloud_state_missing_prerequisites(state):
                 raise CloudStateHydrationIncomplete("cloud state hydration is incomplete")
             self.last_hydration_result = apply_cloud_state_to_user_forest(self.user_forest, state)
+            self.user_forest._record_projection_baseline(forest_version)
         except Exception:
             if not self.fallback_to_snapshot or not _manifest_has_snapshot(manifest):
                 raise

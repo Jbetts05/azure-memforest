@@ -169,6 +169,7 @@ class UserForest:
         self._summary_cache: dict[str, str] = {}
         self._last_changed_tree_ids: frozenset[str] | None = None
         self._last_deleted_tree_ids: frozenset[str] = frozenset()
+        self._last_baseline_forest_version: str | None = None
 
     # ── ingest ────────────────────────────────────────────────────────────────
 
@@ -352,6 +353,7 @@ class UserForest:
                 summary_cache=dict(self._summary_cache),
                 changed_tree_ids=self._last_changed_tree_ids,
                 deleted_tree_ids=self._last_deleted_tree_ids,
+                baseline_forest_version=self._last_baseline_forest_version,
             )
 
     @property
@@ -567,6 +569,9 @@ class UserForest:
     def _record_projection_delta(self, *, changed_tree_ids: set[str], deleted_tree_ids: set[str]) -> None:
         self._last_changed_tree_ids = frozenset(changed_tree_ids)
         self._last_deleted_tree_ids = frozenset(deleted_tree_ids)
+
+    def _record_projection_baseline(self, forest_version: str | None) -> None:
+        self._last_baseline_forest_version = str(forest_version or "") or None
 
     def _refresh_node_index_for_trees(self, tree_ids: set[str]) -> None:
         from src.build.node_index import NodeEntry

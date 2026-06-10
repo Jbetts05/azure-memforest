@@ -600,6 +600,18 @@ def test_materialization_snapshot_injects_fact_embeddings_without_mutating_local
     assert snapshot.facts[0].metadata["embedding"] == _embedding(dim)
 
 
+def test_materialization_snapshot_preserves_cloud_hydration_baseline_after_delta(tmp_path) -> None:
+    user_forest = _user_forest(tmp_path, 4)
+
+    user_forest._record_projection_baseline("g7-baseline")
+    user_forest._mark_projection_delta_unknown()
+    user_forest._record_projection_delta(changed_tree_ids={"tree-1"}, deleted_tree_ids=set())
+    snapshot = user_forest.snapshot_for_materialization()
+
+    assert snapshot.baseline_forest_version == "g7-baseline"
+    assert snapshot.changed_tree_ids == frozenset({"tree-1"})
+
+
 def test_cloud_hydration_reembeds_fact_when_stored_embedding_dim_mismatches(tmp_path) -> None:
     dim = 4
     user_forest, client = _user_forest_with_client(tmp_path, dim)
@@ -673,6 +685,7 @@ async def test_cloud_state_core_hydrates_complete_cloud_state_without_snapshot(t
 
     assert core.last_hydration_result is not None
     assert core.last_hydration_result.used_snapshot_fallback is False
+    assert target.snapshot_for_materialization().baseline_forest_version == "v7"
     assert core.last_hydration_result.tree_count == 1
     assert core.last_hydration_result.fact_count == 1
     assert target._fact_manager.get_fact("fact_1") is not None
