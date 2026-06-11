@@ -53,6 +53,7 @@ async def test_projection_gc_executor_dry_run_audits_without_delete_callback() -
     assert events[1].user_id == "user-1"
     assert events[0].metadata["policy_enabled"] is True
     assert events[0].metadata["retention_count"] == 1
+    assert events[0].metadata["deletable_record_count"] == 0
     assert events[0].metadata["policy_live_delete_enabled"] is True
     assert events[0].metadata["execution_live_delete_enabled"] is False
 

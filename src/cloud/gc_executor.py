@@ -130,6 +130,7 @@ async def execute_projection_gc_plan(
             "retention_count": plan.retention_count,
             "policy_live_delete_enabled": plan.live_delete_enabled,
             "execution_live_delete_enabled": live_delete_enabled,
+            "deletable_record_count": len(plan.deletable_record_ids),
         },
     }
     audit_count = 0
@@ -194,6 +195,7 @@ def projection_gc_plan_sha256(plan: ProjectionGcPlan) -> str:
         "retained_forest_versions": sorted(plan.retained_forest_versions),
         "dropped_forest_versions": sorted(plan.dropped_forest_versions),
         "deletable_body_ids": sorted(plan.deletable_body_ids),
+        "deletable_record_ids": sorted(plan.deletable_record_ids),
         "policy_enabled": plan.policy_enabled,
         "retention_count": plan.retention_count,
         "live_delete_enabled": plan.live_delete_enabled,

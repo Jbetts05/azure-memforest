@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.cloud.gc_planner import ManifestRef, ProjectionGcPolicy, plan_projection_gc, plan_projection_gc_for_policy
+from src.cloud.gc_planner import ManifestRef, MvccProjectionRecordRef, ProjectionGcPolicy, plan_projection_gc, plan_projection_gc_for_policy
 
 
 def test_projection_gc_retains_latest_committed_generations_by_generation_order() -> None:
@@ -83,3 +83,64 @@ def test_projection_gc_policy_protects_latest_retained_versions() -> None:
     assert plan.dropped_forest_versions == frozenset({"v1"})
     assert plan.deletable_body_ids == frozenset({"body-old"})
     assert plan.live_delete_enabled is True
+
+
+def test_projection_gc_deletes_only_mvcc_records_not_visible_to_retained_manifests() -> None:
+    plan = plan_projection_gc(
+        [
+            ManifestRef("g1-old", generation=1),
+            ManifestRef("g2-mid", generation=2),
+            ManifestRef("g3-current", generation=3),
+        ],
+        retention_count=2,
+        all_body_ids=[],
+        retained_membership_body_ids=[],
+        mvcc_records=[
+            MvccProjectionRecordRef(
+                record_id="closed-before-retention",
+                record_kind="fact_location",
+                valid_from_generation=1,
+                valid_from_forest_version="g1-old",
+                valid_to_generation=2,
+                valid_to_forest_version="g2-mid",
+            ),
+            MvccProjectionRecordRef(
+                record_id="visible-at-retained-boundary",
+                record_kind="tree_node_membership",
+                valid_from_generation=1,
+                valid_from_forest_version="g1-old",
+                valid_to_generation=2,
+                valid_to_forest_version="other-g2-attempt",
+            ),
+            MvccProjectionRecordRef(
+                record_id="still-open",
+                record_kind="recall_document",
+                valid_from_generation=1,
+                valid_from_forest_version="g1-old",
+            ),
+        ],
+    )
+
+    assert plan.retained_forest_versions == frozenset({"g2-mid", "g3-current"})
+    assert plan.deletable_record_ids == frozenset({"closed-before-retention"})
+
+
+def test_projection_gc_keeps_legacy_records_out_of_mvcc_deletion() -> None:
+    plan = plan_projection_gc(
+        [ManifestRef("g2-current", generation=2)],
+        retention_count=1,
+        all_body_ids=[],
+        retained_membership_body_ids=[],
+        mvcc_records=[
+            MvccProjectionRecordRef(
+                record_id="legacy",
+                record_kind="recall_document",
+                valid_from_generation=None,
+                valid_from_forest_version=None,
+                valid_to_generation=1,
+                valid_to_forest_version="g1-old",
+            )
+        ],
+    )
+
+    assert plan.deletable_record_ids == frozenset()
