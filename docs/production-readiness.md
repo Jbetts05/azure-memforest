@@ -73,6 +73,40 @@ Production promotion must decide and document:
 - allowed inbound origins and API authentication policy;
 - redacted telemetry and trace retention.
 
+## Stable authentication gate
+
+Dev header auth is not a benchmark or production control. Promotion requires:
+
+- Entra JWT validation configured with non-empty tenant and audience values;
+- smoke tests using bearer tokens, not `AZURE_MEMFOREST_DEV_AUTH`;
+- no repeated Container App revision flips for auth during validation;
+- route tests proving unauthenticated memory access fails closed;
+- audit evidence that API dev auth is `False` after smoke completion.
+
+## Live GC approval gate
+
+Live projection GC must remain off until all of the following are true:
+
+- a dry-run report for the exact tenant/window has been reviewed;
+- the plan includes retained forest versions and a positive retention count;
+- retained tree membership body references are confirmed complete for every retained manifest;
+- both body and MVCC record delete callbacks are wired through audited execution;
+- the operator explicitly sets the live-delete execution flag;
+- rollback/restore expectations are documented for the affected tenant.
+
+Until this gate passes, only dry-run GC planning is approved.
+
+## Monitoring additions for P1 cloud checkpoint
+
+Add panels/alerts for:
+
+- cloud-hydration failures by reason (`missing_fact_ids`, missing node embeddings, SDK/read errors);
+- snapshot policy distribution (`always` vs `cloud_checkpoint`) by worker revision;
+- MVCC row growth by container and Search document growth over time;
+- projection plan counts (`unchanged`, `upsert`, `delete`, `superseded`) by surface;
+- retained/dropped generation counts from GC dry-run reports;
+- DLQ count and oldest DLQ message age after every validation run.
+
 ## CI/CD promotion and rollback
 
 Production promotion should follow:
