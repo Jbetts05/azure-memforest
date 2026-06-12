@@ -234,7 +234,7 @@ async def load_memtrees_from_tree_store(tree_store: Any) -> list[MemTree]:
                 tree_type=tree_type,
                 tree_key=str(metadata.get("tree_key") or tree_id),
                 label=str(metadata.get("tree_label") or metadata.get("tree_key") or tree_id),
-                k=int(metadata.get("k") or 3),
+                k=_tree_fanout_k(metadata, nodes),
                 root_node_id=root_node_id,
                 nodes=nodes,
                 session_leaves=session_leaves,
@@ -443,6 +443,14 @@ def _root_node_id(nodes: dict[str, MemTreeNode]) -> str:
     if len(roots) != 1:
         raise ValueError(f"expected exactly one root node, found {len(roots)}")
     return roots[0]
+
+
+def _tree_fanout_k(metadata: dict[str, Any], nodes: dict[str, MemTreeNode]) -> int:
+    configured = int(metadata.get("k") or 0)
+    if configured > 0:
+        return max(configured, 3)
+    observed = max((len(node.child_ids) for node in nodes.values() if node.level > 0), default=0)
+    return max(observed, 3)
 
 
 def _link_l0_leaves(nodes: dict[str, MemTreeNode]) -> None:

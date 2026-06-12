@@ -582,6 +582,57 @@ async def test_cloud_hydration_applies_multi_leaf_entity_tree(tmp_path) -> None:
     assert tree.nodes["leaf-b"].prev_leaf_id == "leaf-a"
 
 
+@pytest.mark.asyncio
+async def test_cloud_hydration_infers_tree_k_from_committed_fanout(tmp_path) -> None:
+    dim = 4
+    user_forest = _user_forest(tmp_path, dim)
+    state = await load_cloud_user_forest_state(
+        tree_store=FakeTreeStore(
+            {
+                "tree-1": [
+                    _node("root", child_ids=("leaf-a", "leaf-b", "leaf-c", "leaf-d")),
+                    _node_with_time("leaf-a", 1.0, parent_id="root", level="L0", child_ids=("fact_a",), tree_id="tree-1"),
+                    _node_with_time("leaf-b", 2.0, parent_id="root", level="L0", child_ids=("fact_b",), tree_id="tree-1"),
+                    _node_with_time("leaf-c", 3.0, parent_id="root", level="L0", child_ids=("fact_c",), tree_id="tree-1"),
+                    _node_with_time("leaf-d", 4.0, parent_id="root", level="L0", child_ids=("fact_d",), tree_id="tree-1"),
+                ]
+            }
+        ),
+        fact_store=FakeFactStore({fact_id: _fact(fact_id, dim) for fact_id in ("fact_a", "fact_b", "fact_c", "fact_d")}),
+        summary_cache=FakeSummaryCache({_content_key(frozenset({"fact_a", "fact_b", "fact_c", "fact_d"})): "cached root"}),
+        browse_embedding_store=FakeBrowseEmbeddingStore({"root": _embedding(dim)}),
+    )
+
+    apply_cloud_state_to_user_forest(user_forest, state)
+
+    assert user_forest._tree_store.get("tree-1").k == 4
+
+
+@pytest.mark.asyncio
+async def test_cloud_hydration_honors_persisted_k_for_fanout_validation(tmp_path) -> None:
+    dim = 4
+    user_forest = _user_forest(tmp_path, dim)
+    root = _node("root", child_ids=("leaf-a", "leaf-b", "leaf-c", "leaf-d"))
+    root = replace(root, metadata={**root.metadata, "k": 3})
+
+    trees = await load_memtrees_from_tree_store(
+        FakeTreeStore(
+            {
+                "tree-1": [
+                    root,
+                    _node_with_time("leaf-a", 1.0, parent_id="root", level="L0", child_ids=("fact_a",), tree_id="tree-1"),
+                    _node_with_time("leaf-b", 2.0, parent_id="root", level="L0", child_ids=("fact_b",), tree_id="tree-1"),
+                    _node_with_time("leaf-c", 3.0, parent_id="root", level="L0", child_ids=("fact_c",), tree_id="tree-1"),
+                    _node_with_time("leaf-d", 4.0, parent_id="root", level="L0", child_ids=("fact_d",), tree_id="tree-1"),
+                ]
+            }
+        )
+    )
+
+    with pytest.raises(ValueError, match="fanout 4 exceeds k=3"):
+        apply_cloud_state_to_user_forest(user_forest, CloudUserForestState(trees=trees))
+
+
 def test_cloud_hydration_uses_stored_fact_embeddings_without_reembedding(tmp_path) -> None:
     dim = 4
     user_forest, client = _user_forest_with_client(tmp_path, dim)

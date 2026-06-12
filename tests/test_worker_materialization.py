@@ -157,6 +157,7 @@ def test_project_forest_snapshot_tags_cloud_artifacts() -> None:
     assert projection.recall_documents[0].embedding_model_version == "embed-v1"
     assert set(projection.browse_embeddings) == {"entity-root", "entity-leaf", "session-root"}
     assert projection.summary_cache_entries[0].content_hash == "abc"
+    assert {node.metadata["k"] for node in projection.stored_nodes} == {4}
     assert b'"forest_version":"v2"' in projection.snapshot_payload
     assert projection.changed_tree_ids == frozenset({"entity:alice"})
     assert projection.deleted_tree_ids == frozenset({"entity:old"})
