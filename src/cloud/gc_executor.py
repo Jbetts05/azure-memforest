@@ -39,6 +39,7 @@ class ProjectionGcAuditEvent:
     dry_run: bool
     reason: str
     body_id: str | None = None
+    record_id: str | None = None
     tenant_id: str | None = None
     user_id: str | None = None
     retained_forest_versions: tuple[str, ...] = field(default_factory=tuple)
@@ -59,17 +60,21 @@ class ProjectionGcExecutionResult:
     dry_run: bool
     plan_sha256: str
     intended_body_ids: tuple[str, ...]
+    intended_record_ids: tuple[str, ...] = field(default_factory=tuple)
     deleted_body_ids: tuple[str, ...] = field(default_factory=tuple)
+    deleted_record_ids: tuple[str, ...] = field(default_factory=tuple)
     skipped_body_ids: tuple[str, ...] = field(default_factory=tuple)
+    skipped_record_ids: tuple[str, ...] = field(default_factory=tuple)
     audit_event_count: int = 0
 
 
 class ProjectionGcExecutionError(RuntimeError):
     """Raised after a deletion callback fails and a failure audit was attempted."""
 
-    def __init__(self, body_id: str, message: str) -> None:
+    def __init__(self, item_id: str, message: str) -> None:
         super().__init__(message)
-        self.body_id = body_id
+        self.item_id = item_id
+        self.body_id = item_id
 
 
 async def execute_projection_gc_plan(
@@ -78,6 +83,7 @@ async def execute_projection_gc_plan(
     audit_callback: ProjectionGcAuditCallback,
     reason: str,
     delete_callback: ProjectionGcDeleteCallback | None = None,
+    record_delete_callback: ProjectionGcDeleteCallback | None = None,
     dry_run: bool = True,
     live_delete_enabled: bool = False,
     tenant_id: str | None = None,
@@ -110,10 +116,15 @@ async def execute_projection_gc_plan(
             raise ValueError("retention_count must be positive when dry_run is False")
         if not plan.retained_forest_versions:
             raise ValueError("at least one retained forest version is required when dry_run is False")
+        if plan.deletable_body_ids and not plan.membership_coverage_verified:
+            raise ValueError("retained membership coverage must be verified before live body deletion")
         if delete_callback is None:
             raise ValueError("delete_callback is required when dry_run is False")
+        if plan.deletable_record_ids and record_delete_callback is None:
+            raise ValueError("record_delete_callback is required when dry_run is False and record deletions are planned")
 
     body_ids = tuple(sorted(plan.deletable_body_ids))
+    record_ids = tuple(sorted(plan.deletable_record_ids))
     plan_sha256 = projection_gc_plan_sha256(plan)
     common = {
         "plan_sha256": plan_sha256,
@@ -131,6 +142,7 @@ async def execute_projection_gc_plan(
             "policy_live_delete_enabled": plan.live_delete_enabled,
             "execution_live_delete_enabled": live_delete_enabled,
             "deletable_record_count": len(plan.deletable_record_ids),
+            "membership_coverage_verified": plan.membership_coverage_verified,
         },
     }
     audit_count = 0
@@ -173,6 +185,41 @@ async def execute_projection_gc_plan(
         await _call_audit(audit_callback, ProjectionGcAuditEvent(action="delete_succeeded", body_id=body_id, **common))
         audit_count += 1
 
+    deleted_records: list[str] = []
+    skipped_records: list[str] = []
+    for record_id in record_ids:
+        await _call_audit(audit_callback, ProjectionGcAuditEvent(action="delete_intent", record_id=record_id, **common))
+        audit_count += 1
+        if dry_run:
+            skipped_records.append(record_id)
+            await _call_audit(
+                audit_callback,
+                ProjectionGcAuditEvent(action="delete_skipped_dry_run", record_id=record_id, **common),
+            )
+            audit_count += 1
+            continue
+
+        try:
+            await _maybe_await(record_delete_callback(record_id))  # type: ignore[misc]
+        except Exception as exc:
+            try:
+                await _call_audit(
+                    audit_callback,
+                    ProjectionGcAuditEvent(
+                        action="delete_failed",
+                        record_id=record_id,
+                        metadata={**dict(metadata or {}), "error_type": type(exc).__name__},
+                        **{key: value for key, value in common.items() if key != "metadata"},
+                    ),
+                )
+            except Exception:
+                pass
+            raise ProjectionGcExecutionError(record_id, f"Projection GC record deletion failed for {record_id!r}.") from exc
+
+        deleted_records.append(record_id)
+        await _call_audit(audit_callback, ProjectionGcAuditEvent(action="delete_succeeded", record_id=record_id, **common))
+        audit_count += 1
+
     await _call_audit(audit_callback, ProjectionGcAuditEvent(action="plan_completed", **common))
     audit_count += 1
 
@@ -180,8 +227,11 @@ async def execute_projection_gc_plan(
         dry_run=dry_run,
         plan_sha256=plan_sha256,
         intended_body_ids=body_ids,
+        intended_record_ids=record_ids,
         deleted_body_ids=tuple(deleted),
+        deleted_record_ids=tuple(deleted_records),
         skipped_body_ids=tuple(skipped),
+        skipped_record_ids=tuple(skipped_records),
         audit_event_count=audit_count,
     )
 
@@ -196,6 +246,7 @@ def projection_gc_plan_sha256(plan: ProjectionGcPlan) -> str:
         "dropped_forest_versions": sorted(plan.dropped_forest_versions),
         "deletable_body_ids": sorted(plan.deletable_body_ids),
         "deletable_record_ids": sorted(plan.deletable_record_ids),
+        "membership_coverage_verified": plan.membership_coverage_verified,
         "policy_enabled": plan.policy_enabled,
         "retention_count": plan.retention_count,
         "live_delete_enabled": plan.live_delete_enabled,

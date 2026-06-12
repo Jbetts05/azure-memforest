@@ -44,6 +44,7 @@ class ProjectionGcPlan:
     dropped_forest_versions: frozenset[str]
     deletable_body_ids: frozenset[str]
     deletable_record_ids: frozenset[str] = frozenset()
+    membership_coverage_verified: bool = False
     policy_enabled: bool = False
     retention_count: int = 0
     live_delete_enabled: bool = False
@@ -55,6 +56,7 @@ def plan_projection_gc(
     retention_count: int,
     all_body_ids: Iterable[str],
     retained_membership_body_ids: Iterable[str],
+    retained_membership_forest_versions: Iterable[str] | None = None,
     mvcc_records: Iterable[MvccProjectionRecordRef] = (),
     live_delete_enabled: bool = False,
 ) -> ProjectionGcPlan:
@@ -63,6 +65,9 @@ def plan_projection_gc(
     Body IDs are retained if referenced by any retained membership across the
     retained forest-version set. Browse embeddings are intentionally excluded
     because they are logical rows keyed by node/model, not versioned bodies.
+    When ``retained_membership_forest_versions`` is provided, it is an explicit
+    caller attestation that ``retained_membership_body_ids`` was read for every
+    retained version; live deletion relies on that coverage contract.
     """
 
     if retention_count < 1:
@@ -75,6 +80,12 @@ def plan_projection_gc(
     retained = frozenset(manifest.forest_version for manifest in committed[:retention_count])
     dropped = frozenset(manifest.forest_version for manifest in committed[retention_count:])
     retained_manifests = tuple(committed[:retention_count])
+    membership_coverage_verified = retained_membership_forest_versions is not None
+    if retained_membership_forest_versions is not None:
+        covered_versions = frozenset(version for version in retained_membership_forest_versions if version)
+        missing_versions = retained - covered_versions
+        if missing_versions:
+            raise ValueError(f"retained membership body refs missing retained forest versions: {sorted(missing_versions)}")
     referenced = {body_id for body_id in retained_membership_body_ids if body_id}
     deletable = frozenset(body_id for body_id in all_body_ids if body_id and body_id not in referenced)
     deletable_records = frozenset(
@@ -87,6 +98,7 @@ def plan_projection_gc(
         dropped_forest_versions=dropped,
         deletable_body_ids=deletable,
         deletable_record_ids=deletable_records,
+        membership_coverage_verified=membership_coverage_verified,
         policy_enabled=True,
         retention_count=retention_count,
         live_delete_enabled=live_delete_enabled,
@@ -99,6 +111,7 @@ def plan_projection_gc_for_policy(
     policy: ProjectionGcPolicy,
     all_body_ids: Iterable[str],
     retained_membership_body_ids: Iterable[str],
+    retained_membership_forest_versions: Iterable[str] | None = None,
     mvcc_records: Iterable[MvccProjectionRecordRef] = (),
 ) -> ProjectionGcPlan:
     """Plan projection GC only when an explicit policy enables it."""
@@ -117,6 +130,7 @@ def plan_projection_gc_for_policy(
         retention_count=policy.retention_count,
         all_body_ids=all_body_ids,
         retained_membership_body_ids=retained_membership_body_ids,
+        retained_membership_forest_versions=retained_membership_forest_versions,
         mvcc_records=mvcc_records,
         live_delete_enabled=policy.live_delete_enabled,
     )

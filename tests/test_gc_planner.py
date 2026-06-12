@@ -41,6 +41,39 @@ def test_projection_gc_keeps_body_referenced_by_any_retained_membership() -> Non
     assert plan.deletable_body_ids == frozenset({"old-body"})
 
 
+def test_projection_gc_requires_membership_refs_for_all_retained_versions_when_declared() -> None:
+    with pytest.raises(ValueError, match="missing retained forest versions"):
+        plan_projection_gc(
+            [
+                ManifestRef("v1", generation=1),
+                ManifestRef("v2", generation=2),
+                ManifestRef("v3", generation=3),
+            ],
+            retention_count=2,
+            all_body_ids=["body-old", "body-current"],
+            retained_membership_body_ids=["body-current"],
+            retained_membership_forest_versions=["v3"],
+        )
+
+
+def test_projection_gc_accepts_complete_retained_membership_version_coverage() -> None:
+    plan = plan_projection_gc(
+        [
+            ManifestRef("v1", generation=1),
+            ManifestRef("v2", generation=2),
+            ManifestRef("v3", generation=3),
+        ],
+        retention_count=2,
+        all_body_ids=["body-old", "body-current"],
+        retained_membership_body_ids=["body-current"],
+        retained_membership_forest_versions=["v2", "v3"],
+    )
+
+    assert plan.retained_forest_versions == frozenset({"v2", "v3"})
+    assert plan.deletable_body_ids == frozenset({"body-old"})
+    assert plan.membership_coverage_verified is True
+
+
 def test_projection_gc_rejects_empty_retention() -> None:
     with pytest.raises(ValueError, match="retention_count"):
         plan_projection_gc([], retention_count=0, all_body_ids=[], retained_membership_body_ids=[])

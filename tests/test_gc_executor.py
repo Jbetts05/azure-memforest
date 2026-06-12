@@ -16,6 +16,20 @@ def _plan() -> ProjectionGcPlan:
         retained_forest_versions=frozenset({"v2"}),
         dropped_forest_versions=frozenset({"v1"}),
         deletable_body_ids=frozenset({"body-b", "body-a"}),
+        membership_coverage_verified=True,
+        policy_enabled=True,
+        retention_count=1,
+        live_delete_enabled=True,
+    )
+
+
+def _plan_with_records() -> ProjectionGcPlan:
+    return ProjectionGcPlan(
+        retained_forest_versions=frozenset({"v2"}),
+        dropped_forest_versions=frozenset({"v1"}),
+        deletable_body_ids=frozenset({"body-a"}),
+        deletable_record_ids=frozenset({"record-b", "record-a"}),
+        membership_coverage_verified=True,
         policy_enabled=True,
         retention_count=1,
         live_delete_enabled=True,
@@ -56,6 +70,26 @@ async def test_projection_gc_executor_dry_run_audits_without_delete_callback() -
     assert events[0].metadata["deletable_record_count"] == 0
     assert events[0].metadata["policy_live_delete_enabled"] is True
     assert events[0].metadata["execution_live_delete_enabled"] is False
+    assert events[0].metadata["membership_coverage_verified"] is True
+
+
+@pytest.mark.asyncio
+async def test_projection_gc_executor_dry_run_audits_record_deletions() -> None:
+    events: list[ProjectionGcAuditEvent] = []
+
+    result = await execute_projection_gc_plan(
+        plan=_plan_with_records(),
+        audit_callback=events.append,
+        reason="retention_window",
+        dry_run=True,
+    )
+
+    assert result.intended_body_ids == ("body-a",)
+    assert result.intended_record_ids == ("record-a", "record-b")
+    assert result.skipped_body_ids == ("body-a",)
+    assert result.skipped_record_ids == ("record-a", "record-b")
+    assert [event.record_id for event in events if event.record_id] == ["record-a", "record-a", "record-b", "record-b"]
+    assert events[0].metadata["deletable_record_count"] == 2
 
 
 @pytest.mark.asyncio
@@ -128,6 +162,33 @@ async def test_projection_gc_executor_requires_plan_audit_reason_and_delete_call
             live_delete_enabled=True,
         )
 
+    with pytest.raises(ValueError, match="membership coverage"):
+        await execute_projection_gc_plan(
+            plan=ProjectionGcPlan(
+                retained_forest_versions=frozenset({"v2"}),
+                dropped_forest_versions=frozenset({"v1"}),
+                deletable_body_ids=frozenset({"body-a"}),
+                policy_enabled=True,
+                retention_count=1,
+                live_delete_enabled=True,
+            ),
+            audit_callback=lambda event: None,
+            delete_callback=lambda body_id: None,
+            reason="retention_window",
+            dry_run=False,
+            live_delete_enabled=True,
+        )
+
+    with pytest.raises(ValueError, match="record_delete_callback"):
+        await execute_projection_gc_plan(
+            plan=_plan_with_records(),
+            audit_callback=lambda event: None,
+            delete_callback=lambda body_id: None,
+            reason="retention_window",
+            dry_run=False,
+            live_delete_enabled=True,
+        )
+
 
 @pytest.mark.asyncio
 async def test_projection_gc_executor_deletes_only_after_intent_audit() -> None:
@@ -161,6 +222,29 @@ async def test_projection_gc_executor_deletes_only_after_intent_audit() -> None:
         "delete_succeeded",
         "plan_completed",
     ]
+
+
+@pytest.mark.asyncio
+async def test_projection_gc_executor_deletes_records_after_body_deletions() -> None:
+    events: list[ProjectionGcAuditEvent] = []
+    deleted_bodies: list[str] = []
+    deleted_records: list[str] = []
+
+    result = await execute_projection_gc_plan(
+        plan=_plan_with_records(),
+        audit_callback=events.append,
+        delete_callback=deleted_bodies.append,
+        record_delete_callback=deleted_records.append,
+        reason="retention_window",
+        dry_run=False,
+        live_delete_enabled=True,
+    )
+
+    assert deleted_bodies == ["body-a"]
+    assert deleted_records == ["record-a", "record-b"]
+    assert result.deleted_body_ids == ("body-a",)
+    assert result.deleted_record_ids == ("record-a", "record-b")
+    assert [event.record_id for event in events if event.record_id and event.action == "delete_succeeded"] == ["record-a", "record-b"]
 
 
 @pytest.mark.asyncio
