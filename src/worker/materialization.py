@@ -1436,6 +1436,7 @@ def _tree_node_stable_content_hash(node: StoredTreeNode) -> str:
 
 def _tree_node_stable_body_id(node: StoredTreeNode) -> str:
     return tree_node_body_content_id(
+        tenant_user_key=f"{node.tenant_id}:{node.user_id}" if node.tenant_id and node.user_id else "",
         tree_id=node.tree_id,
         node_id=node.node_id,
         content_sha256=_tree_node_stable_content_hash(node),

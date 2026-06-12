@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.cloud.projection_plan import ProjectionRecordKey, ProjectionRecordRef, plan_projection_skip
+from src.cloud.projection_plan import ProjectionRecordKey, ProjectionRecordRef, plan_projection_skip, tree_node_body_content_id
 
 
 def test_projection_skip_plan_splits_unchanged_upsert_and_delete_by_content_hash() -> None:
@@ -65,6 +65,23 @@ def test_projection_skip_plan_compares_content_ids_for_stable_bodies() -> None:
     assert plan.unchanged_keys == frozenset({ProjectionRecordKey("tree_node_membership", "tree-1/node-1")})
     assert plan.upsert_keys == frozenset({ProjectionRecordKey("tree_node_membership", "tree-1/node-2")})
     assert plan.delete == ()
+
+
+def test_tree_node_body_content_id_is_namespaced_by_tenant_user() -> None:
+    first = tree_node_body_content_id(
+        tenant_user_key="tenant-a:user-a",
+        tree_id="tree-1",
+        node_id="node-1",
+        content_sha256="same-content",
+    )
+    second = tree_node_body_content_id(
+        tenant_user_key="tenant-b:user-b",
+        tree_id="tree-1",
+        node_id="node-1",
+        content_sha256="same-content",
+    )
+
+    assert first != second
 
 
 def test_projection_skip_plan_treats_empty_committed_metadata_as_all_upserts() -> None:

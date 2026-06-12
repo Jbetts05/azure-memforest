@@ -66,6 +66,16 @@ def _store(container=None, *, forest_version="v1", model_version="embed-v1"):
     )
 
 
+def _store_for_user(container, user_id: str, *, forest_version="v1", model_version="embed-v1"):
+    return CosmosBrowseEmbeddingStore(
+        container,
+        tenant_id="tenant-1",
+        user_id=user_id,
+        forest_version=forest_version,
+        embedding_model_version=model_version,
+    )
+
+
 @pytest.mark.asyncio
 async def test_browse_embedding_store_round_trips_scoped_embeddings() -> None:
     store = _store()
@@ -90,6 +100,22 @@ async def test_browse_embedding_store_reuses_unchanged_embedding_across_forest_v
     )
 
     assert await reader.get_embedding("node-1") == [0.1]
+
+
+@pytest.mark.asyncio
+async def test_browse_embedding_store_namespaces_ids_by_tenant_user() -> None:
+    container = FakeContainer()
+    first = _store_for_user(container, "user-1")
+    second = _store_for_user(container, "user-2")
+    record = BrowseEmbeddingRecord(node_id="node-1", tree_id="tree-1", tree_type="entity", embedding=(0.1,))
+
+    await first.upsert_records([record], model_version="embed-v1")
+    await second.upsert_records([record], model_version="embed-v1")
+
+    assert len(container.items) == 2
+    assert len({item["id"] for item in container.items.values()}) == 2
+    assert await first.get_embedding("node-1") == [0.1]
+    assert await second.get_embedding("node-1") == [0.1]
 
 
 @pytest.mark.asyncio

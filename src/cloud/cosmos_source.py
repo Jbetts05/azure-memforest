@@ -452,7 +452,7 @@ def _tree_node_body_doc(node: StoredTreeNode, tenant_user_key: str) -> dict[str,
     content = _tree_node_content(node)
     content_hash = _stable_hash(content)
     return {
-        "id": _tree_node_body_id(node.tree_id, node.node_id, content_hash),
+        "id": _tree_node_body_id(tenant_user_key, node.tree_id, node.node_id, content_hash),
         "doc_kind": "tree_node_body",
         "schema_version": node.schema_version,
         "tenant_id": node.tenant_id,
@@ -586,8 +586,8 @@ def _tree_node_id(tree_id: str, node_id: str, forest_version: str) -> str:
     return _hash_id("tree_node", tree_id, node_id, forest_version)
 
 
-def _tree_node_body_id(tree_id: str, node_id: str, content_sha256: str) -> str:
-    return _hash_id("tree_node_body", tree_id, node_id, content_sha256)
+def _tree_node_body_id(tenant_user_key: str, tree_id: str, node_id: str, content_sha256: str) -> str:
+    return _hash_id("tree_node_body", tenant_user_key, tree_id, node_id, content_sha256)
 
 
 def _tree_node_logical_id(tree_id: str, node_id: str) -> str:

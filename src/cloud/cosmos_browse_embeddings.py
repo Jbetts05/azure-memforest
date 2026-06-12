@@ -48,7 +48,12 @@ class CosmosBrowseEmbeddingStore:
 
     async def get_embedding(self, node_id: str) -> list[float] | None:
         try:
-            item = await _maybe_await(self.container.read_item(item=_embedding_id(node_id, self.embedding_model_version), partition_key=self.tenant_user_key))
+            item = await _maybe_await(
+                self.container.read_item(
+                    item=_embedding_id(self.tenant_user_key, node_id, self.embedding_model_version),
+                    partition_key=self.tenant_user_key,
+                )
+            )
         except Exception as exc:
             if _is_not_found(exc):
                 return None
@@ -112,7 +117,7 @@ class CosmosBrowseEmbeddingStore:
         try:
             item = await _maybe_await(
                 self.container.read_item(
-                    item=_embedding_id(node_id, self.embedding_model_version),
+                    item=_embedding_id(self.tenant_user_key, node_id, self.embedding_model_version),
                     partition_key=self.tenant_user_key,
                 )
             )
@@ -127,7 +132,7 @@ class CosmosBrowseEmbeddingStore:
 
 def _record_to_doc(record: BrowseEmbeddingRecord, store: CosmosBrowseEmbeddingStore) -> dict[str, Any]:
     return {
-        "id": _embedding_id(record.node_id, store.embedding_model_version),
+        "id": _embedding_id(store.tenant_user_key, record.node_id, store.embedding_model_version),
         "schema_version": SCHEMA_VERSION,
         "tenant_id": store.tenant_id,
         "user_id": store.user_id,
@@ -144,8 +149,8 @@ def _record_to_doc(record: BrowseEmbeddingRecord, store: CosmosBrowseEmbeddingSt
     }
 
 
-def _embedding_id(node_id: str, embedding_model_version: str) -> str:
-    digest = hashlib.sha256(f"{node_id}\x1f{embedding_model_version}".encode("utf-8")).hexdigest()
+def _embedding_id(tenant_user_key: str, node_id: str, embedding_model_version: str) -> str:
+    digest = hashlib.sha256(f"{tenant_user_key}\x1f{node_id}\x1f{embedding_model_version}".encode("utf-8")).hexdigest()
     return f"browse_embedding_{digest}"
 
 

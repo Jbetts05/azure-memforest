@@ -9,7 +9,7 @@ from src.cloud.cosmos_leases import LeaseConflict
 from src.cloud.contracts import Lease
 from src.cloud.cosmos_manifests import ForestManifest
 from src.cloud.projection_baseline import CommittedProjectionBaseline
-from src.cloud.projection_plan import ProjectionRecordRef
+from src.cloud.projection_plan import ProjectionRecordRef, tree_node_body_content_id
 from src.evaluation.incremental_cloud_validation import ProjectionWriteCounts, compare_projection_write_reduction
 from src.forest.user_forest import ForestMaterializationSnapshot
 from src.service.auth import ActorContext, TenantContext
@@ -158,6 +158,18 @@ def test_project_forest_snapshot_tags_cloud_artifacts() -> None:
     assert set(projection.browse_embeddings) == {"entity-root", "entity-leaf", "session-root"}
     assert projection.summary_cache_entries[0].content_hash == "abc"
     assert {node.metadata["k"] for node in projection.stored_nodes} == {4}
+    entity_root = next(node for node in projection.stored_nodes if node.node_id == "entity-root")
+    entity_root_ref = next(
+        record
+        for record in projection.projection_skip_plans["tree_node_membership"].upsert
+        if record.logical_id == "entity:alice/entity-root"
+    )
+    assert entity_root_ref.content_id == tree_node_body_content_id(
+        tenant_user_key="tenant-1:user-1",
+        tree_id=entity_root.tree_id,
+        node_id=entity_root.node_id,
+        content_sha256=entity_root_ref.content_hash,
+    )
     assert b'"forest_version":"v2"' in projection.snapshot_payload
     assert projection.changed_tree_ids == frozenset({"entity:alice"})
     assert projection.deleted_tree_ids == frozenset({"entity:old"})
