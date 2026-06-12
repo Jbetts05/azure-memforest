@@ -2,6 +2,25 @@
 
 This document records the remaining production workstreams after the Azure-MemForest dev environment reached live ingest/query smoke success.
 
+## P1 cloud-state status
+
+P1 incremental cloud state has been achieved at code/dev-smoke level. The dev
+worker has run with cloud checkpoint enabled and validated:
+
+- cloud-state hydration from snapshotless committed manifests;
+- generation-range MVCC for tree memberships, fact locations, and Azure AI
+  Search recall documents;
+- exact fact-vector replay during cloud hydration;
+- durable summary-cache loading with cache misses treated as a rebuild
+  optimization rather than a correctness blocker;
+- delete-session orphan propagation after cloud hydration;
+- targeted A/B smoke between snapshot-always and cloud-checkpoint paths;
+- audited dry-run GC planning for tree bodies and closed MVCC records.
+
+This does **not** mean production is ready. Before production promotion, complete
+the gates below: live GC runbook/approval, stable Entra auth, DLQ hygiene,
+broader benchmark parity, and load/soak validation.
+
 ## Operational dashboards and alerts
 
 Minimum dashboard panels:
@@ -38,6 +57,11 @@ Foreground writes never hard-delete old committed projections. A separate compac
 - verify Search, Cosmos, Blob, and cache state converge before marking erasure complete;
 - emit an audit record containing identifiers, counts, timestamps, and operator/job identity, without raw memory payloads.
 
+Current state: GC planning and audited dry-run execution exist, including
+record-level MVCC delete planning and body-delete membership coverage checks.
+Live deletion must stay disabled until an operator-approved runbook wires the
+delete callbacks and reviews the dry-run report for the target tenant/window.
+
 ## Network and key security
 
 Production promotion must decide and document:
@@ -61,6 +85,20 @@ Production promotion should follow:
 6. Promote the same digest to the next environment.
 7. Keep previous revision available for rollback.
 8. Roll back on failed readiness, DLQ growth, manifest commit failures, or query smoke failure.
+
+For cloud-checkpoint rollback in dev, set the worker environment back to:
+
+```text
+AZURE_MEMFOREST_SNAPSHOT_POLICY=always
+AZURE_MEMFOREST_CLOUD_CHECKPOINT_HYDRATION_SUPPORTED=False
+```
+
+See `docs/cloud-incremental-validation.md` for the concrete dev rollback
+command.
+
+API dev header auth is for short-lived dev smoke only. Repeated revision
+toggling caused readiness instability during validation; production promotion
+must use stable Entra auth rather than dev-auth revision flips.
 
 ## Load, backup, and DR runbooks
 
