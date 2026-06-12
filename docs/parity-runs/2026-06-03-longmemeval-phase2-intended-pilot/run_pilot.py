@@ -120,6 +120,8 @@ def api_headers(*, user_id: str = USER, json_body: bool = False, idem: str | Non
         headers["x-benchmark-auth"] = benchmark_secret()
     elif AUTH_MODE == "dev":
         headers["x-auth-roles"] = "memory.benchmark"
+    elif AUTH_MODE == "entra":
+        headers["Authorization"] = f"Bearer {token(API_SCOPE)}"
     else:
         raise RuntimeError(f"unsupported PHASE2_AUTH_MODE={AUTH_MODE!r}")
     if json_body:
