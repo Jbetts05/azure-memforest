@@ -82,6 +82,15 @@ Already implemented:
 
 Backup and restore runbooks must include periodic restore drills; untested backups are not an operational control.
 
+## DLQ hygiene note
+
+The P1 dev DLQ was cleared after exporting message metadata to a session
+artifact. That exploratory export did not include message bodies, so it is not a
+replay-capable artifact. Future DLQ hygiene must use
+`scripts/export_servicebus_dlq.py`, which preserves message bodies as base64,
+normalizes application properties, and records completion receipts before any
+destructive clear.
+
 ## Dev-to-production risks
 
 The current dev deployment intentionally uses public network access for faster iteration. Production may require private endpoints, VNet integration, DNS changes, and different SKU choices. These changes can break readiness probes and SDK connectivity, so they must be tested in a production-shaped environment before launch.
