@@ -1,0 +1,177 @@
+{
+  "api_version": {
+    "name": "azure-memforest-api",
+    "version": "0.1.0",
+    "git_sha": "fd645abc7f78",
+    "image_dirty": "false"
+  },
+  "queue_before": {
+    "active": 0,
+    "deadletter": 0,
+    "scheduled": 0
+  },
+  "decisions": {
+    "schema_version": 1,
+    "run": {
+      "id": "2026-06-03-longmemeval-phase2-intended-pilot",
+      "date_utc": "2026-06-03T02:04:03Z",
+      "title": "LongMemEval-S Phase 2 intended-stack pilot",
+      "goal": "Lock the 10-case intended-stack pilot plan after Phase 1 passed on the GPT-5-family stack.",
+      "status": "succeeded",
+      "owner": "local"
+    },
+    "purpose": "internal intended-stack infrastructure and quality pilot",
+    "not_a_longmemeval_score": true,
+    "not_a_score_reason": "This is a 10-case deterministic pilot with bounded haystacks and capped scalar gold answers. It is not statistically representative and must not be reported as an official or partial LongMemEval-S score.",
+    "source": {
+      "dataset": "LongMemEval-S cleaned",
+      "source_url": "https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/main/longmemeval_s_cleaned.json",
+      "source_sha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+      "total_cases": 500
+    },
+    "code": {
+      "git_sha": "0c235c1a36c8",
+      "image": "memforestexampleacr.azurecr.io/azure-memforest-api:0c235c1a36c8",
+      "image_digest": "sha256:d0091a343bdf20248def3fa4485225d2274a22e866e763d557a80453a0c6b26a",
+      "dirty": false
+    },
+    "intended_stack": {
+      "endpoint": "https://memforest-example-foundry.cognitiveservices.azure.com/",
+      "default_chat": "gpt-5.4-mini-memory",
+      "extraction": "gpt-5.4-mini-memory",
+      "dedupe": "gpt-5.4-mini-memory",
+      "summarization_env": "gpt-5.4",
+      "planner": "gpt-5.4-mini-memory",
+      "browse": "gpt-5.4-mini-memory",
+      "answer": "gpt-5.4",
+      "judge_primary": "gpt-5.4",
+      "judge_cross_check": "gpt-5.4-mini-memory",
+      "embedding": "text-embedding-3-large",
+      "embedding_dimension": 3072,
+      "embedding_model_version": "text-embedding-3-large-1",
+      "search_index": "memforest-recall-large",
+      "model_call_budget_multiplier": 20,
+      "model_call_budget_min": 2000,
+      "model_call_budget_max": 2000,
+      "caveat": "Strict preflight requires active API and Durable settings to stamp a fixed 2000-call ingest budget via min=max=2000. Worker summarization still resolves through default for some materialization paths; artifacts must report observed telemetry, not just configured role env."
+    },
+    "selection": {
+      "selection_seed": 20260530,
+      "case_count": 10,
+      "case_ids": [
+        "4b24c848",
+        "8e91e7d9",
+        "fea54f57",
+        "195a1a1b",
+        "b320f3f8",
+        "gpt4_d6585ce8",
+        "e3038f8c",
+        "e66b632c",
+        "gpt4_70e84552_abs",
+        "6e984302"
+      ],
+      "inherited_from": "docs/parity-runs/2026-05-30-longmemeval-scored-batch/batch_manifest.json",
+      "selection_strategy": "Inherited deterministic pre-Phase-1 selection: one pseudo-random case per question type, then deterministic SHA256(seed+case_id) fill to 10. Reused to avoid post-Phase-1 reselection bias.",
+      "session_slice_policy": "Use first 8 haystack sessions plus all answer sessions, filled to 9 sessions max when fewer than 9 are selected.",
+      "gold_answer_policy": "Scalar gold answers up to 320 characters.",
+      "policy_caveat": "The session and gold caps preserve continuity with the pre-Phase-1 pilot. The 50-case subset should revisit these caps before using results as a stronger quality/performance signal."
+    },
+    "distribution": {
+      "full": {
+        "knowledge-update": 78,
+        "multi-session": 133,
+        "single-session-assistant": 56,
+        "single-session-preference": 30,
+        "single-session-user": 70,
+        "temporal-reasoning": 133
+      },
+      "full_percent": {
+        "knowledge-update": 15.6,
+        "multi-session": 26.6,
+        "single-session-assistant": 11.2,
+        "single-session-preference": 6.0,
+        "single-session-user": 14.0,
+        "temporal-reasoning": 26.6
+      },
+      "pilot": {
+        "knowledge-update": 2,
+        "multi-session": 2,
+        "single-session-assistant": 1,
+        "single-session-preference": 1,
+        "single-session-user": 1,
+        "temporal-reasoning": 3
+      },
+      "pilot_percent": {
+        "knowledge-update": 20.0,
+        "multi-session": 20.0,
+        "single-session-assistant": 10.0,
+        "single-session-preference": 10.0,
+        "single-session-user": 10.0,
+        "temporal-reasoning": 30.0
+      }
+    },
+    "gate": {
+      "advance_to_50_case_subset_if": {
+        "attempted_cases": 10,
+        "completed_cases": 10,
+        "pipeline_eligible_cases_min": 8,
+        "pipeline_primary_judge_correct_min": 7,
+        "pipeline_judge_disagreements_max": 1,
+        "calibration_primary_judge_correct_min": 8,
+        "calibration_judge_disagreements_max": 1,
+        "durable_gate_passed": true,
+        "durable_failed_instances_max": 0,
+        "new_dlq_count_delta": 0,
+        "answer_bearing_content_filter_blocks": 0,
+        "residue_contamination_events": 0,
+        "pipeline_eligibility_policy": "Two cases are calibration-only because they require harness intervention: 8e91e7d9 uses evidence minimization with synthetic sibling-total evidence, and 195a1a1b uses assistant-advice context extraction. The green-light gate therefore requires all 8 unmodified pipeline-eligible cases to complete, with at least 7 judged correct."
+      },
+      "abort_rules": [
+        "Abort on any new Service Bus DLQ message.",
+        "Abort on any Durable instance ending Failed, Terminated, or Canceled.",
+        "Abort on any answer-bearing content-filter block.",
+        "Abort on repeated model 429/rate-limit failures after configured retries.",
+        "Abort if a case exceeds 90 minutes without checkpoint progress.",
+        "Abort if a residue probe returns facts or answer content from a previous synthetic user."
+      ],
+      "runtime_budgets": {
+        "case_wall_clock_minutes": 90,
+        "session_hard_timeout_minutes": 30,
+        "session_idle_timeout_minutes": 10,
+        "total_wall_clock_hours": 12,
+        "durable_status_poll_attempts": 60
+      }
+    },
+    "artifacts": {
+      "case_input": "pilot_cases.json",
+      "report": "report.md",
+      "planned_harness": "run_pilot.py",
+      "planned_outputs": [
+        "run_metadata.json",
+        "results_partial.json",
+        "results.json",
+        "aggregate.json",
+        "case_results_<suffix>/"
+      ]
+    },
+    "next_gate": "Plan the 50-case subset with the Phase 2 pilot caveats carried forward.",
+    "postrun": {
+      "report": "postrun.md",
+      "run_suffix": "full-intended-final-20260604232856",
+      "aggregate_status": "succeeded",
+      "decision": "Advance to 50-case subset planning."
+    }
+  },
+  "isolation": "fresh benchmark synthetic user per case using auth_mode=dev; dispatch_mode=servicebus; no clear-per-case",
+  "auth_mode": "dev",
+  "dispatch_mode": "servicebus",
+  "durable_hub": null,
+  "run_suffix": "p1-cloudcheckpoint-onecase-20260612204153",
+  "results_dir": "docs\\parity-runs\\2026-06-03-longmemeval-phase2-intended-pilot\\case_results_p1-cloudcheckpoint-onecase-20260612204153",
+  "case_filter": [
+    "4b24c848"
+  ],
+  "preflight": {
+    "strict": false
+  }
+}
