@@ -24,6 +24,8 @@ MODEL_SCOPE = "https://cognitiveservices.azure.com/.default"
 BENCHMARK_SECRET_PATH = Path.home() / "AppData" / "Local" / "Temp" / "azure_memforest_benchmark_secret.txt"
 AUTH_MODE = os.getenv("PHASE2_AUTH_MODE", "benchmark").strip().lower()
 DISPATCH_MODE = os.getenv("PHASE2_DISPATCH_MODE", "servicebus").strip().lower()
+PRIMARY_JUDGE_DEPLOYMENT = os.getenv("PHASE2_PRIMARY_JUDGE_DEPLOYMENT", "gpt-5.4").strip() or "gpt-5.4"
+CROSS_JUDGE_DEPLOYMENT = os.getenv("PHASE2_CROSS_JUDGE_DEPLOYMENT", "gpt-5.4-mini-memory").strip() or "gpt-5.4-mini-memory"
 DURABLE_STATUS_KEY = os.getenv("PHASE2_DURABLE_STATUS_KEY", "").strip()
 DURABLE_START_URL = os.getenv("PHASE2_DURABLE_START_URL", "").strip()
 DURABLE_HUB = os.getenv("PHASE2_DURABLE_HUB", "MemForestWrites").strip()
@@ -648,8 +650,8 @@ def run_case(case: dict, index: int, previous_probe: str | None) -> dict:
     query_elapsed = time.time() - query_start
     answer = str(query.get("answer") or "")
     prompt = get_anscheck_prompt(case["question_type"], case["question"], case["gold_answer"], answer, abstention="_abs" in case_id)
-    primary = judge("gpt-5.4", prompt)
-    cross = judge("gpt-5.4-mini-memory", prompt)
+    primary = judge(PRIMARY_JUDGE_DEPLOYMENT, prompt)
+    cross = judge(CROSS_JUDGE_DEPLOYMENT, prompt)
     n_answer = norm(answer)
     n_gold = norm(case["gold_answer"])
     proxy = {
@@ -863,6 +865,8 @@ def main() -> None:
         "isolation": f"fresh benchmark synthetic user per case using auth_mode={AUTH_MODE}; dispatch_mode={DISPATCH_MODE}; no clear-per-case",
         "auth_mode": AUTH_MODE,
         "dispatch_mode": DISPATCH_MODE,
+        "primary_judge_deployment": PRIMARY_JUDGE_DEPLOYMENT,
+        "cross_judge_deployment": CROSS_JUDGE_DEPLOYMENT,
         "durable_hub": DURABLE_HUB if DISPATCH_MODE == "durable" else None,
         "run_suffix": RUN_SUFFIX,
         "results_dir": str(RESULTS),
