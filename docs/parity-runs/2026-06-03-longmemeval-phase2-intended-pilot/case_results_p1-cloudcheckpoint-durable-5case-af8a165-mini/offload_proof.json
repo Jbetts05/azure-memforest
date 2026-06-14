@@ -1,0 +1,19 @@
+{
+  "validated_at_unix": 1781463938.0,
+  "claim": "Durable orchestrated writes and Service Bus offload worker processed materialization messages on intended mini-memory routing",
+  "dispatch_mode": "durable",
+  "durable_activity_offload_mode": "servicebus",
+  "worker_revision": "memforest-example-worker--0000050",
+  "expected_ingest_count": 46,
+  "durable_completed_count": 46,
+  "worker_message_processed_count": 46,
+  "queue_after": {
+    "scheduled": 0,
+    "deadletter": 0,
+    "active": 0
+  },
+  "first_worker_message_processed_utc": "2026-06-14T18:20:57.0003953Z",
+  "last_worker_message_processed_utc": "2026-06-14T19:04:14.9875342Z",
+  "log_analytics_query": "ContainerAppConsoleLogs_CL | where TimeGenerated between (datetime(2026-06-14T18:18:36Z) .. datetime(2026-06-14T19:06:14Z)) | where ContainerAppName_s == 'memforest-example-worker' | where Log_s has 'worker_message_processed' | summarize processed=count(), first_seen=min(TimeGenerated), last_seen=max(TimeGenerated) by RevisionName_s",
+  "caveat": "Bounded 5-case validation only. Artifact status gate_failed only because 5 cases cannot meet full advancement denominator; mechanics and judged answers passed."
+}
