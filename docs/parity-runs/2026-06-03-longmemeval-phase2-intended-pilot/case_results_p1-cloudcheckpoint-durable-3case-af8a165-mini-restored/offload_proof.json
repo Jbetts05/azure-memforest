@@ -1,0 +1,19 @@
+{
+  "validated_at_unix": 1781453988.0,
+  "claim": "Durable orchestrated writes and Service Bus offload worker processed materialization messages on intended mini-memory routing",
+  "dispatch_mode": "durable",
+  "durable_activity_offload_mode": "servicebus",
+  "worker_revision": "memforest-example-worker--0000048",
+  "expected_ingest_count": 31,
+  "durable_completed_count": 31,
+  "worker_message_processed_count": 31,
+  "queue_after": {
+    "deadletter": 0,
+    "scheduled": 0,
+    "active": 0
+  },
+  "first_worker_message_processed_utc": "2026-06-14T15:48:12.8193115Z",
+  "last_worker_message_processed_utc": "2026-06-14T16:18:20.8353907Z",
+  "log_analytics_query": "ContainerAppConsoleLogs_CL | where TimeGenerated between (datetime(2026-06-14T15:45:57Z) .. datetime(2026-06-14T16:20:20Z)) | where ContainerAppName_s == 'memforest-example-worker' | where Log_s has 'worker_message_processed' | summarize processed=count(), first_seen=min(TimeGenerated), last_seen=max(TimeGenerated) by RevisionName_s",
+  "caveat": "Bounded 3-case mechanics and routing validation. Artifact status gate_failed only because 3 cases cannot meet full advancement denominator; all mechanics and judged answers passed."
+}
