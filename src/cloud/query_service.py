@@ -184,6 +184,8 @@ class CloudMemoryQueryService:
         )
         if event_facts:
             facts = [*facts, *event_facts]
+        facts_before_as_of = len(facts)
+        facts = _filter_facts_as_of(facts, request.query_time)
         events.append(
             TraceEvent(
                 query_id=query_id,
@@ -195,6 +197,7 @@ class CloudMemoryQueryService:
                     "raw_fact_id_count": len(fact_ids),
                     "lexical_fallback_fact_count": len(fallback_facts),
                     "event_fallback_fact_count": len(event_facts),
+                    "as_of_filtered_fact_count": facts_before_as_of - len(facts),
                 },
             )
         )
@@ -688,6 +691,21 @@ def _fact_time(fact: Any) -> float | None:
         candidates.extend([getattr(occurrence, "time_end", None), getattr(occurrence, "time_start", None)])
     numeric = [float(value) for value in candidates if value is not None and float(value) > 0]
     return max(numeric) if numeric else None
+
+
+def _filter_facts_as_of(facts: list[Any], query_time: float | None) -> list[Any]:
+    as_of = _positive_float(query_time)
+    if as_of is None:
+        return facts
+    return [fact for fact in facts if (_fact_onset_time(fact) is None or _fact_onset_time(fact) <= as_of)]
+
+
+def _fact_onset_time(fact: Any) -> float | None:
+    candidates = [getattr(fact, "time_start", None)]
+    for occurrence in getattr(fact, "occurrences", []) or []:
+        candidates.append(getattr(occurrence, "time_start", None))
+    numeric = [float(value) for value in candidates if value is not None and float(value) > 0]
+    return min(numeric) if numeric else None
 
 
 def _facts_context(facts: list[Any]) -> str:

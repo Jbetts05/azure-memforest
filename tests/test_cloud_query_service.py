@@ -208,6 +208,55 @@ class FakeKnowledgeUpdateFactStore:
         return [self.facts["new"], self.facts["old"]][:limit]
 
 
+class FakeAsOfFactStore:
+    def __init__(self, *, interval_future_end: bool = False):
+        self.interval_future_end = interval_future_end
+
+    async def get_facts(self, fact_ids):
+        fact_a_end = 30.0 if self.interval_future_end else 10.0
+        facts = {
+            "fact-a": ManagedFact(
+                fact_id="fact-a",
+                fact_text="The user had one cup of coffee.",
+                embedding_id="",
+                origin="",
+                semantic_role="state",
+                entities=[],
+                topics=[],
+                attribute_keys=[],
+                domain_keys=[],
+                collection_keys=[],
+                detail_level="specific",
+                confidence=1.0,
+                first_session_id="s1",
+                first_cell_id="c1",
+                metadata={"embedding": [0.1, 1.0]},
+                time_start=10.0,
+                time_end=fact_a_end,
+            ),
+            "fact-b": ManagedFact(
+                fact_id="fact-b",
+                fact_text="The user later had two cups of coffee.",
+                embedding_id="",
+                origin="",
+                semantic_role="state",
+                entities=[],
+                topics=[],
+                attribute_keys=[],
+                domain_keys=[],
+                collection_keys=[],
+                detail_level="specific",
+                confidence=1.0,
+                first_session_id="s2",
+                first_cell_id="c2",
+                metadata={"embedding": [1.0, 0.0]},
+                time_start=20.0,
+                time_end=20.0,
+            ),
+        }
+        return [facts[fact_id] for fact_id in fact_ids if fact_id in facts]
+
+
 class FakeEventListFactStore:
     def __init__(self):
         self.facts = {
@@ -405,6 +454,28 @@ async def test_cloud_query_rerank_uses_stored_fact_embeddings() -> None:
 
     assert [fact.fact_id for fact in response.facts] == ["fact-b", "fact-a"]
     assert model.embed_calls == [["Where?"]]
+
+
+@pytest.mark.asyncio
+async def test_cloud_query_filters_future_facts_when_query_time_is_provided() -> None:
+    response = await _service(_manifest(), fact_store=FakeAsOfFactStore()).query(
+        ActorContext(actor_id="user-1", tenant=TenantContext("tenant-1")),
+        user_id="user-1",
+        request=QueryRequest(question="How much coffee?", query_time=15.0, max_facts=2),
+    )
+
+    assert [fact.fact_id for fact in response.facts] == ["fact-a"]
+
+
+@pytest.mark.asyncio
+async def test_cloud_query_as_of_filter_keeps_facts_that_started_before_query_time() -> None:
+    response = await _service(_manifest(), fact_store=FakeAsOfFactStore(interval_future_end=True)).query(
+        ActorContext(actor_id="user-1", tenant=TenantContext("tenant-1")),
+        user_id="user-1",
+        request=QueryRequest(question="How much coffee?", query_time=15.0, max_facts=2),
+    )
+
+    assert [fact.fact_id for fact in response.facts] == ["fact-a"]
 
 
 @pytest.mark.asyncio
