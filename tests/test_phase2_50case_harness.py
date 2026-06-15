@@ -105,6 +105,18 @@ def test_50case_harness_loads_normalized_cases(monkeypatch) -> None:
     assert cases[0]["selected_session_count"] == len(cases[0]["sessions"])
 
 
+def test_50case_harness_applies_phase2_case_filter(monkeypatch) -> None:
+    harness = _load_harness(
+        monkeypatch,
+        PHASE2_50_SHARD="heldout_1",
+        PHASE2_CASE_IDS="60036106,2ce6a0f2",
+    )
+
+    cases = harness.load_cases()
+
+    assert [case["case_id"] for case in cases] == ["2ce6a0f2", "60036106"]
+
+
 def test_50case_full_session_policy_selects_all_haystack_sessions(monkeypatch) -> None:
     harness = _load_harness(monkeypatch, PHASE2_50_SHARD="heldout_1", PHASE2_SESSION_POLICY="full")
     case = {

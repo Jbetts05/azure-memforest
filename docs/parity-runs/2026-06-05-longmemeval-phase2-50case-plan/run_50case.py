@@ -151,6 +151,8 @@ def selected_case_ids(source: dict[str, dict[str, Any]] | None = None) -> list[s
 def load_cases() -> list[dict[str, Any]]:
     source = _source_cases()
     selected_ids = selected_case_ids(source)
+    if pilot.CASE_FILTER:
+        selected_ids = [case_id for case_id in selected_ids if case_id in pilot.CASE_FILTER]
     missing = [case_id for case_id in selected_ids if case_id not in source]
     if missing:
         raise RuntimeError(f"missing source cases: {missing}")
