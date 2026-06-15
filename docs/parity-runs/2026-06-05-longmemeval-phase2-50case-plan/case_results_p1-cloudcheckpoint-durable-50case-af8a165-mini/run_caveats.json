@@ -1,0 +1,36 @@
+{
+  "recorded_at_unix": 1781508935.0,
+  "conclusion": "Shard completed operationally after remediation, but is not a clean no-mid-run-change validation and not a quality/parity pass.",
+  "operational_completion": {
+    "successful_ingests": 478,
+    "attempted_cases": 50,
+    "durable_failed": 0,
+    "residue_contamination_events": 0,
+    "final_queue": {
+      "active": 0,
+      "deadletter": 0,
+      "scheduled": 0
+    },
+    "durable_completed": 478,
+    "completed_cases": 50
+  },
+  "quality": {
+    "required_primary_correct": 40,
+    "caveat": "Mixed-runtime, confounded lower-bound diagnostic; do not report as benchmark parity.",
+    "status": "failed_quality_gate",
+    "primary_judge_correct": 28
+  },
+  "mid_run_changes": [
+    {
+      "detail": "Storage/Cosmos public access drift caused readiness/polling failure and was restored during the run.",
+      "type": "network_posture"
+    },
+    {
+      "detail": "Runtime changed from af8a1657fc0e to 67435a5d9bd2 and then 7311efd7bd3b to repair cloud hydration tree metadata/duplicate child links.",
+      "type": "runtime_hotfix"
+    }
+  ],
+  "manifest_gate_caveat": "Manifest operational gate includes no_mid_run_runtime_posture_changes=true and case_targeted_fixes_allowed=false; this run violated those assumptions and must not be described as a clean gate-passing validation.",
+  "offload_caveat": "Worker_message_processed_count includes retries and spans worker revisions 0000052, 0000053, 0000054; final successful ingest count remains 478.",
+  "next_required_step": "Run a clean single-runtime shard on final runtime 7311efd7bd3b before making clean operational or quality claims."
+}

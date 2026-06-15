@@ -1,0 +1,37 @@
+{
+  "validated_at_unix": 1781508650.0,
+  "claim": "Durable orchestrated writes and Service Bus offload worker processed materialization messages for heldout 50 cloud_checkpoint shard",
+  "dispatch_mode": "durable",
+  "durable_activity_offload_mode": "servicebus",
+  "expected_ingest_count": 478,
+  "durable_completed_count": 478,
+  "worker_message_processed_count": 492,
+  "queue_after": {
+    "scheduled": 0,
+    "active": 0,
+    "deadletter": 0
+  },
+  "worker_revisions": [
+    {
+      "last_seen": "2026-06-15T01:02:01.8529029Z",
+      "revision": "memforest-example-worker--0000052",
+      "first_seen": "2026-06-14T22:16:17.8072458Z",
+      "processed": 151
+    },
+    {
+      "last_seen": "2026-06-15T01:22:20.9170724Z",
+      "revision": "memforest-example-worker--0000053",
+      "first_seen": "2026-06-15T01:21:31.9852668Z",
+      "processed": 5
+    },
+    {
+      "last_seen": "2026-06-15T07:17:37.8629459Z",
+      "revision": "memforest-example-worker--0000054",
+      "first_seen": "2026-06-15T01:45:05.9957235Z",
+      "processed": 336
+    }
+  ],
+  "note": "Worker processed count exceeds final successful ingest count because case 15 was retried after a DLQ and after runtime fixes; final queue/DLQ is clean and aggregate counts final successful ingests/Durable instances.",
+  "log_analytics_query": "ContainerAppConsoleLogs_CL | where TimeGenerated between (datetime(2026-06-14T22:13:56Z) .. datetime(2026-06-15T07:19:37Z)) | where ContainerAppName_s == 'memforest-example-worker' | where Log_s has 'worker_message_processed' | summarize processed=count(), first_seen=min(TimeGenerated), last_seen=max(TimeGenerated) by RevisionName_s",
+  "caveat": "Operational shard completed; quality gate failed at 28/50 primary correct vs 40/50 required. Do not claim benchmark parity."
+}
