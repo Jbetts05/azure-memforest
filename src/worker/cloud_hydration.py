@@ -222,6 +222,7 @@ async def load_memtrees_from_tree_store(tree_store: Any) -> list[MemTree]:
             )
             for node in stored_nodes
         }
+        _dedupe_duplicate_child_links(nodes)
         _link_l0_leaves(nodes)
         root_node_id = _root_node_id(nodes)
         root = nodes[root_node_id]
@@ -451,6 +452,70 @@ def _tree_fanout_k(metadata: dict[str, Any], nodes: dict[str, MemTreeNode]) -> i
         return max(configured, 3)
     observed = max((len(node.child_ids) for node in nodes.values() if node.level > 0), default=0)
     return max(observed, 3)
+
+
+def _dedupe_duplicate_child_links(nodes: dict[str, MemTreeNode]) -> None:
+    levels = sorted({node.level for node in nodes.values() if node.level > 0})
+    for level in levels:
+        owners: dict[str, str] = {}
+        parents = sorted(
+            (node for node in nodes.values() if node.level == level),
+            key=lambda node: _node_order_key(node.node_id),
+        )
+        for parent in parents:
+            kept: list[str] = []
+            for child_id in parent.child_ids:
+                prior_parent_id = owners.get(child_id)
+                if prior_parent_id and prior_parent_id in nodes:
+                    prior = nodes[prior_parent_id]
+                    prior.child_ids = [existing for existing in prior.child_ids if existing != child_id]
+                    prior.summary_dirty = True
+                owners[child_id] = parent.node_id
+                if child_id not in kept:
+                    kept.append(child_id)
+            if kept != parent.child_ids:
+                parent.child_ids = kept
+                parent.summary_dirty = True
+        for child_id, parent_id in owners.items():
+            child = nodes.get(child_id)
+            if child is not None and child.parent_id != parent_id:
+                child.parent_id = parent_id
+    _prune_empty_internal_nodes(nodes)
+    _refresh_internal_metadata(nodes)
+
+
+def _prune_empty_internal_nodes(nodes: dict[str, MemTreeNode]) -> None:
+    changed = True
+    while changed:
+        changed = False
+        for node_id, node in list(nodes.items()):
+            if node.level <= 0 or node.child_ids or node.parent_id in {None, ""}:
+                continue
+            parent = nodes.get(node.parent_id)
+            if parent is not None:
+                parent.child_ids = [child_id for child_id in parent.child_ids if child_id != node_id]
+                parent.summary_dirty = True
+            del nodes[node_id]
+            changed = True
+
+
+def _refresh_internal_metadata(nodes: dict[str, MemTreeNode]) -> None:
+    for level in sorted({node.level for node in nodes.values() if node.level > 0}):
+        for node in [candidate for candidate in nodes.values() if candidate.level == level]:
+            children = [nodes[child_id] for child_id in node.child_ids if child_id in nodes]
+            if not children:
+                node.item_count = 0
+                continue
+            node.item_count = sum(max(0, child.item_count) for child in children)
+            node.time_start = min(child.time_start for child in children)
+            node.time_end = max(child.time_end for child in children)
+
+
+def _node_order_key(node_id: str) -> tuple[str, int, str]:
+    prefix, sep, suffix = node_id.rpartition(":")
+    if sep and suffix.isdigit():
+        return (prefix, int(suffix), node_id)
+    return (node_id, -1, node_id)
 
 
 def _link_l0_leaves(nodes: dict[str, MemTreeNode]) -> None:

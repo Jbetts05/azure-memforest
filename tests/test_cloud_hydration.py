@@ -633,6 +633,49 @@ async def test_cloud_hydration_honors_persisted_k_for_fanout_validation(tmp_path
         apply_cloud_state_to_user_forest(user_forest, CloudUserForestState(trees=trees))
 
 
+@pytest.mark.asyncio
+async def test_cloud_hydration_repairs_duplicate_child_links_from_split_artifact(tmp_path) -> None:
+    dim = 4
+    user_forest = _user_forest(tmp_path, dim)
+    root = _node("root", level="L2", child_ids=("entity:user:L1:13", "entity:user:L1:14"))
+    old_parent = _node("entity:user:L1:13", parent_id="root", child_ids=("entity:user:L0:63", "entity:user:L0:64"))
+    new_parent = _node("entity:user:L1:14", parent_id="root", child_ids=("entity:user:L0:64", "entity:user:L0:65"))
+    leaves = [
+        _node_with_time("entity:user:L0:63", 63.0, parent_id="entity:user:L1:13", level="L0", child_ids=("fact_63",), tree_id="tree-1"),
+        _node_with_time("entity:user:L0:64", 64.0, parent_id="entity:user:L1:13", level="L0", child_ids=("fact_64",), tree_id="tree-1"),
+        _node_with_time("entity:user:L0:65", 65.0, parent_id="entity:user:L1:14", level="L0", child_ids=("fact_65",), tree_id="tree-1"),
+    ]
+
+    trees = await load_memtrees_from_tree_store(FakeTreeStore({"tree-1": [root, old_parent, new_parent, *leaves]}))
+    apply_cloud_state_to_user_forest(user_forest, CloudUserForestState(trees=trees))
+    tree = user_forest._tree_store.get("tree-1")
+
+    assert tree.nodes["entity:user:L1:13"].child_ids == ["entity:user:L0:63"]
+    assert tree.nodes["entity:user:L1:14"].child_ids == ["entity:user:L0:64", "entity:user:L0:65"]
+    assert tree.nodes["entity:user:L0:64"].parent_id == "entity:user:L1:14"
+
+
+@pytest.mark.asyncio
+async def test_cloud_hydration_prunes_empty_parent_after_duplicate_child_repair(tmp_path) -> None:
+    dim = 4
+    user_forest = _user_forest(tmp_path, dim)
+    root = _node("root", level="L2", child_ids=("entity:user:L1:13", "entity:user:L1:14"))
+    empty_after_repair = _node("entity:user:L1:13", parent_id="root", child_ids=("entity:user:L0:64",))
+    survivor = _node("entity:user:L1:14", parent_id="root", child_ids=("entity:user:L0:64", "entity:user:L0:65"))
+    leaves = [
+        _node_with_time("entity:user:L0:64", 64.0, parent_id="entity:user:L1:13", level="L0", child_ids=("fact_64",), tree_id="tree-1"),
+        _node_with_time("entity:user:L0:65", 65.0, parent_id="entity:user:L1:14", level="L0", child_ids=("fact_65",), tree_id="tree-1"),
+    ]
+
+    trees = await load_memtrees_from_tree_store(FakeTreeStore({"tree-1": [root, empty_after_repair, survivor, *leaves]}))
+    apply_cloud_state_to_user_forest(user_forest, CloudUserForestState(trees=trees))
+    tree = user_forest._tree_store.get("tree-1")
+
+    assert "entity:user:L1:13" not in tree.nodes
+    assert tree.nodes["root"].child_ids == ["entity:user:L1:14"]
+    assert tree.nodes["entity:user:L0:64"].parent_id == "entity:user:L1:14"
+
+
 def test_cloud_hydration_uses_stored_fact_embeddings_without_reembedding(tmp_path) -> None:
     dim = 4
     user_forest, client = _user_forest_with_client(tmp_path, dim)
