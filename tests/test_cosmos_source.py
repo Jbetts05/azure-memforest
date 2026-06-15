@@ -221,6 +221,22 @@ async def test_cosmos_tree_node_store_reuses_stable_body_across_versions() -> No
 
 
 @pytest.mark.asyncio
+async def test_cosmos_tree_node_store_prefers_body_parent_over_stale_membership_metadata() -> None:
+    container = FakeCosmosContainer()
+    store = CosmosTreeNodeStore(container, tenant_id="tenant-1", user_id="user-1", forest_version="g2-new")
+    await store.upsert_nodes([_tree_node_for_version("g2-new", node_id="leaf", parent_id="new-parent", level="L0")])
+    for key, item in list(container.items.items()):
+        if item.get("doc_kind") == "tree_node_membership":
+            item["metadata"] = {**dict(item.get("metadata") or {}), "parent_id": "old-parent"}
+            container.items[key] = item
+
+    node = await store.get_node("tree-1", "leaf")
+
+    assert node is not None
+    assert node.metadata["parent_id"] == "new-parent"
+
+
+@pytest.mark.asyncio
 async def test_cosmos_tree_node_store_lists_tree_ids_for_committed_version_memberships() -> None:
     container = FakeCosmosContainer()
     first = CosmosTreeNodeStore(container, tenant_id="tenant-1", user_id="user-1", forest_version="v1")

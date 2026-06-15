@@ -212,7 +212,7 @@ class CosmosTreeNodeStore:
             user_id=node.user_id,
             forest_version=self.forest_version,
             schema_version=node.schema_version,
-            metadata={**dict(node.metadata), **dict(membership.get("metadata") or {})},
+            metadata={**dict(membership.get("metadata") or {}), **dict(node.metadata)},
         )
 
     async def _read_body_doc(self, body_id: str) -> dict[str, Any] | None:
