@@ -446,6 +446,58 @@ def test_phase2_judge_uses_non_tiny_token_budget(monkeypatch) -> None:
     assert captured["max_completion_tokens"] >= 64
 
 
+def test_phase2_query_body_includes_question_date_as_query_time(monkeypatch) -> None:
+    harness = _load_harness(monkeypatch)
+
+    body = harness.query_body_for_case(
+        {
+            "question": "How many days ago?",
+            "question_date": "2023/03/01 (Wed) 10:00",
+        }
+    )
+
+    assert body["question"] == "How many days ago?"
+    assert body["query_time"] == harness.parse_timestamp_to_unix("2023/03/01 (Wed) 10:00")
+
+
+def test_phase2_query_body_omits_missing_question_date(monkeypatch) -> None:
+    harness = _load_harness(monkeypatch)
+
+    body = harness.query_body_for_case({"question": "What happened?"})
+
+    assert "query_time" not in body
+
+
+def test_phase2_new_case_result_records_question_date(monkeypatch, tmp_path) -> None:
+    harness = _load_harness(monkeypatch)
+    monkeypatch.setattr(harness, "RESULTS", tmp_path)
+    monkeypatch.setattr(harness, "save", lambda path, value: None)
+    monkeypatch.setattr(harness, "residue_probe", lambda question, *, user_id: {})
+    monkeypatch.setattr(harness, "api_post", lambda *args, **kwargs: {"job_id": "job-1"})
+    monkeypatch.setattr(
+        harness,
+        "wait_job_progress",
+        lambda *args, **kwargs: ({"status": "failed"}, 0.0, {"timeout_reason": None}),
+    )
+
+    result = harness.run_case(
+        {
+            "case_id": "case-1",
+            "question_type": "temporal-reasoning",
+            "question": "How many days ago?",
+            "question_date": "2023/03/01 (Wed) 10:00",
+            "gold_answer": "1 day",
+            "selected_session_count": 0,
+            "selected_turn_count": 0,
+            "sessions": [],
+        },
+        1,
+        None,
+    )
+
+    assert result["question_date"] == "2023/03/01 (Wed) 10:00"
+
+
 def test_phase2_aggregate_requires_all_cases(monkeypatch) -> None:
     harness = _load_harness(monkeypatch, PHASE2_DISPATCH_MODE="durable")
     results = [_result(case["case_id"]) for case in harness.CASES[:-1]]

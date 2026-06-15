@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import requests
+from src.utils.time import parse_timestamp_to_unix
 
 
 AZ = r"C:\Program Files\Microsoft SDKs\Azure\CLI2\wbin\az.cmd"
@@ -160,6 +161,19 @@ def api_post(path: str, body: dict | None = None, *, user_id: str = USER, idem: 
                 raise
             time.sleep(min(30, 2**attempt))
     raise RuntimeError("unreachable idempotent POST retry state")
+
+
+def query_body_for_case(case: dict[str, Any], *, top_k: int = 8, max_facts: int = 8, trace_requested: bool = True) -> dict[str, Any]:
+    body: dict[str, Any] = {
+        "question": case["question"],
+        "top_k": top_k,
+        "max_facts": max_facts,
+        "trace_requested": trace_requested,
+    }
+    question_date = str(case.get("question_date") or "").strip()
+    if question_date:
+        body["query_time"] = parse_timestamp_to_unix(question_date)
+    return body
 
 
 def progress_fingerprint(status: dict) -> tuple:
@@ -511,6 +525,7 @@ def run_case(case: dict, index: int, previous_probe: str | None) -> dict:
             "index": index,
             "question_type": case["question_type"],
             "question": case["question"],
+            "question_date": case.get("question_date"),
             "gold_answer": case["gold_answer"],
             "selected_session_count": case["selected_session_count"],
             "selected_turn_count": case["selected_turn_count"],
@@ -646,7 +661,9 @@ def run_case(case: dict, index: int, previous_probe: str | None) -> dict:
             return result
 
     query_start = time.time()
-    query = api_post(f"/v1/users/{user_id}/query", {"question": case["question"], "top_k": 8, "max_facts": 8, "trace_requested": True}, user_id=user_id)
+    query_body = query_body_for_case(case)
+    result["query_request"] = query_body
+    query = api_post(f"/v1/users/{user_id}/query", query_body, user_id=user_id)
     query_elapsed = time.time() - query_start
     answer = str(query.get("answer") or "")
     prompt = get_anscheck_prompt(case["question_type"], case["question"], case["gold_answer"], answer, abstention="_abs" in case_id)
