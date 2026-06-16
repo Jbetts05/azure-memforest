@@ -1,0 +1,23 @@
+{
+  "runtime": {
+    "git_sha": "45fa3f6c8ce2",
+    "image_dirty": false,
+    "image_digest": "sha256:1d1c073f7a4b829bf4166f4520d53b8a88e2e4cac1d062e9db874b55968d0c67"
+  },
+  "scope": "Targeted six-case temporal/update validation for the query-time as-of filter.",
+  "important_caveats": [
+    "The implemented as-of filter is a session-level cutoff based on fact onset/session timestamps. It does not prove full event-valid-time temporal fidelity.",
+    "The six-case targeted result remained 4/6 primary-correct. f685340e improved versus the previous query-time-only rerun, while gpt4_2d58bcd6 failed despite relevant facts being present in retrieved context; this before/after delta is confounded by end-to-end LLM variance.",
+    "The evidence supports keeping the as-of filter as a safe temporal-fidelity improvement, but not claiming broader heldout parity."
+  ],
+  "validation_summary": {
+    "attempted_cases": 6,
+    "completed_cases": 6,
+    "primary_judge_correct": 4,
+    "judge_disagreements": 1,
+    "durable_completed": 56,
+    "durable_failed": 0,
+    "dlq_delta": 0,
+    "residue_provenance_events": 0
+  }
+}
