@@ -46,6 +46,7 @@ DURABLE_FUNCTION_APP = os.getenv("PHASE2_DURABLE_FUNCTION_APP", "memforest-examp
 RUN_SUFFIX = os.getenv("PHASE2_RUN_SUFFIX", "").strip()
 CASE_FILTER = {item.strip() for item in os.getenv("PHASE2_CASE_IDS", "").split(",") if item.strip()}
 API_IDEMPOTENT_POST_ATTEMPTS = int(os.getenv("PHASE2_API_IDEMPOTENT_POST_ATTEMPTS", "1").strip() or "1")
+EXTRACT_ALL_ASSISTANT_TURNS = os.getenv("PHASE2_EXTRACT_ALL_ASSISTANT_TURNS", "").strip().lower() in {"1", "true", "yes", "on"}
 
 RUN = Path(__file__).resolve().parent
 CASES = json.loads((RUN / "pilot_cases.json").read_text(encoding="utf-8"))
@@ -471,7 +472,11 @@ def turns_for_ingest(session: dict, *, case_id: str = "") -> tuple[list[dict], d
             copied["timestamp"] = session_date
         metadata = dict(copied.get("metadata") or {})
         if copied.get("role") == "assistant":
-            if copied.get("content_id") in extract_assistant_ids:
+            if EXTRACT_ALL_ASSISTANT_TURNS:
+                metadata["assistant_extraction_context"] = True
+                metadata["override_reason"] = "extract_all_assistant_turns"
+                assistant_extract_count += 1
+            elif copied.get("content_id") in extract_assistant_ids:
                 metadata["assistant_advice_context"] = True
                 metadata["override_reason"] = override.get("override_reason", "assistant_advice_context") if override else "assistant_advice_context"
                 metadata.update(assistant_advice_metadata)
@@ -495,6 +500,7 @@ def turns_for_ingest(session: dict, *, case_id: str = "") -> tuple[list[dict], d
         "synthetic_turn_count": len(synthetic_turns),
         "synthetic_content_ids": [turn.get("content_id") for turn in synthetic_turns],
         "extract_assistant_content_ids": sorted(extract_assistant_ids),
+        "extract_all_assistant_turns": EXTRACT_ALL_ASSISTANT_TURNS,
         "retained_turns_sha256": retained_hash,
         "exclude_from_pipeline_accuracy": bool(override and override.get("exclude_from_pipeline_accuracy")),
     }
@@ -888,6 +894,7 @@ def main() -> None:
         "isolation": f"fresh benchmark synthetic user per case using auth_mode={AUTH_MODE}; dispatch_mode={DISPATCH_MODE}; no clear-per-case",
         "auth_mode": AUTH_MODE,
         "dispatch_mode": DISPATCH_MODE,
+        "extract_all_assistant_turns": EXTRACT_ALL_ASSISTANT_TURNS,
         "primary_judge_deployment": PRIMARY_JUDGE_DEPLOYMENT,
         "cross_judge_deployment": CROSS_JUDGE_DEPLOYMENT,
         "durable_hub": DURABLE_HUB if DISPATCH_MODE == "durable" else None,

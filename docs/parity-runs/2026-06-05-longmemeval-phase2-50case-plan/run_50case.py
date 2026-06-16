@@ -530,6 +530,7 @@ def main() -> None:
         "decisions": MANIFEST,
         "auth_mode": pilot.AUTH_MODE,
         "dispatch_mode": pilot.DISPATCH_MODE,
+        "extract_all_assistant_turns": pilot.EXTRACT_ALL_ASSISTANT_TURNS,
         "durable_hub": pilot.DURABLE_HUB if pilot.DISPATCH_MODE == "durable" else None,
         "run_suffix": RUN_SUFFIX,
         "results_dir": str(RESULTS),

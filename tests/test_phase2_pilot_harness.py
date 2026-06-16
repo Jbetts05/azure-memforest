@@ -405,6 +405,31 @@ def test_phase2_harness_can_extract_explicit_assistant_advice_override(monkeypat
     assert stats["extract_assistant_content_ids"] == ["answer_6dc4305e:5"]
 
 
+def test_phase2_harness_can_extract_all_assistant_turns_for_experiment(monkeypatch) -> None:
+    harness = _load_harness(monkeypatch, PHASE2_EXTRACT_ALL_ASSISTANT_TURNS="true")
+
+    turns, stats = harness.turns_for_ingest(
+        {
+            "source_session_id": "session-1",
+            "turns": [
+                {"role": "user", "content_id": "session-1:1", "content": "What backend language should I learn?", "metadata": {}},
+                {"role": "assistant", "content_id": "session-1:2", "content": "Learn Python or Ruby.", "metadata": {}},
+                {"role": "assistant", "content_id": "session-1:3", "content": "You can build APIs with them.", "metadata": {}},
+            ],
+        },
+        case_id="case-1",
+    )
+
+    assistant_turns = [turn for turn in turns if turn["role"] == "assistant"]
+    assert all("skip_extraction" not in turn["metadata"] for turn in assistant_turns)
+    assert all("assistant_advice_context" not in turn["metadata"] for turn in assistant_turns)
+    assert all(turn["metadata"]["assistant_extraction_context"] is True for turn in assistant_turns)
+    assert {turn["metadata"]["override_reason"] for turn in assistant_turns} == {"extract_all_assistant_turns"}
+    assert stats["assistant_turns_extractable"] == 2
+    assert stats["assistant_turns_marked_skip_extraction"] == 0
+    assert stats["extract_all_assistant_turns"] is True
+
+
 def test_phase2_turns_for_ingest_backfills_turn_timestamp_from_session_date(monkeypatch) -> None:
     harness = _load_harness(monkeypatch)
 
