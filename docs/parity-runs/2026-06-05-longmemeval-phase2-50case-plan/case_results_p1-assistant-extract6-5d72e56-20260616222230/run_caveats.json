@@ -1,0 +1,28 @@
+{
+  "runtime": {
+    "harness_commit": "5d72e56",
+    "api_git_sha": "45fa3f6c8ce2",
+    "image_dirty": false
+  },
+  "scope": "Gold-blind assistant-turn extraction experiment over the six previously missed single-session-assistant heldout cases.",
+  "validation_summary": {
+    "attempted_cases": 6,
+    "completed_cases": 6,
+    "primary_judge_correct": 2,
+    "baseline_primary_judge_correct": 0,
+    "durable_completed": 54,
+    "durable_failed": 0,
+    "dlq_delta": 0
+  },
+  "important_caveats": [
+    "This is directional evidence only: it was run only on the six prior assistant misses, so it measures potential upside but not full-shard regression risk.",
+    "The persisted case artifacts contain top-k retrieved facts, not the full durable fact store. Missing gold strings in retrieved facts should not be overclaimed as extraction misses until the store is inspected or a larger recall ablation is run.",
+    "Residue reprobes had cloud_query_not_ready errors for several cases, so residue counters should not be treated as a strong contamination proof for this shard.",
+    "The experiment shows normal assistant extraction improved this slice from 0/6 to 2/6, but it is not sufficient by itself for assistant-answer parity."
+  ],
+  "next_steps": [
+    "Inspect durable fact stores for the four remaining misses to classify extraction miss versus retrieval miss.",
+    "Run a recall ablation with larger top_k/max_facts on the four misses.",
+    "Before adopting broader assistant extraction, run a full fixed 50-case flag-off versus flag-on comparison and segment by question_type."
+  ]
+}
