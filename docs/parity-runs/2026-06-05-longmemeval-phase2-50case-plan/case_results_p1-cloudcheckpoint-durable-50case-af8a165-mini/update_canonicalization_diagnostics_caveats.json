@@ -1,0 +1,18 @@
+{
+  "scope": "Cosmos-backed update/canonicalization diagnostic for selected update/temporal misses in the 50-case run.",
+  "conclusions": [
+    "c6853660 has both old one-cup and newer two-cup coffee facts in the canonical fact store, so the miss is not evidence of FactManager collapsing the update away; it is more likely retrieval/ranking or answer use.",
+    "f685340e has both prior weekly-tennis evidence and current every-other-week tennis evidence as distinct canonical facts with distinct timestamps, so the miss is not evidence of FactManager collapsing the prior state away; it is more likely retrieval/ranking/as-of or answer use.",
+    "184da446 has both page-200 and page-220 book facts as distinct canonical facts with distinct timestamps, so the miss is not evidence of FactManager collapse; it is consistent with query-time/as-of or retrieval/answer issues and with the later targeted rerun fix."
+  ],
+  "caveats": [
+    "This is an offline lexical diagnostic over committed synthetic benchmark artifacts and Cosmos fact docs. It must not be used by runtime extraction/retrieval/answering.",
+    "Needle_hits are brittle search hints and can miss paraphrases such as weekly vs every week or page 220 vs 220 pages. Interpret matching_facts and timestamps, not needle absence alone.",
+    "The 50-case source run had mid-run remediation, so this artifact is diagnostic only and not a clean benchmark claim."
+  ],
+  "next_steps": [
+    "Do not change FactManager canonicalization based on these cases; inspect retrieval/top-k, as-of behavior, and answer grounding first.",
+    "Keep FactManager changes P3 until alternate_fact_texts or duplicate logs prove temporally distinct facts are being collapsed.",
+    "Use future clean-run diagnostics to confirm update-state retention before broader claims."
+  ]
+}
