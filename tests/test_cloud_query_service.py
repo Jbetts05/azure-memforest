@@ -6,7 +6,7 @@ import pytest
 
 from src.cloud.contracts import RecallCandidate, StoredTreeNode
 from src.cloud.cosmos_manifests import ForestManifest
-from src.cloud.query_service import CloudMemoryQueryService, CloudQueryConfig, CloudQueryNotReady, _is_preference_activity_question, _lexical_fallback_queries, _should_use_lexical_fact_fallback
+from src.cloud.query_service import CloudMemoryQueryService, CloudQueryConfig, CloudQueryNotReady, _fact_time_for_rerank, _is_preference_activity_question, _lexical_fallback_queries, _normalized_recency_scores, _query_time_capped_fact_count, _query_time_open_interval_fact_count, _should_use_lexical_fact_fallback
 from src.service.auth import ActorContext, TenantContext
 from src.service.schemas import QueryRequest
 from src.utils.types import ManagedFact
@@ -374,7 +374,9 @@ def _manifest():
     )
 
 
-def _managed_fact(fact_id: str, fact_text: str, *, time: float):
+def _managed_fact(fact_id: str, fact_text: str = "fact", *, time: float | None = None, time_start: float | None = None, time_end: float | None = None):
+    start = time if time is not None else time_start
+    end = time if time is not None else time_end
     return ManagedFact(
         fact_id=fact_id,
         fact_text=fact_text,
@@ -391,8 +393,8 @@ def _managed_fact(fact_id: str, fact_text: str, *, time: float):
         first_session_id="s1",
         first_cell_id="c1",
         metadata={"embedding": [1.0, 0.0]},
-        time_start=time,
-        time_end=time,
+        time_start=start,
+        time_end=end,
     )
 
 
@@ -476,6 +478,50 @@ async def test_cloud_query_as_of_filter_keeps_facts_that_started_before_query_ti
     )
 
     assert [fact.fact_id for fact in response.facts] == ["fact-a"]
+
+
+def test_cloud_query_recency_scores_cap_future_interval_at_query_time() -> None:
+    closed_fact = _managed_fact("closed", time_start=1.0, time_end=30.0)
+    ongoing_fact = _managed_fact("ongoing", time_start=1.0, time_end=100.0)
+
+    scores = _normalized_recency_scores([closed_fact, ongoing_fact], query_time=50.0)
+
+    assert _fact_time_for_rerank(closed_fact, query_time=50.0) == 30.0
+    assert _fact_time_for_rerank(ongoing_fact, query_time=50.0) == 50.0
+    assert _query_time_capped_fact_count([closed_fact, ongoing_fact], 50.0) == 1
+    assert scores == {"closed": 0.0, "ongoing": 1.0}
+
+
+def test_cloud_query_recency_scores_anchor_open_interval_at_query_time() -> None:
+    closed_fact = _managed_fact("closed", time_start=1.0, time_end=30.0)
+    open_fact = _managed_fact("open", time_start=1.0, time_end=None)
+
+    scores = _normalized_recency_scores([closed_fact, open_fact], query_time=50.0)
+
+    assert _fact_time_for_rerank(open_fact, query_time=50.0) == 50.0
+    assert _query_time_open_interval_fact_count([closed_fact, open_fact], 50.0) == 1
+    assert scores == {"closed": 0.0, "open": 1.0}
+
+
+@pytest.mark.asyncio
+async def test_cloud_query_trace_records_query_time_rerank_anchor() -> None:
+    recorder = FakeTraceRecorder()
+    await _service(_manifest(), trace_recorder=recorder).query(
+        ActorContext(actor_id="user-1", tenant=TenantContext("tenant-1")),
+        user_id="user-1",
+        request=QueryRequest(question="Where?", query_time=1685006880.0, max_facts=2),
+    )
+
+    rerank_events = [
+        event
+        for call in recorder.calls
+        for event in call["events"]
+        if str(event.event_type) == "facts_reranked"
+    ]
+    assert rerank_events
+    assert rerank_events[-1].attributes["query_time_rerank_anchor_present"] is True
+    assert rerank_events[-1].attributes["query_time_capped_fact_count"] == 0
+    assert rerank_events[-1].attributes["query_time_open_interval_fact_count"] == 0
 
 
 @pytest.mark.asyncio

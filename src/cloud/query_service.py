@@ -201,7 +201,7 @@ class CloudMemoryQueryService:
                 },
             )
         )
-        scored_facts = await self._rerank_facts(facts, query_embedding)
+        scored_facts = await self._rerank_facts(facts, query_embedding, query_time=request.query_time)
         if scored_facts:
             events.append(
                 TraceEvent(
@@ -212,6 +212,9 @@ class CloudMemoryQueryService:
                     attributes={
                         "candidate_count": len(scored_facts),
                         "top_score": round(scored_facts[0][0], 6),
+                        "query_time_rerank_anchor_present": _positive_float(request.query_time) is not None,
+                        "query_time_capped_fact_count": _query_time_capped_fact_count(facts, request.query_time),
+                        "query_time_open_interval_fact_count": _query_time_open_interval_fact_count(facts, request.query_time),
                     },
                 )
             )
@@ -348,7 +351,7 @@ class CloudMemoryQueryService:
         filtered = [fact for fact in candidates if locations.get(fact.fact_id)]
         return filtered[: max(1, int(self._config.lexical_fact_fallback_top_k))]
 
-    async def _rerank_facts(self, facts: list[Any], query_embedding: list[float]) -> list[tuple[float, Any]]:
+    async def _rerank_facts(self, facts: list[Any], query_embedding: list[float], *, query_time: float | None = None) -> list[tuple[float, Any]]:
         if not self._config.rerank_facts or not facts:
             return []
         embeddings = [_stored_fact_embedding(fact) for fact in facts]
@@ -362,7 +365,7 @@ class CloudMemoryQueryService:
                 return []
             for index, embedding in zip(missing_indexes, fallback_embeddings):
                 embeddings[index] = embedding
-        recency_scores = _normalized_recency_scores(facts)
+        recency_scores = _normalized_recency_scores(facts, query_time=query_time)
         scored = []
         for index, (embedding, fact) in enumerate(zip(embeddings, facts)):
             semantic_score = _dot(query_embedding, _normalize(embedding))
@@ -667,11 +670,12 @@ def _fact_timestamp(fact: Any) -> float:
     return float("inf")
 
 
-def _normalized_recency_scores(facts: list[Any]) -> dict[str, float]:
+def _normalized_recency_scores(facts: list[Any], *, query_time: float | None = None) -> dict[str, float]:
+    anchor = _positive_float(query_time)
     fact_times = {
-        str(getattr(fact, "fact_id", "")): _fact_time(fact)
+        str(getattr(fact, "fact_id", "")): _fact_time_for_rerank(fact, query_time=anchor)
         for fact in facts
-        if _fact_time(fact) is not None
+        if _fact_time_for_rerank(fact, query_time=anchor) is not None
     }
     if len(fact_times) < 2:
         return {fact_id: 0.0 for fact_id in fact_times}
@@ -683,6 +687,43 @@ def _normalized_recency_scores(facts: list[Any]) -> dict[str, float]:
         fact_id: (value - min_time) / (max_time - min_time)
         for fact_id, value in fact_times.items()
     }
+
+
+def _fact_time_for_rerank(fact: Any, *, query_time: float | None = None) -> float | None:
+    anchor = _positive_float(query_time)
+    if anchor is not None and _open_interval_started_before(fact, anchor):
+        return anchor
+    fact_time = _fact_time(fact)
+    if fact_time is None:
+        return None
+    return min(fact_time, anchor) if anchor is not None else fact_time
+
+
+def _query_time_capped_fact_count(facts: list[Any], query_time: float | None) -> int:
+    anchor = _positive_float(query_time)
+    if anchor is None:
+        return 0
+    return sum(1 for fact in facts if (_fact_time(fact) is not None and _fact_time(fact) > anchor))
+
+
+def _query_time_open_interval_fact_count(facts: list[Any], query_time: float | None) -> int:
+    anchor = _positive_float(query_time)
+    if anchor is None:
+        return 0
+    return sum(1 for fact in facts if _open_interval_started_before(fact, anchor))
+
+
+def _open_interval_started_before(fact: Any, query_time: float) -> bool:
+    if getattr(fact, "time_end", None) is None:
+        start = _positive_float(getattr(fact, "time_start", None))
+        if start is not None and start <= query_time:
+            return True
+    for occurrence in getattr(fact, "occurrences", []) or []:
+        if getattr(occurrence, "time_end", None) is None:
+            start = _positive_float(getattr(occurrence, "time_start", None))
+            if start is not None and start <= query_time:
+                return True
+    return False
 
 
 def _fact_time(fact: Any) -> float | None:
