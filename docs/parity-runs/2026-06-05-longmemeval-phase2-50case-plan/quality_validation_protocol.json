@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "goal": "Validate Azure-MemForest quality improvements without benchmark leakage, per-case overfitting, or confounded runtime changes.",
+  "runtime_firewall": {
+    "gold_answers_allowed_in": [
+      "offline harness diagnostics",
+      "judge prompts",
+      "committed evaluation artifacts"
+    ],
+    "gold_answers_forbidden_in": [
+      "src runtime extraction",
+      "src runtime retrieval",
+      "src runtime answer composition",
+      "src runtime materialization"
+    ],
+    "benchmark_question_type_forbidden_for_runtime_routing": true
+  },
+  "development_sets": {
+    "targeted_slices": "Use known failure slices only to verify a specific fix mechanism, not to claim broad parity.",
+    "regression_10": "Use for quick no-regression checks after targeted fixes.",
+    "heldout_50": "Use as a clean validation gate. Do not tune per-case against it after declaring a candidate.",
+    "official_full_session": "Run only after clean heldout_50 evidence is operationally and qualitatively acceptable."
+  },
+  "noise_floor": {
+    "require_repeat_for_borderline_deltas": true,
+    "borderline_delta_primary_correct_cases": 3,
+    "interpretation": "Accuracy changes smaller than or equal to this band require repeat runs or adjudication before being treated as real."
+  },
+  "clean_run_requirements": {
+    "single_code_hash": true,
+    "single_runtime_image": true,
+    "single_model_and_index_posture": true,
+    "no_mid_run_remediation": true,
+    "durable_failed_count": 0,
+    "dlq_delta": 0,
+    "quality_diagnostics_required": true,
+    "report_per_question_type_accuracy": true,
+    "report_latency_and_cost_posture": true
+  },
+  "miss_classification": {
+    "required_classes": [
+      "assistant_extraction_policy_miss",
+      "not_in_retrieved_topk",
+      "answerer_or_judge_miss",
+      "judge_or_partial_credit"
+    ],
+    "durable_store_check_required_before_extraction_prompt_changes": true,
+    "larger_recall_ablation_required_before_retrieval_claim": true
+  },
+  "parity_claim_gate": {
+    "requires_clean_heldout_50": true,
+    "requires_4_8_review": true,
+    "requires_no_known_leakage": true,
+    "requires_documented_caveats": true
+  }
+}
