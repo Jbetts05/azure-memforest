@@ -16,6 +16,22 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 _WORD = re.compile(r"[a-z0-9]+", re.IGNORECASE)
+_STOP_WORDS = {
+    "a",
+    "an",
+    "and",
+    "at",
+    "by",
+    "for",
+    "from",
+    "in",
+    "of",
+    "on",
+    "or",
+    "the",
+    "to",
+    "with",
+}
 DEFAULT_NEEDLES = {
     "1de5cff2": ["veja", "wild rubber", "amazon"],
     "6ae235be": ["atmospheric distillation", "fluid catalytic", "alkylation", "hydrotreating"],
@@ -63,8 +79,12 @@ def diagnose_case(
 ) -> dict[str, Any]:
     topk_hits = _needle_hits(needles, topk_facts)
     store_hits = _needle_hits(needles, store_facts) if store_inspected else {}
+    relaxed_topk_hits = _relaxed_needle_hits(needles, topk_facts)
+    relaxed_store_hits = _relaxed_needle_hits(needles, store_facts) if store_inspected else {}
     topk_hit_count = sum(1 for hit in topk_hits.values() if hit)
     store_hit_count = sum(1 for hit in store_hits.values() if hit) if store_inspected else 0
+    relaxed_topk_hit_count = sum(1 for hit in relaxed_topk_hits.values() if hit)
+    relaxed_store_hit_count = sum(1 for hit in relaxed_store_hits.values() if hit) if store_inspected else 0
     if topk_hits and topk_hit_count == len(topk_hits):
         classification = "gold_evidence_in_topk"
     elif topk_hit_count > 0:
@@ -73,6 +93,10 @@ def diagnose_case(
         classification = "gold_evidence_in_store_not_topk"
     elif store_inspected and store_hit_count > 0:
         classification = "partial_gold_evidence_in_store"
+    elif store_inspected and relaxed_store_hits and relaxed_store_hit_count == len(relaxed_store_hits):
+        classification = "relaxed_gold_evidence_in_store"
+    elif store_inspected and relaxed_store_hit_count > 0:
+        classification = "partial_relaxed_gold_evidence_in_store"
     elif store_inspected:
         classification = "gold_evidence_not_lexically_found_in_store"
     else:
@@ -88,8 +112,12 @@ def diagnose_case(
         "store_fact_count": len(store_facts) if store_inspected else None,
         "topk_hits": topk_hits,
         "store_hits": store_hits if store_inspected else None,
+        "relaxed_topk_hits": relaxed_topk_hits,
+        "relaxed_store_hits": relaxed_store_hits if store_inspected else None,
         "topk_hit_count": topk_hit_count,
         "store_hit_count": store_hit_count if store_inspected else None,
+        "relaxed_topk_hit_count": relaxed_topk_hit_count,
+        "relaxed_store_hit_count": relaxed_store_hit_count if store_inspected else None,
         "store_inspected": store_inspected,
         "classification": classification,
         "assistant_turns_extractable": sum(int(item.get("assistant_turns_extractable") or 0) for item in input_shaping),
@@ -169,6 +197,11 @@ def _needle_hits(needles: list[str], facts: list[dict[str, Any]]) -> dict[str, b
     return {needle: _contains_phrase(text, needle) for needle in needles}
 
 
+def _relaxed_needle_hits(needles: list[str], facts: list[dict[str, Any]]) -> dict[str, bool]:
+    text_tokens = set(_normalize("\n".join(_fact_text(fact) for fact in facts)).split())
+    return {needle: _contains_relaxed_tokens(text_tokens, needle) for needle in needles}
+
+
 def _fact_text(fact: dict[str, Any]) -> str:
     parts = [str(fact.get(key) or "") for key in ("fact_text", "text", "content", "fact", "summary")]
     metadata = fact.get("metadata")
@@ -179,6 +212,15 @@ def _fact_text(fact: dict[str, Any]) -> str:
 
 def _contains_phrase(text: str, phrase: str) -> bool:
     return f" {_normalize(phrase)} " in f" {_normalize(text)} "
+
+
+def _contains_relaxed_tokens(text_tokens: set[str], phrase: str) -> bool:
+    phrase_tokens = {
+        token
+        for token in _normalize(phrase).split()
+        if token not in _STOP_WORDS and len(token) >= 2
+    }
+    return bool(phrase_tokens) and phrase_tokens <= text_tokens
 
 
 def _normalize(text: str) -> str:

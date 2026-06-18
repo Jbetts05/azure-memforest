@@ -7,16 +7,17 @@
   },
   "conclusions": [
     "Normal assistant extraction fixed two cases where gold evidence reached top-k: cc539528 and 8464fc84.",
-    "Three remaining misses had no lexical gold evidence found in the full canonical fact store under accent-insensitive phrase checks: 1de5cff2, 6ae235be, dc439ea3. Treat these as candidate extraction/storage misses, not proven semantic absence.",
-    "One remaining miss is a likely retrieval/ranking miss under lexical store inspection: 70b3e69b had both Manolo and Garcia evidence somewhere in the fact store but not top-k. Confirm same-fact co-occurrence or run larger recall before making runtime changes."
+    "Three remaining misses had no exact or relaxed lexical gold evidence found in the full canonical fact store: 1de5cff2, 6ae235be, dc439ea3. These are stronger candidate extraction/storage misses, though semantic/manual inspection is still required before prompt changes.",
+    "One remaining miss is a likely retrieval/ranking miss: 70b3e69b had Manolo/Garcia evidence in the fact store but not top-k. Confirm same-fact co-occurrence or run larger recall before making runtime changes."
   ],
   "caveats": [
-    "Needle checks are lexical diagnostics over gold strings, not runtime behavior. They are offline-only and must not be used by runtime extraction/retrieval/answering.",
-    "The lexical-not-found bucket means gold phrases were not found in fact_text or metadata. It can still miss paraphrases, so extraction prompt changes require relaxed/semantic inspection first.",
-    "The diagnostic required a temporary Cosmos public-access/IP-rule window; after inspection, Cosmos was restored to publicNetworkAccess Enabled with empty ipRules and AzureServices bypass, and API readiness returned OK."
+    "Needle checks are offline diagnostics over gold strings, not runtime behavior. They must not be used by runtime extraction/retrieval/answering.",
+    "The lexical-not-found bucket means gold phrases and relaxed gold tokens were not found in fact_text or metadata. It can still miss deeper paraphrases, so extraction prompt changes require semantic/manual inspection first.",
+    "The diagnostic required a temporary Cosmos public-access/IP-rule window; after inspection, Cosmos was restored to publicNetworkAccess Enabled with empty ipRules and AzureServices bypass, and API readiness returned OK.",
+    "Relaxed token hits are intentionally over-permissive and may combine tokens across facts; use them only as weak evidence that extraction might be present, not as proof."
   ],
   "next_steps": [
-    "Run relaxed semantic/embedding or manual inspection for the three lexical-not-found cases before changing extraction prompts.",
+    "Run manual or embedding-based inspection for the three lexical-not-found cases before changing extraction prompts.",
     "Run larger recall/top_k or assistant-origin retrieval gating for 70b3e69b before prompt changes.",
     "Run full flag-off/flag-on regression before adopting assistant extraction broadly."
   ]
