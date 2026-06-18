@@ -57,6 +57,15 @@ def test_cloud_answer_prompt_preserves_preference_avoidance_examples_without_wea
     assert "The information provided is not enough to answer this question." in prompt
 
 
+def test_cloud_answer_prompt_requires_direct_grounding_without_substitution() -> None:
+    prompt = ANSWER_SYSTEM_CLOUD
+
+    assert "Grounding check" in prompt
+    assert "Subject to rule 8" in prompt
+    assert "explicit name, number, list, date, location, or value" in prompt
+    assert "do not substitute a merely related person, item, event, date, or location" in prompt
+
+
 def test_cloud_answer_prompt_distinguishes_previous_personal_best_from_current_best() -> None:
     prompt = ANSWER_SYSTEM_CLOUD
 
