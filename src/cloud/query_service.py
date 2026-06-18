@@ -281,6 +281,9 @@ class CloudMemoryQueryService:
         reference_date = _reference_date(query_time, facts)
         if reference_date:
             context = f"[Reference date: {reference_date}]\n{context}"
+        temporal_instructions = _temporal_answer_instructions(question, reference_date_present=bool(reference_date))
+        if temporal_instructions:
+            context = f"{temporal_instructions}\n{context}"
         user_prompt = build_answer_user_message(question, context)
         try:
             payload = await self._generate_answer_json(user_prompt)
@@ -668,6 +671,38 @@ def _fact_timestamp(fact: Any) -> float:
                 except (TypeError, ValueError):
                     pass
     return float("inf")
+
+
+def _temporal_answer_instructions(question: str, *, reference_date_present: bool) -> str:
+    if not _is_temporal_reasoning_question(question):
+        return ""
+    reference_rule = (
+        "Use the [Reference date] as the question date for all relative-time calculations. "
+        if reference_date_present
+        else "If no [Reference date] is present, use only the fact time tags and do not invent today's date. "
+    )
+    return (
+        "[Temporal grounding rules: "
+        f"{reference_rule}"
+        "For 'days/weeks/months ago', 'since', 'before', 'after', 'first', or ordering questions, "
+        "identify the required anchor event or item in the facts before calculating. "
+        "Do not infer that an anchor happened merely because the question mentions it. "
+        "If any required anchor is absent from the facts, answer exactly: "
+        "\"The information provided is not enough to answer this question.\" "
+        "For before/after/first questions, compare fact time tags and any relative phrases stated inside the facts.]"
+    )
+
+
+def _is_temporal_reasoning_question(question: str) -> bool:
+    text = question.lower()
+    return bool(
+        re.search(
+            r"\b(ago|since|before|after|earlier|later|most recently|latest|last visited|"
+            r"how many (days|weeks|months)|which did i|which book|which device|"
+            r"which .+ first|what .+ first|when did .+ first)\b",
+            text,
+        )
+    )
 
 
 def _normalized_recency_scores(facts: list[Any], *, query_time: float | None = None) -> dict[str, float]:

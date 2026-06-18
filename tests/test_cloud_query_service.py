@@ -610,6 +610,67 @@ async def test_cloud_query_answer_prompt_includes_abstention_rule() -> None:
 
 
 @pytest.mark.asyncio
+async def test_cloud_query_temporal_answer_prompt_uses_reference_date_and_anchor_abstention() -> None:
+    model = RecordingModel()
+
+    await _service(_manifest(), model=model).query(
+        ActorContext(actor_id="user-1", tenant=TenantContext("tenant-1")),
+        user_id="user-1",
+        request=QueryRequest(question="How many days ago did I watch the Super Bowl?", query_time=1685006880.0, max_facts=2),
+    )
+
+    assert model.generate_kwargs
+    prompt = model.generate_kwargs[0]["user_prompt"]
+    assert "[Temporal grounding rules:" in prompt
+    assert "Use the [Reference date] as the question date" in prompt
+    assert "Do not infer that an anchor happened merely because the question mentions it" in prompt
+    assert "The information provided is not enough to answer this question." in prompt
+
+
+@pytest.mark.asyncio
+async def test_cloud_query_temporal_answer_prompt_uses_fact_reference_date_without_query_time() -> None:
+    model = RecordingModel()
+
+    await _service(_manifest(), model=model).query(
+        ActorContext(actor_id="user-1", tenant=TenantContext("tenant-1")),
+        user_id="user-1",
+        request=QueryRequest(question="How many days ago did I watch the Super Bowl?", max_facts=2),
+    )
+
+    prompt = model.generate_kwargs[0]["user_prompt"]
+    assert "[Reference date:" in prompt
+    assert "Use the [Reference date] as the question date" in prompt
+    assert "If no [Reference date] is present" not in prompt
+
+
+@pytest.mark.asyncio
+async def test_cloud_query_non_temporal_answer_prompt_omits_temporal_grounding_block() -> None:
+    model = RecordingModel()
+
+    await _service(_manifest(), model=model).query(
+        ActorContext(actor_id="user-1", tenant=TenantContext("tenant-1")),
+        user_id="user-1",
+        request=QueryRequest(question="Where did Alice move?", query_time=1685006880.0, max_facts=2),
+    )
+
+    assert model.generate_kwargs
+    assert "[Temporal grounding rules:" not in model.generate_kwargs[0]["user_prompt"]
+
+
+@pytest.mark.asyncio
+async def test_cloud_query_temporal_detector_avoids_substring_false_positives() -> None:
+    model = RecordingModel()
+
+    await _service(_manifest(), model=model).query(
+        ActorContext(actor_id="user-1", tenant=TenantContext("tenant-1")),
+        user_id="user-1",
+        request=QueryRequest(question="Where in Chicago did Alice move?", query_time=1685006880.0, max_facts=2),
+    )
+
+    assert "[Temporal grounding rules:" not in model.generate_kwargs[0]["user_prompt"]
+
+
+@pytest.mark.asyncio
 async def test_cloud_query_event_list_prioritizes_all_event_facts_chronologically() -> None:
     response = await _service(
         _manifest(),
