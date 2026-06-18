@@ -27,6 +27,16 @@ def test_extraction_prompt_allows_marked_assistant_advice_context() -> None:
     assert "Do NOT rewrite them as user-authored preferences" in prompt
 
 
+def test_extraction_prompt_allows_neutral_assistant_extraction_context() -> None:
+    prompt = UNIFIED_MEMORY_EXTRACTION_PROMPT.system
+
+    assert "assistant_extraction_context=true" in prompt
+    assert "prior assistant-provided answers" in prompt
+    assert "exact named entities, numbers, lists, schedules, recommendations, and answer snippets" in prompt
+    assert "Set `origin=assistant`" in prompt
+    assert "do NOT rewrite them as user-authored facts or preferences" in prompt
+
+
 def test_extraction_prompt_preserves_countable_collection_quantities() -> None:
     prompt = UNIFIED_MEMORY_EXTRACTION_PROMPT.system
 

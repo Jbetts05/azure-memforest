@@ -124,6 +124,8 @@ def _render_chunk_text(turns: Sequence[NormalizedTurn], *, include_metadata_mark
         speaker = normalize_entity_key(turn.speaker_name) or turn.speaker_name
         if include_metadata_markers and _is_marked_assistant_advice(turn):
             lines.append("[meta] assistant_advice_context=true")
+        if include_metadata_markers and _is_marked_assistant_extraction(turn):
+            lines.append("[meta] assistant_extraction_context=true")
         lines.append(f"[{turn.timestamp_text}] {speaker}: {turn.text}")
     return "\n".join(lines)
 
@@ -133,3 +135,10 @@ def _is_marked_assistant_advice(turn: NormalizedTurn) -> bool:
         return False
     nested = turn.metadata.get("metadata")
     return isinstance(nested, dict) and nested.get("assistant_advice_context") is True
+
+
+def _is_marked_assistant_extraction(turn: NormalizedTurn) -> bool:
+    if str(turn.speaker_tag).strip().lower() != "assistant":
+        return False
+    nested = turn.metadata.get("metadata")
+    return isinstance(nested, dict) and nested.get("assistant_extraction_context") is True

@@ -42,3 +42,17 @@ def test_chunker_does_not_render_advice_marker_for_user_or_string_flags() -> Non
 
     assert "[meta] assistant_advice_context=true" not in chunk_session("s1", [user_turn])[0].text
     assert "[meta] assistant_advice_context=true" not in chunk_session("s2", [string_flag_turn])[0].text
+
+
+def test_chunker_renders_neutral_assistant_extraction_marker() -> None:
+    turn = {
+        "role": "assistant",
+        "content": "The deli near the Vatican was Roscioli.",
+        "timestamp": "2023/05/01 (Mon) 10:00",
+        "metadata": {"assistant_extraction_context": True},
+    }
+
+    chunk = chunk_session("s1", [turn])[0]
+
+    assert "[meta] assistant_extraction_context=true" in chunk.text
+    assert "[meta] assistant_advice_context=true" not in chunk.text
