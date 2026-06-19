@@ -296,7 +296,7 @@ class FakePreferenceActivityFactStore:
             "relax": _managed_fact("relax", "The assistant suggested using relaxation techniques such as reading, meditation, deep breathing exercises, yoga or stretching, or listening to soothing music.", time=5.0),
             "winddown": _managed_fact("winddown", "The user prefers winding down by 9:30 pm to prepare for a good night's sleep.", time=5.0),
             "screens": _managed_fact("screens", "The assistant advised avoiding screens (phones, tablets, laptops, or TVs) for at least 30 minutes before bedtime.", time=5.0),
-            "dance": _managed_fact("dance", "The user planned to ask Jamal whether he knows of any upcoming dance events or battles in the area.", time=1.0),
+            "dance": _managed_fact("dance", "The user wants recommendations for hip hop and street dance classes at a high-energy dance studio.", time=1.0),
             "vacation": _managed_fact("vacation", "The user is planning a summer vacation that includes outdoor activities.", time=2.0),
         }
 
@@ -720,7 +720,7 @@ async def test_cloud_query_preference_activity_questions_drop_unrelated_event_no
     fact_text = "\n".join(fact.text for fact in response.facts)
     assert [fact.fact_id for fact in response.facts] == ["screens", "winddown", "relax"]
     assert "phones, tablets, laptops, or TVs" in fact_text
-    assert "dance events or battles" not in fact_text
+    assert "high-energy dance studio" not in fact_text
     assert "summer vacation" not in fact_text
 
 
@@ -739,6 +739,25 @@ async def test_cloud_query_preference_activity_fallback_recovers_sleep_context_w
     )
 
     assert [fact.fact_id for fact in response.facts] == ["screens", "winddown", "relax"]
+
+
+@pytest.mark.asyncio
+async def test_cloud_query_preference_activity_fallback_drops_recommendation_only_noise() -> None:
+    response = await _service(
+        _manifest(),
+        recall=FakeLeafRecallIndex(),
+        fact_store=FakePreferenceActivityFactStore(),
+        tree_store=FakeTreeStore(),
+        config=CloudQueryConfig(embedding_model_version="embed-v1", default_beam_width=2, lexical_fact_fallback=True),
+    ).query(
+        ActorContext(actor_id="user-1", tenant=TenantContext("tenant-1")),
+        user_id="user-1",
+        request=QueryRequest(question="Can you suggest some activities that I can do in the evening?", max_facts=8),
+    )
+
+    fact_ids = [fact.fact_id for fact in response.facts]
+    assert "dance" not in fact_ids
+    assert "vacation" not in fact_ids
 
 
 @pytest.mark.asyncio

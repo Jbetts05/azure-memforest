@@ -628,8 +628,6 @@ def _preference_activity_facts(question: str, facts: list[Any]) -> list[Any]:
         text = str(getattr(fact, "fact_text", "") or "")
         normalized = text.lower()
         score = 0.0
-        if re.search(r"\b(prefers?|wants?|likes?|would like|avoid(?:s|ing)?|advised|suggested)\b", normalized):
-            score += 2.0
         if re.search(r"\b(sleep|bedtime|before bed|wind(?:ing)? down|restful)\b", normalized):
             score += 3.0
         if re.search(r"\b(screen|screens|phone|phones|tablet|tablets|laptop|laptops|tv|tvs|television|electronic devices)\b", normalized):
