@@ -17,13 +17,15 @@
     "residue_raw_nonrefusal_events": 1
   },
   "caveats": [
-    "Quality regressed versus the previous clean as-of regression_10 result of 10/10; do not proceed to heldout_50 from this candidate.",
-    "All three misses are not-in-retrieved-top-k by offline diagnostics, so the current candidate needs retrieval/coverage investigation before larger validation.",
-    "Runtime latency worsened with assistant extraction: 98 ingests averaged about 113.7s, p90 about 208.3s, max 328.2s, with 3 ingests over 240s."
+    "This is a failed quality gate: do not proceed to heldout_50 from this candidate.",
+    "Compared with the prior clean as-of regression_10 result of 10/10, this candidate produced 7/10, but causality is confounded by both code changes and PHASE2_EXTRACT_ALL_ASSISTANT_TURNS=true. Do not attribute the drop to a single commit without ablation.",
+    "All three misses are not-in-retrieved-top-k by offline diagnostics, so retrieval/index coverage or assistant-extraction index noise are the primary suspects; prompt-grounding changes are less likely to explain these misses.",
+    "Runtime latency worsened with assistant extraction: 98 ingests averaged about 113.7s, p90 about 208.3s, max 328.2s, with 3 ingests over 240s.",
+    "residue_raw_nonrefusal_events=1 had provenance contamination 0; treat as a caveat, not a hard contamination failure."
   ],
   "next_steps": [
-    "Run 4.8 review of regression evidence before changing runtime again.",
-    "Investigate the three not-in-top-k misses before another live run.",
-    "Restore safe idle after preserving artifacts."
+    "Ablate PHASE2_EXTRACT_ALL_ASSISTANT_TURNS=false on the same code/image before reverting code.",
+    "If flag-off still regresses, isolate query-time-aware rerank on the temporal misses.",
+    "Only after ablations pass should any larger heldout run proceed."
   ]
 }

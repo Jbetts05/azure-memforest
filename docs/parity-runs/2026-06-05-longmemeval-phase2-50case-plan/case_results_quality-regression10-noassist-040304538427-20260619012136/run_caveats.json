@@ -1,0 +1,41 @@
+{
+  "scope": "Regression_10 ablation with PHASE2_EXTRACT_ALL_ASSISTANT_TURNS disabled after Service Bus session-id fix.",
+  "runtime": {
+    "started_git_sha": "040304538427",
+    "completed_git_sha": "b17e43be604f",
+    "image_tag": "b17e43be604f-sessionfix",
+    "extract_all_assistant_turns": false,
+    "dispatch_mode": "durable"
+  },
+  "result": {
+    "attempted_cases": 10,
+    "completed_cases": 10,
+    "primary_judge_correct": 9,
+    "durable_completed": 98,
+    "durable_failed": 0,
+    "dlq_delta": 0,
+    "residue_provenance_events": 0,
+    "residue_raw_nonrefusal_events": 1
+  },
+  "latency": {
+    "ingest_count": 99,
+    "avg_seconds": 55.2,
+    "p50_seconds": 54.3,
+    "p90_seconds": 96.7,
+    "max_seconds": 119.2,
+    "over_240_seconds": 0
+  },
+  "caveats": [
+    "This is an ablation, not a final heldout gate. The first attempt was interrupted by a Service Bus session_id length failure and then resumed after deploying b17e43b, so it is not a perfectly controlled A/B run.",
+    "The latency improvement versus all-assistant extraction is strong and mechanism-consistent: avg ~113.7s -> 55.2s, p90 ~208.3s -> 96.7s, max 328.2s -> 119.2s, and >240s ingests 3 -> 0.",
+    "The quality improvement from 7/10 to 9/10 is directional but underpowered because n=10, resumed execution, and one extra successful ingest make causality less certain. Do not overclaim it without repeat/noise-floor runs.",
+    "The result is still below the previous clean as-of regression_10 result of 10/10; do not proceed to heldout_50 until the remaining preference miss is understood or repeated within the noise protocol.",
+    "residue_raw_nonrefusal_events=1 had provenance contamination 0; treat as a caveat, not a hard contamination failure."
+  ],
+  "next_steps": [
+    "Keep PHASE2_EXTRACT_ALL_ASSISTANT_TURNS disabled for broad validation.",
+    "Use targeted assistant-origin extraction/gating rather than global assistant extraction.",
+    "Run a clean no-assist regression repeat for noise floor before targeting 195a1a1b.",
+    "If 195a1a1b persists, inspect answer formatting/retrieval before prompt changes."
+  ]
+}
