@@ -303,6 +303,12 @@ class FakePreferenceActivityFactStore:
     async def get_facts(self, fact_ids):
         return [self.facts[fact_id] for fact_id in fact_ids if fact_id in self.facts]
 
+    async def search_facts_text(self, query_text, *, limit=20):
+        query = query_text.lower()
+        if "sleep" in query or "meditation" in query or "screens" in query:
+            return [self.facts["screens"], self.facts["winddown"], self.facts["relax"]][:limit]
+        return []
+
 
 class FakeDatelessFactStore:
     async def get_facts(self, fact_ids):
@@ -579,6 +585,7 @@ async def test_cloud_query_keeps_facts_when_answer_retry_stays_blank() -> None:
 def test_cloud_query_lexical_fallback_triggers_for_ordering_questions() -> None:
     assert _should_use_lexical_fact_fallback("What is the order of the concerts I attended?")
     assert _should_use_lexical_fact_fallback("List all musical events from the past two months.")
+    assert _should_use_lexical_fact_fallback("Can you suggest some activities that I can do in the evening?")
 
 
 def test_cloud_query_event_list_expansion_puts_synonyms_first() -> None:
@@ -587,6 +594,15 @@ def test_cloud_query_event_list_expansion_puts_synonyms_first() -> None:
     assert queries[1].startswith("concert show festival music event")
     assert queries[2].startswith("gig performance live venue band")
     assert queries[3].startswith("outdoor open-air park local bar")
+
+
+def test_cloud_query_preference_activity_expansion_puts_sleep_terms_first() -> None:
+    queries = _lexical_fallback_queries("Can you suggest some activities that I can do in the evening?")
+
+    assert queries[1].startswith("sleep relaxation meditation calm")
+    assert queries[2].startswith("avoid screens phones tablets laptops tv")
+    assert "headspace" not in "\n".join(queries).lower()
+    assert "9:30" not in "\n".join(queries)
 
 
 def test_cloud_query_detects_preference_activity_questions() -> None:
@@ -706,6 +722,23 @@ async def test_cloud_query_preference_activity_questions_drop_unrelated_event_no
     assert "phones, tablets, laptops, or TVs" in fact_text
     assert "dance events or battles" not in fact_text
     assert "summer vacation" not in fact_text
+
+
+@pytest.mark.asyncio
+async def test_cloud_query_preference_activity_fallback_recovers_sleep_context_when_tree_misses() -> None:
+    response = await _service(
+        _manifest(),
+        recall=FakeLeafRecallIndex(),
+        fact_store=FakePreferenceActivityFactStore(),
+        tree_store=FakeTreeStore(),
+        config=CloudQueryConfig(embedding_model_version="embed-v1", default_beam_width=2, lexical_fact_fallback=True),
+    ).query(
+        ActorContext(actor_id="user-1", tenant=TenantContext("tenant-1")),
+        user_id="user-1",
+        request=QueryRequest(question="Can you suggest some activities that I can do in the evening?", max_facts=5),
+    )
+
+    assert [fact.fact_id for fact in response.facts] == ["screens", "winddown", "relax"]
 
 
 @pytest.mark.asyncio

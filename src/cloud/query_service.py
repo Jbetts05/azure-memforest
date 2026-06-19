@@ -538,7 +538,7 @@ _LEXICAL_FALLBACK_QUERY_PATTERN = re.compile(
 
 
 def _should_use_lexical_fact_fallback(question: str) -> bool:
-    return bool(_LEXICAL_FALLBACK_QUERY_PATTERN.search(str(question or "")))
+    return bool(_LEXICAL_FALLBACK_QUERY_PATTERN.search(str(question or "")) or _is_preference_activity_question(question))
 
 
 def _is_temporal_event_list_question(question: str) -> bool:
@@ -558,6 +558,15 @@ def _lexical_fallback_queries(question: str) -> list[str]:
                 f"gig performance live venue band artist {question}",
                 f"outdoor open-air park local bar club {question}",
                 f"saw went attended enjoyed got back from {question}",
+            ]
+        )
+    if _is_preference_activity_question(question):
+        queries.extend(
+            [
+                f"sleep relaxation meditation calm before bed wind down {question}",
+                f"avoid screens phones tablets laptops tv bedtime sleep quality {question}",
+                f"evening activities relaxing breathing yoga stretching soothing music {question}",
+                f"bedtime restful quiet wind down meditation {question}",
             ]
         )
     return queries
@@ -621,11 +630,11 @@ def _preference_activity_facts(question: str, facts: list[Any]) -> list[Any]:
         score = 0.0
         if re.search(r"\b(prefers?|wants?|likes?|would like|avoid(?:s|ing)?|advised|suggested)\b", normalized):
             score += 2.0
-        if re.search(r"\b(sleep|bedtime|before bed|wind(?:ing)? down|9:30|9 30|restful)\b", normalized):
+        if re.search(r"\b(sleep|bedtime|before bed|wind(?:ing)? down|restful)\b", normalized):
             score += 3.0
         if re.search(r"\b(screen|screens|phone|phones|tablet|tablets|laptop|laptops|tv|tvs|television|electronic devices)\b", normalized):
             score += 4.0
-        if re.search(r"\b(relax|relaxation|meditation|headspace|calm|breathing|yoga|stretching|soothing music|read(?:ing)? a book|reading books)\b", normalized):
+        if re.search(r"\b(relax|relaxation|meditation|calm|breathing|yoga|stretching|soothing music|read(?:ing)? a book|reading books)\b", normalized):
             score += 2.0
         if score <= 0:
             continue
