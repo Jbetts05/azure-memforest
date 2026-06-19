@@ -1,0 +1,39 @@
+{
+  "scope": "Clean regression_10 validation for preference-fallback candidate a5f12755751c with global assistant extraction disabled.",
+  "runtime": {
+    "git_sha": "a5f12755751c",
+    "image_tag": "a5f12755751c-prefrefine",
+    "extract_all_assistant_turns": false,
+    "dispatch_mode": "durable"
+  },
+  "result": {
+    "attempted_cases": 10,
+    "completed_cases": 10,
+    "primary_judge_correct": 10,
+    "judge_disagreements": 0,
+    "durable_completed": 98,
+    "durable_failed": 0,
+    "dlq_delta": 0,
+    "residue_provenance_events": 0,
+    "residue_raw_nonrefusal_events": 1,
+    "advance_to_50_case_subset": true
+  },
+  "latency": {
+    "ingest_count": 98,
+    "avg_seconds": 52.3,
+    "p50_seconds": 53.9,
+    "p90_seconds": 86.3,
+    "max_seconds": 107.5,
+    "over_240_seconds": 0
+  },
+  "caveats": [
+    "This is a clean regression_10 pass and supports advancing the validation ladder, but it is not a heldout_50 or parity claim.",
+    "Global PHASE2_EXTRACT_ALL_ASSISTANT_TURNS remained disabled; assistant-origin memory should use targeted/gated extraction rather than broad all-assistant extraction.",
+    "residue_raw_nonrefusal_events=1 had provenance contamination 0; treat as a caveat, not a hard contamination failure."
+  ],
+  "next_steps": [
+    "Run 4.8 review before any heldout_50 attempt.",
+    "If cleared, proceed to a clean heldout_50 run on this exact runtime/posture with no mid-run remediation.",
+    "Commit this evidence before larger validation."
+  ]
+}
