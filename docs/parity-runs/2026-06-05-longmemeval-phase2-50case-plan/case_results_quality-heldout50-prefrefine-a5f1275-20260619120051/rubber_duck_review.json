@@ -1,0 +1,32 @@
+{
+  "review_model": "claude-opus-4.8",
+  "status": "reviewed",
+  "headline": "Mechanics passed cleanly, but quality is not ready and parity/readiness must not be claimed.",
+  "validated_conclusions": {
+    "do_not_claim_parity_or_readiness": true,
+    "operational_success_valid": true,
+    "safe_idle_restoration_sufficient": true
+  },
+  "blocking_interpretation_issues": [
+    {
+      "id": "assistant_policy_artifact",
+      "summary": "The 6 single-session-assistant misses are structurally caused by disabled assistant-turn extraction, not a measured quality ceiling.",
+      "impact": "A heldout quality claim remains blocked until the paper-faithful assistant-origin extraction policy is settled and implemented selectively."
+    },
+    {
+      "id": "confounded_retrieval_bucket",
+      "summary": "The 9 not_in_retrieved_topk misses mix zero-fact retrieval, session-slice exclusion, temporal derived-answer artifacts, and possible true ranking misses.",
+      "impact": "Broad ranking/retrieval tuning is premature until the miss taxonomy separates these modes."
+    }
+  ],
+  "non_blocking_caveats": [
+    "The run used benchmark budget 3000 despite the idle manifest baseline of 2000; record this as a reproducibility caveat.",
+    "The answerer_or_judge_miss label mostly represents answerer over-refusal because pro judge confirmed the disagreements as incorrect.",
+    "Postrun raw non-refusals were 4, but provenance contamination was 0; this should remain explicit as a gate/caveat distinction."
+  ],
+  "recommended_next_slice": [
+    "Decide and implement paper-faithful selective assistant extraction for factual assistant-origin content, avoiding both extract-none and extract-all behavior.",
+    "Root-cause the zero-fact cases to determine whether extraction, slice selection, indexing, or query recall produced empty answers.",
+    "Sharpen diagnostics with semantic gold-presence checks and a session_slice_excluded class before retrieval-ranking changes."
+  ]
+}
