@@ -1,0 +1,29 @@
+{
+  "scope": "Clean regression_10 validation for quality-readiness candidate 040304538427 with assistant extraction enabled.",
+  "runtime": {
+    "git_sha": "040304538427",
+    "image_tag": "040304538427-quality",
+    "extract_all_assistant_turns": true,
+    "dispatch_mode": "durable"
+  },
+  "result": {
+    "attempted_cases": 10,
+    "completed_cases": 10,
+    "primary_judge_correct": 7,
+    "durable_completed": 98,
+    "durable_failed": 0,
+    "dlq_delta": 0,
+    "residue_provenance_events": 0,
+    "residue_raw_nonrefusal_events": 1
+  },
+  "caveats": [
+    "Quality regressed versus the previous clean as-of regression_10 result of 10/10; do not proceed to heldout_50 from this candidate.",
+    "All three misses are not-in-retrieved-top-k by offline diagnostics, so the current candidate needs retrieval/coverage investigation before larger validation.",
+    "Runtime latency worsened with assistant extraction: 98 ingests averaged about 113.7s, p90 about 208.3s, max 328.2s, with 3 ingests over 240s."
+  ],
+  "next_steps": [
+    "Run 4.8 review of regression evidence before changing runtime again.",
+    "Investigate the three not-in-top-k misses before another live run.",
+    "Restore safe idle after preserving artifacts."
+  ]
+}
