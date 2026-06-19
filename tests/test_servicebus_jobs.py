@@ -11,6 +11,7 @@ from src.service.jobs import (
     ServiceBusMemoryCommandService,
     build_write_job_envelope,
     durable_command_service_from_env,
+    service_bus_session_id,
     service_bus_command_service_from_env,
 )
 from src.service.schemas import IngestSessionRequest, TurnInput
@@ -109,6 +110,28 @@ def test_write_job_envelope_has_deterministic_id_and_session_key() -> None:
     assert first.schema_version == 1
 
 
+def test_service_bus_session_id_hashes_long_tenant_user_keys() -> None:
+    long_user_id = (
+        "benchmark-phase2-09-gpt4_70e84552_abs-quality-regression10-noassist-"
+        "040304538427-20260619012136-extra-long-suffix-with-more-characters"
+    )
+    envelope = build_write_job_envelope(
+        _actor(),
+        user_id=long_user_id,
+        session_id="session-1",
+        job_type="ingest_session",
+        idempotency_key="idem-1",
+        payload={"turns": []},
+    )
+
+    session_id = service_bus_session_id(envelope)
+
+    assert envelope.session_key.startswith("tenant-1:benchmark-phase2-09")
+    assert len(envelope.session_key) > 128
+    assert session_id.startswith("sbpk:")
+    assert len(session_id) <= 128
+
+
 @pytest.mark.asyncio
 async def test_servicebus_publisher_sends_json_message_with_metadata() -> None:
     fake_client = FakeServiceBusClient()
@@ -137,6 +160,36 @@ async def test_servicebus_publisher_sends_json_message_with_metadata() -> None:
     assert message.application_properties["job_type"] == "delete_session"
     assert message.application_properties["job_id"] == envelope.job_id
     assert message.application_properties["idempotency_key"] == envelope.idempotency_key
+
+
+@pytest.mark.asyncio
+async def test_servicebus_publisher_sends_hashed_session_id_for_long_user_ids() -> None:
+    fake_client = FakeServiceBusClient()
+    publisher = ServiceBusJobPublisher(
+        fully_qualified_namespace="example.servicebus.windows.net",
+        queue_name="memforest-writes",
+        client_id="client-id",
+        servicebus_client=fake_client,
+    )
+    long_user_id = (
+        "benchmark-phase2-09-gpt4_70e84552_abs-quality-regression10-noassist-"
+        "040304538427-20260619012136-extra-long-suffix-with-more-characters"
+    )
+    envelope = build_write_job_envelope(
+        _actor(),
+        user_id=long_user_id,
+        session_id="session-1",
+        job_type="ingest_session",
+        idempotency_key="idem-1",
+        payload={"turns": []},
+    )
+
+    await publisher.submit_job(envelope)
+
+    message = fake_client.sender.messages[0]
+    assert message.session_id == service_bus_session_id(envelope)
+    assert len(message.session_id) <= 128
+    assert message.application_properties["user_id"] == envelope.user_id
 
 
 @pytest.mark.asyncio

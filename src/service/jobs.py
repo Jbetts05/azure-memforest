@@ -23,6 +23,7 @@ MAX_SERVICE_BUS_MESSAGE_BYTES = 240 * 1024
 MAX_DURABLE_START_PAYLOAD_BYTES = 60 * 1024
 DURABLE_START_TIMEOUT_SECONDS = 60
 DURABLE_START_ATTEMPTS = 3
+SERVICE_BUS_SESSION_ID_MAX_LENGTH = 128
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,7 +73,7 @@ class ServiceBusJobPublisher:
         message = ServiceBusMessage(
             body,
             content_type="application/json",
-            session_id=envelope.session_key,
+            session_id=service_bus_session_id(envelope),
             message_id=envelope.job_id,
             application_properties={
                 "schema_version": envelope.schema_version,
@@ -114,6 +115,15 @@ class ServiceBusJobPublisher:
             credential=credential,
         )
         return self._client
+
+
+def service_bus_session_id(envelope: WriteJobEnvelope) -> str:
+    """Return a Service Bus-compatible session id without losing envelope identity."""
+    session_key = envelope.session_key
+    if len(session_key) <= SERVICE_BUS_SESSION_ID_MAX_LENGTH and len(session_key.encode("utf-8")) <= SERVICE_BUS_SESSION_ID_MAX_LENGTH:
+        return session_key
+    digest = hashlib.sha256(session_key.encode("utf-8")).hexdigest()
+    return f"sbpk:{digest}"
 
 
 class ServiceBusMemoryCommandService(MemoryCommandService):
