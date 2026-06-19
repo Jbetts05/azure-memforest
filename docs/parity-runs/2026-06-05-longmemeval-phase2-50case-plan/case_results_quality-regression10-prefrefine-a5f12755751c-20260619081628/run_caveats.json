@@ -29,11 +29,14 @@
   "caveats": [
     "This is a clean regression_10 pass and supports advancing the validation ladder, but it is not a heldout_50 or parity claim.",
     "Global PHASE2_EXTRACT_ALL_ASSISTANT_TURNS remained disabled; assistant-origin memory should use targeted/gated extraction rather than broad all-assistant extraction.",
-    "residue_raw_nonrefusal_events=1 had provenance contamination 0; treat as a caveat, not a hard contamination failure."
+    "residue_raw_nonrefusal_events=1 had provenance contamination 0; treat as a caveat, not a hard contamination failure.",
+    "4.8 review caveat: 195a1a1b passed despite diagnostics showing gold_in_retrieved_topk=false/answer_contains_gold=false, so treat that case as a soft pass rather than strong proof that preference fallback fully grounds the gold answer.",
+    "4.8 review caveat: preference fallback has a broad trigger but sleep/relax/screen-focused payload, so it may not generalize to non-sleep evening preference questions and could increase non-refusal risk.",
+    "4.8 review recommendation: run one same-posture regression_10 repeat before spending heldout_50 budget."
   ],
   "next_steps": [
-    "Run 4.8 review before any heldout_50 attempt.",
-    "If cleared, proceed to a clean heldout_50 run on this exact runtime/posture with no mid-run remediation.",
-    "Commit this evidence before larger validation."
+    "Run one same-posture regression_10 repeat before heldout_50.",
+    "If repeat is clean, proceed to heldout_50 with explicit caveats about preference fallback and assistant-origin recall off.",
+    "Keep PHASE2_EXTRACT_ALL_ASSISTANT_TURNS disabled for broad validation."
   ]
 }
