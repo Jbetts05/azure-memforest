@@ -82,6 +82,59 @@ def test_quality_diagnostics_classifies_answerer_miss_when_gold_fact_was_retriev
     assert result["all_retrieved_facts_timed"] is True
 
 
+def test_quality_diagnostics_classifies_answerer_over_refusal_when_gold_fact_was_retrieved() -> None:
+    diagnostics = _load_diagnostics()
+
+    case = {
+        "case_id": "over-refusal",
+        "question_type": "single-session-user",
+        "status": "succeeded",
+        "gold_answer": "500",
+        "answer": "The information provided is not enough to answer this question.",
+        "judges": {"primary": {"label": False}, "agreement": True},
+        "events": [
+            {
+                "step": "query",
+                "response": {
+                    "facts": [
+                        {
+                            "fact_text": "The user donated 500 dollars.",
+                            "time_start": 1685450520.0,
+                            "time_end": 1685450520.0,
+                        }
+                    ]
+                },
+            }
+        ],
+    }
+
+    result = diagnostics.diagnose_case(case)
+
+    assert result["miss_class"] == "answerer_over_refusal"
+    assert result["gold_in_retrieved_topk"] is True
+    assert result["zero_retrieved_facts"] is False
+
+
+def test_quality_diagnostics_classifies_zero_retrieved_fact_miss() -> None:
+    diagnostics = _load_diagnostics()
+
+    case = {
+        "case_id": "zero-facts",
+        "question_type": "temporal-reasoning",
+        "status": "succeeded",
+        "gold_answer": "Galaxy S22",
+        "answer": "",
+        "judges": {"primary": {"label": False}, "agreement": True},
+        "events": [{"step": "query", "response": {"facts": []}}],
+    }
+
+    result = diagnostics.diagnose_case(case)
+
+    assert result["miss_class"] == "zero_retrieved_fact_miss"
+    assert result["retrieved_fact_count"] == 0
+    assert result["zero_retrieved_facts"] is True
+
+
 def test_quality_diagnostics_summarizes_counts_by_question_type() -> None:
     diagnostics = _load_diagnostics()
 
@@ -110,7 +163,7 @@ def test_quality_diagnostics_summarizes_counts_by_question_type() -> None:
 
     assert summary["case_count"] == 2
     assert summary["correct_count"] == 1
-    assert summary["miss_class_counts"] == {"not_in_retrieved_topk": 1}
+    assert summary["miss_class_counts"] == {"zero_retrieved_fact_miss": 1}
     assert summary["by_question_type"]["single-session-user"] == {"correct": 1}
 
 

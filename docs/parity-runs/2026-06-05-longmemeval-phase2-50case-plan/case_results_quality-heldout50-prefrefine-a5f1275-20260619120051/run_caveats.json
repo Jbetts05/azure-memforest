@@ -25,9 +25,10 @@
     "pro_judge_disagreements": 2,
     "advance_to_50_case_subset": false,
     "miss_class_counts": {
-      "answerer_or_judge_miss": 2,
+      "answerer_over_refusal": 2,
       "assistant_extraction_policy_miss": 6,
-      "not_in_retrieved_topk": 9
+      "not_in_retrieved_topk": 6,
+      "zero_retrieved_fact_miss": 3
     },
     "by_question_type": {
       "knowledge-update": {
@@ -45,13 +46,14 @@
         "not_in_retrieved_topk": 1
       },
       "single-session-user": {
-        "answerer_or_judge_miss": 1,
+        "answerer_over_refusal": 1,
         "correct": 6
       },
       "temporal-reasoning": {
-        "answerer_or_judge_miss": 1,
+        "answerer_over_refusal": 1,
         "correct": 7,
-        "not_in_retrieved_topk": 5
+        "not_in_retrieved_topk": 2,
+        "zero_retrieved_fact_miss": 3
       }
     }
   },
@@ -69,7 +71,7 @@
     "max_sec": 124.6,
     "over_240_sec": 0
   },
-  "conclusion": "Mechanics passed cleanly, but quality is not ready: 33/50 primary-correct, with assistant-origin extraction policy misses and retrieval misses as dominant failures.",
+  "conclusion": "Mechanics passed cleanly, but quality is not ready: 33/50 primary-correct. Dominant remaining gaps are assistant-origin extraction policy misses, true/possible retrieval misses, zero-fact query failures, and answerer over-refusals.",
   "misses": [
     {
       "case_id": "2ce6a0f2",
@@ -78,7 +80,10 @@
       "answer": "1 art-related event.",
       "gold_in_retrieved_topk": false,
       "retrieved_fact_count": 8,
+      "zero_retrieved_facts": false,
       "retrieved_facts_with_time": 8,
+      "assistant_turns_extractable": 0,
+      "assistant_turns_selectively_extractable": 0,
       "assistant_turns_marked_skip_extraction": 57
     },
     {
@@ -88,7 +93,10 @@
       "answer": "The information provided is not enough to answer this question.",
       "gold_in_retrieved_topk": false,
       "retrieved_fact_count": 8,
+      "zero_retrieved_facts": false,
       "retrieved_facts_with_time": 8,
+      "assistant_turns_extractable": 0,
+      "assistant_turns_selectively_extractable": 0,
       "assistant_turns_marked_skip_extraction": 54
     },
     {
@@ -98,7 +106,10 @@
       "answer": "The information provided is not enough to answer this question.",
       "gold_in_retrieved_topk": false,
       "retrieved_fact_count": 8,
+      "zero_retrieved_facts": false,
       "retrieved_facts_with_time": 8,
+      "assistant_turns_extractable": 0,
+      "assistant_turns_selectively_extractable": 0,
       "assistant_turns_marked_skip_extraction": 50
     },
     {
@@ -108,7 +119,10 @@
       "answer": "The information provided is not enough to answer this question.",
       "gold_in_retrieved_topk": false,
       "retrieved_fact_count": 2,
+      "zero_retrieved_facts": false,
       "retrieved_facts_with_time": 2,
+      "assistant_turns_extractable": 0,
+      "assistant_turns_selectively_extractable": 0,
       "assistant_turns_marked_skip_extraction": 49
     },
     {
@@ -118,7 +132,10 @@
       "answer": "The information provided is not enough to answer this question.",
       "gold_in_retrieved_topk": false,
       "retrieved_fact_count": 3,
+      "zero_retrieved_facts": false,
       "retrieved_facts_with_time": 3,
+      "assistant_turns_extractable": 0,
+      "assistant_turns_selectively_extractable": 0,
       "assistant_turns_marked_skip_extraction": 40
     },
     {
@@ -128,7 +145,10 @@
       "answer": "The information provided is not enough to answer this question.",
       "gold_in_retrieved_topk": false,
       "retrieved_fact_count": 8,
+      "zero_retrieved_facts": false,
       "retrieved_facts_with_time": 8,
+      "assistant_turns_extractable": 0,
+      "assistant_turns_selectively_extractable": 0,
       "assistant_turns_marked_skip_extraction": 52
     },
     {
@@ -138,7 +158,10 @@
       "answer": "The information provided is not enough to answer this question.",
       "gold_in_retrieved_topk": false,
       "retrieved_fact_count": 8,
+      "zero_retrieved_facts": false,
       "retrieved_facts_with_time": 8,
+      "assistant_turns_extractable": 0,
+      "assistant_turns_selectively_extractable": 0,
       "assistant_turns_marked_skip_extraction": 51
     },
     {
@@ -148,17 +171,23 @@
       "answer": "The information provided is not enough to answer this question.",
       "gold_in_retrieved_topk": false,
       "retrieved_fact_count": 6,
+      "zero_retrieved_facts": false,
       "retrieved_facts_with_time": 6,
+      "assistant_turns_extractable": 0,
+      "assistant_turns_selectively_extractable": 0,
       "assistant_turns_marked_skip_extraction": 41
     },
     {
       "case_id": "gpt4_2312f94c",
       "question_type": "temporal-reasoning",
-      "miss_class": "not_in_retrieved_topk",
+      "miss_class": "zero_retrieved_fact_miss",
       "answer": "",
       "gold_in_retrieved_topk": false,
       "retrieved_fact_count": 0,
+      "zero_retrieved_facts": true,
       "retrieved_facts_with_time": 0,
+      "assistant_turns_extractable": 0,
+      "assistant_turns_selectively_extractable": 0,
       "assistant_turns_marked_skip_extraction": 53
     },
     {
@@ -168,7 +197,10 @@
       "answer": "About 2 weeks ago.",
       "gold_in_retrieved_topk": false,
       "retrieved_fact_count": 8,
+      "zero_retrieved_facts": false,
       "retrieved_facts_with_time": 8,
+      "assistant_turns_extractable": 0,
+      "assistant_turns_selectively_extractable": 0,
       "assistant_turns_marked_skip_extraction": 54
     },
     {
@@ -178,7 +210,10 @@
       "answer": "The information provided is not enough to answer this question.",
       "gold_in_retrieved_topk": false,
       "retrieved_fact_count": 8,
+      "zero_retrieved_facts": false,
       "retrieved_facts_with_time": 8,
+      "assistant_turns_extractable": 0,
+      "assistant_turns_selectively_extractable": 0,
       "assistant_turns_marked_skip_extraction": 46
     },
     {
@@ -188,37 +223,49 @@
       "answer": "The information provided is not enough to answer this question.",
       "gold_in_retrieved_topk": false,
       "retrieved_fact_count": 7,
+      "zero_retrieved_facts": false,
       "retrieved_facts_with_time": 7,
+      "assistant_turns_extractable": 0,
+      "assistant_turns_selectively_extractable": 0,
       "assistant_turns_marked_skip_extraction": 51
     },
     {
       "case_id": "ec81a493",
       "question_type": "single-session-user",
-      "miss_class": "answerer_or_judge_miss",
+      "miss_class": "answerer_over_refusal",
       "answer": "The information provided is not enough to answer this question.",
       "gold_in_retrieved_topk": true,
       "retrieved_fact_count": 8,
+      "zero_retrieved_facts": false,
       "retrieved_facts_with_time": 8,
+      "assistant_turns_extractable": 0,
+      "assistant_turns_selectively_extractable": 0,
       "assistant_turns_marked_skip_extraction": 45
     },
     {
       "case_id": "c9f37c46",
       "question_type": "temporal-reasoning",
-      "miss_class": "not_in_retrieved_topk",
+      "miss_class": "zero_retrieved_fact_miss",
       "answer": "",
       "gold_in_retrieved_topk": false,
       "retrieved_fact_count": 0,
+      "zero_retrieved_facts": true,
       "retrieved_facts_with_time": 0,
+      "assistant_turns_extractable": 0,
+      "assistant_turns_selectively_extractable": 0,
       "assistant_turns_marked_skip_extraction": 48
     },
     {
       "case_id": "gpt4_483dd43c",
       "question_type": "temporal-reasoning",
-      "miss_class": "answerer_or_judge_miss",
+      "miss_class": "answerer_over_refusal",
       "answer": "The information provided is not enough to answer this question.",
       "gold_in_retrieved_topk": true,
       "retrieved_fact_count": 3,
+      "zero_retrieved_facts": false,
       "retrieved_facts_with_time": 3,
+      "assistant_turns_extractable": 0,
+      "assistant_turns_selectively_extractable": 0,
       "assistant_turns_marked_skip_extraction": 53
     },
     {
@@ -228,17 +275,23 @@
       "answer": "The information provided is not enough to answer this question.",
       "gold_in_retrieved_topk": false,
       "retrieved_fact_count": 8,
+      "zero_retrieved_facts": false,
       "retrieved_facts_with_time": 8,
+      "assistant_turns_extractable": 0,
+      "assistant_turns_selectively_extractable": 0,
       "assistant_turns_marked_skip_extraction": 49
     },
     {
       "case_id": "gpt4_78cf46a3",
       "question_type": "temporal-reasoning",
-      "miss_class": "not_in_retrieved_topk",
+      "miss_class": "zero_retrieved_fact_miss",
       "answer": "",
       "gold_in_retrieved_topk": false,
       "retrieved_fact_count": 0,
+      "zero_retrieved_facts": true,
       "retrieved_facts_with_time": 0,
+      "assistant_turns_extractable": 0,
+      "assistant_turns_selectively_extractable": 0,
       "assistant_turns_marked_skip_extraction": 55
     }
   ]

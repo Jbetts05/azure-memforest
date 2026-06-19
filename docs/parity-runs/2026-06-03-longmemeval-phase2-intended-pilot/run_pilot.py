@@ -47,6 +47,7 @@ RUN_SUFFIX = os.getenv("PHASE2_RUN_SUFFIX", "").strip()
 CASE_FILTER = {item.strip() for item in os.getenv("PHASE2_CASE_IDS", "").split(",") if item.strip()}
 API_IDEMPOTENT_POST_ATTEMPTS = int(os.getenv("PHASE2_API_IDEMPOTENT_POST_ATTEMPTS", "1").strip() or "1")
 EXTRACT_ALL_ASSISTANT_TURNS = os.getenv("PHASE2_EXTRACT_ALL_ASSISTANT_TURNS", "").strip().lower() in {"1", "true", "yes", "on"}
+SELECTIVE_ASSISTANT_EXTRACTION = os.getenv("PHASE2_SELECTIVE_ASSISTANT_EXTRACTION", "").strip().lower() in {"1", "true", "yes", "on"}
 
 RUN = Path(__file__).resolve().parent
 CASES = json.loads((RUN / "pilot_cases.json").read_text(encoding="utf-8"))
@@ -455,6 +456,7 @@ def turns_for_ingest(session: dict, *, case_id: str = "") -> tuple[list[dict], d
     shaped: list[dict] = []
     assistant_skip_count = 0
     assistant_extract_count = 0
+    assistant_selective_count = 0
     user_extract_count = 0
     original_turns = list(session.get("turns") or [])
     source_turns = [
@@ -481,6 +483,11 @@ def turns_for_ingest(session: dict, *, case_id: str = "") -> tuple[list[dict], d
                 metadata["override_reason"] = override.get("override_reason", "assistant_advice_context") if override else "assistant_advice_context"
                 metadata.update(assistant_advice_metadata)
                 assistant_extract_count += 1
+            elif SELECTIVE_ASSISTANT_EXTRACTION and _is_selective_assistant_memory_turn(copied, shaped):
+                metadata["assistant_extraction_context"] = True
+                metadata["override_reason"] = "selective_assistant_extraction"
+                assistant_extract_count += 1
+                assistant_selective_count += 1
             else:
                 metadata["skip_extraction"] = True
                 assistant_skip_count += 1
@@ -491,6 +498,7 @@ def turns_for_ingest(session: dict, *, case_id: str = "") -> tuple[list[dict], d
     return shaped, {
         "assistant_turns_marked_skip_extraction": assistant_skip_count,
         "assistant_turns_extractable": assistant_extract_count,
+        "assistant_turns_selectively_extractable": assistant_selective_count,
         "user_turns_extractable": user_extract_count,
         "original_turn_count": len(original_turns),
         "retained_turn_count": len(source_turns),
@@ -501,9 +509,76 @@ def turns_for_ingest(session: dict, *, case_id: str = "") -> tuple[list[dict], d
         "synthetic_content_ids": [turn.get("content_id") for turn in synthetic_turns],
         "extract_assistant_content_ids": sorted(extract_assistant_ids),
         "extract_all_assistant_turns": EXTRACT_ALL_ASSISTANT_TURNS,
+        "selective_assistant_extraction": SELECTIVE_ASSISTANT_EXTRACTION,
         "retained_turns_sha256": retained_hash,
         "exclude_from_pipeline_accuracy": bool(override and override.get("exclude_from_pipeline_accuracy")),
     }
+
+
+_ASSISTANT_PHATIC_RE = re.compile(
+    r"\b(?:happy to help|let me know|feel free|you'?re welcome|sounds good|great question|sure|okay|ok)\b",
+    re.IGNORECASE,
+)
+_CONCRETE_VALUE_RE = re.compile(
+    r"(?:[$€£]\s*\d|\b\d+(?:[.,:]\d+)?\s*(?:am|pm|a\.m\.|p\.m\.|%|percent|hours?|days?|weeks?|months?|years?|pages?|followers?|people|dollars?)\b)",
+    re.IGNORECASE,
+)
+_LIST_MARKER_RE = re.compile(r"(?:^|\n)\s*(?:[-*•]|\d+[.)])\s+\S")
+_COMMA_LIST_RE = re.compile(r"\b[^,\n]{3,},\s*[^,\n]{3,},\s*(?:and\s+)?[^,\n]{3,}\b", re.IGNORECASE)
+_NAMED_ENTITY_RE = re.compile(
+    r"(?:\b[A-Z][A-Za-zÀ-ÖØ-öø-ÿ'’-]{2,}\b(?:\s+\b[A-Z][A-Za-zÀ-ÖØ-öø-ÿ'’-]{2,}\b)+|\b[A-Z]{2,}\b)"
+)
+_INLINE_SINGLE_ENTITY_RE = re.compile(
+    r"\b(?:is|was|called|named|choose|pick|recommend|suggest|try|visit|use|read|watch|play)\s+(?:the\s+)?([A-Z][A-Za-zÀ-ÖØ-öø-ÿ'’-]{2,})\b"
+)
+_SHORT_NAMED_ANSWER_RE = re.compile(r"^\s*(?:[A-Z][A-Za-zÀ-ÖØ-öø-ÿ'’-]{2,})(?:\s+[A-Z][A-Za-zÀ-ÖØ-öø-ÿ'’-]{2,}){0,3}\s*[.!?]?\s*$")
+_QUOTED_TEXT_RE = re.compile(r"[\"'“”‘’][^\"'“”‘’]{2,}[\"'“”‘’]")
+_USER_MEMORY_REQUEST_RE = re.compile(
+    r"\b(?:remember|recall|list|name|enumerate|which|who|where|when|how many|how much|recommend|suggest|suggestion|option|brand|restaurant|song|book|movie|show|place|time|date|number)\b",
+    re.IGNORECASE,
+)
+_EXPLICIT_LIST_REQUEST_RE = re.compile(r"\b(?:list|name|enumerate|recommend|suggest)\b", re.IGNORECASE)
+_GENERIC_ADVICE_RE = re.compile(
+    r"\b(?:you should|try to|consider|it'?s generally|in general|for example|steps?|tips?|guide|how to)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_selective_assistant_memory_turn(turn: dict, prior_shaped_turns: list[dict]) -> bool:
+    text = str(turn.get("content", turn.get("text", ""))).strip()
+    if not text:
+        return False
+    if _ASSISTANT_PHATIC_RE.search(text) and len(text) < 180:
+        return False
+    previous_user_text = _previous_user_text(prior_shaped_turns)
+    signals = {
+        "concrete_value": bool(_CONCRETE_VALUE_RE.search(text)),
+        "list_marker": bool(_LIST_MARKER_RE.search(text)),
+        "comma_list": bool(_COMMA_LIST_RE.search(text)),
+        "named_entity": bool(_NAMED_ENTITY_RE.search(text)),
+        "inline_entity": bool(_INLINE_SINGLE_ENTITY_RE.search(text)),
+        "short_named_answer": len(text) <= 80 and bool(_SHORT_NAMED_ANSWER_RE.search(text)),
+        "quoted_text": bool(_QUOTED_TEXT_RE.search(text)),
+    }
+    non_comma_score = sum(1 for key, matched in signals.items() if key != "comma_list" and matched)
+    concrete_score = non_comma_score + int(signals["comma_list"])
+    has_memory_request = bool(_USER_MEMORY_REQUEST_RE.search(previous_user_text))
+    if _GENERIC_ADVICE_RE.search(text) and not has_memory_request:
+        return False
+    if concrete_score >= 2:
+        return True
+    if non_comma_score == 1 and has_memory_request:
+        return True
+    if signals["comma_list"] and _EXPLICIT_LIST_REQUEST_RE.search(previous_user_text):
+        return True
+    return False
+
+
+def _previous_user_text(prior_shaped_turns: list[dict]) -> str:
+    for turn in reversed(prior_shaped_turns):
+        if str(turn.get("role", "")).strip().lower() == "user":
+            return str(turn.get("content", turn.get("text", "")))
+    return ""
 
 
 def residue_probe(question: str, *, user_id: str) -> dict:
@@ -895,6 +970,7 @@ def main() -> None:
         "auth_mode": AUTH_MODE,
         "dispatch_mode": DISPATCH_MODE,
         "extract_all_assistant_turns": EXTRACT_ALL_ASSISTANT_TURNS,
+        "selective_assistant_extraction": SELECTIVE_ASSISTANT_EXTRACTION,
         "primary_judge_deployment": PRIMARY_JUDGE_DEPLOYMENT,
         "cross_judge_deployment": CROSS_JUDGE_DEPLOYMENT,
         "durable_hub": DURABLE_HUB if DISPATCH_MODE == "durable" else None,

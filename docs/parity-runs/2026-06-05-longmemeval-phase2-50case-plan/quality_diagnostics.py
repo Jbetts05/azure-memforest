@@ -77,6 +77,7 @@ def diagnose_case(result: dict[str, Any]) -> dict[str, Any]:
     answer_contains_gold = _text_hit(gold_answer, answer)
     input_shaping = [event.get("input_shaping") or {} for event in result.get("events") or [] if event.get("input_shaping")]
     assistant_extractable = sum(int(item.get("assistant_turns_extractable") or 0) for item in input_shaping)
+    assistant_selective = sum(int(item.get("assistant_turns_selectively_extractable") or 0) for item in input_shaping)
     assistant_skipped = sum(int(item.get("assistant_turns_marked_skip_extraction") or 0) for item in input_shaping)
     fact_time_count = sum(1 for fact in facts if fact.get("time_start") is not None or fact.get("time_end") is not None)
     query_blob = json.dumps(query_event, ensure_ascii=False).lower()
@@ -85,6 +86,8 @@ def diagnose_case(result: dict[str, Any]) -> dict[str, Any]:
         primary_correct=primary_correct,
         gold_in_topk=gold_in_topk,
         answer_contains_gold=answer_contains_gold,
+        retrieved_fact_count=len(facts),
+        answer=answer,
         assistant_extractable=assistant_extractable,
         assistant_skipped=assistant_skipped,
     )
@@ -99,12 +102,14 @@ def diagnose_case(result: dict[str, Any]) -> dict[str, Any]:
         "gold_in_retrieved_topk": gold_in_topk,
         "answer_contains_gold": answer_contains_gold,
         "retrieved_fact_count": len(facts),
+        "zero_retrieved_facts": len(facts) == 0,
         "retrieved_facts_with_time": fact_time_count,
         "all_retrieved_facts_timed": bool(facts) and fact_time_count == len(facts),
         "query_time_present_in_artifact": "query_time" in query_blob,
         "question_date_present_in_artifact": "question_date" in query_blob,
         "as_of_trace_present_in_artifact": "as_of_filtered_fact_count" in query_blob,
         "assistant_turns_extractable": assistant_extractable,
+        "assistant_turns_selectively_extractable": assistant_selective,
         "assistant_turns_marked_skip_extraction": assistant_skipped,
         "selected_session_count": result.get("selected_session_count"),
         "selected_turn_count": result.get("selected_turn_count"),
@@ -124,6 +129,8 @@ def _miss_class(
     primary_correct: bool,
     gold_in_topk: bool,
     answer_contains_gold: bool,
+    retrieved_fact_count: int,
+    answer: str,
     assistant_extractable: int,
     assistant_skipped: int,
 ) -> str:
@@ -133,9 +140,13 @@ def _miss_class(
     if answer_contains_gold and not ((result.get("judges") or {}).get("agreement") is True):
         return "judge_or_partial_credit"
     if gold_in_topk:
+        if _is_abstention(answer):
+            return "answerer_over_refusal"
         return "answerer_or_judge_miss"
     if question_type == "single-session-assistant" and assistant_extractable == 0 and assistant_skipped > 0:
         return "assistant_extraction_policy_miss"
+    if retrieved_fact_count == 0:
+        return "zero_retrieved_fact_miss"
     return "not_in_retrieved_topk"
 
 
@@ -173,6 +184,16 @@ def _normalize(text: str) -> str:
 
 def _tokens(text: str) -> set[str]:
     return {token for token in text.split() if token not in _STOP_WORDS and len(token) >= 2}
+
+
+def _is_abstention(answer: str) -> bool:
+    normalized = _normalize(answer)
+    return (
+        not normalized
+        or "information provided is not enough" in normalized
+        or "not enough information" in normalized
+        or normalized in {"i don t know", "unknown"}
+    )
 
 
 def main() -> None:

@@ -430,6 +430,92 @@ def test_phase2_harness_can_extract_all_assistant_turns_for_experiment(monkeypat
     assert stats["extract_all_assistant_turns"] is True
 
 
+def test_phase2_harness_selectively_extracts_concrete_assistant_answers(monkeypatch) -> None:
+    harness = _load_harness(monkeypatch, PHASE2_SELECTIVE_ASSISTANT_EXTRACTION="true")
+
+    turns, stats = harness.turns_for_ingest(
+        {
+            "source_session_id": "session-1",
+            "turns": [
+                {"role": "user", "content_id": "session-1:1", "content": "Which restaurant should I remember near the Vatican?", "metadata": {}},
+                {"role": "assistant", "content_id": "session-1:2", "content": "Roscioli.", "metadata": {}},
+                {"role": "user", "content_id": "session-1:3", "content": "Can you list the refining processes?", "metadata": {}},
+                {"role": "assistant", "content_id": "session-1:4", "content": "Atmospheric distillation, fluid catalytic cracking, alkylation, and hydrotreating.", "metadata": {}},
+                {"role": "assistant", "content_id": "session-1:5", "content": "Happy to help, let me know if you need anything else.", "metadata": {}},
+            ],
+        },
+        case_id="case-1",
+    )
+
+    by_id = {turn["content_id"]: turn for turn in turns}
+    assert by_id["session-1:2"]["metadata"]["assistant_extraction_context"] is True
+    assert by_id["session-1:2"]["metadata"]["override_reason"] == "selective_assistant_extraction"
+    assert by_id["session-1:4"]["metadata"]["assistant_extraction_context"] is True
+    assert by_id["session-1:5"]["metadata"]["skip_extraction"] is True
+    assert stats["assistant_turns_extractable"] == 2
+    assert stats["assistant_turns_selectively_extractable"] == 2
+    assert stats["assistant_turns_marked_skip_extraction"] == 1
+    assert stats["selective_assistant_extraction"] is True
+
+
+def test_phase2_harness_selective_extraction_still_skips_generic_advice(monkeypatch) -> None:
+    harness = _load_harness(monkeypatch, PHASE2_SELECTIVE_ASSISTANT_EXTRACTION="true")
+
+    turns, stats = harness.turns_for_ingest(
+        {
+            "source_session_id": "session-1",
+            "turns": [
+                {"role": "user", "content_id": "session-1:1", "content": "How can I sleep better?", "metadata": {}},
+                {"role": "assistant", "content_id": "session-1:2", "content": "You should keep a consistent bedtime and avoid stressful activities.", "metadata": {}},
+            ],
+        },
+        case_id="case-1",
+    )
+
+    assert turns[1]["metadata"]["skip_extraction"] is True
+    assert stats["assistant_turns_extractable"] == 0
+    assert stats["assistant_turns_selectively_extractable"] == 0
+
+
+def test_phase2_harness_selective_extraction_does_not_extract_comma_filler(monkeypatch) -> None:
+    harness = _load_harness(monkeypatch, PHASE2_SELECTIVE_ASSISTANT_EXTRACTION="true")
+
+    turns, stats = harness.turns_for_ingest(
+        {
+            "source_session_id": "session-1",
+            "turns": [
+                {"role": "user", "content_id": "session-1:1", "content": "What should I do?", "metadata": {}},
+                {"role": "assistant", "content_id": "session-1:2", "content": "Yes, I think that, given your schedule, you should probably rest more.", "metadata": {}},
+                {"role": "assistant", "content_id": "session-1:3", "content": "You might enjoy hiking, reading, and cooking on the weekend.", "metadata": {}},
+            ],
+        },
+        case_id="case-1",
+    )
+
+    assert turns[1]["metadata"]["skip_extraction"] is True
+    assert turns[2]["metadata"]["skip_extraction"] is True
+    assert stats["assistant_turns_extractable"] == 0
+
+
+def test_phase2_harness_selective_extraction_keeps_inline_named_recommendation(monkeypatch) -> None:
+    harness = _load_harness(monkeypatch, PHASE2_SELECTIVE_ASSISTANT_EXTRACTION="true")
+
+    turns, stats = harness.turns_for_ingest(
+        {
+            "source_session_id": "session-1",
+            "turns": [
+                {"role": "user", "content_id": "session-1:1", "content": "Which city did you recommend for the trip?", "metadata": {}},
+                {"role": "assistant", "content_id": "session-1:2", "content": "I would recommend Paris for the trip.", "metadata": {}},
+            ],
+        },
+        case_id="case-1",
+    )
+
+    assert turns[1]["metadata"]["assistant_extraction_context"] is True
+    assert turns[1]["metadata"]["override_reason"] == "selective_assistant_extraction"
+    assert stats["assistant_turns_selectively_extractable"] == 1
+
+
 def test_phase2_turns_for_ingest_backfills_turn_timestamp_from_session_date(monkeypatch) -> None:
     harness = _load_harness(monkeypatch)
 
