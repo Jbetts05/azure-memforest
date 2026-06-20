@@ -1,0 +1,188 @@
+{
+  "artifact": "case_results_quality-selective-regression10-sb-a8520d2-20260620025000",
+  "git_sha": "a8520d2c4151",
+  "status": "quality_regression_failed",
+  "baseline_artifact": "case_results_quality-regression10-prefrefine-a5f12755751c-20260619081628",
+  "operational": {
+    "dispatch_mode": "servicebus",
+    "attempted_cases": 10,
+    "completed_cases": 10,
+    "successful_ingest_event_count": 98,
+    "dlq_delta": 0,
+    "queue_after": {
+      "active": 0,
+      "deadletter": 0,
+      "scheduled": 0
+    },
+    "durable_caveat": "Durable-dispatch attempts failed before materialization with non-deterministic orchestration errors; this diagnostic slice used servicebus dispatch after API/Durable/worker recovery."
+  },
+  "quality": {
+    "selective_primary_correct": 7,
+    "total": 10,
+    "baseline_primary_correct": 10,
+    "correct_delta": -3,
+    "judge_disagreements": 2,
+    "miss_class_counts": {
+      "not_in_retrieved_topk": 2,
+      "zero_retrieved_fact_miss": 1
+    },
+    "by_question_type": {
+      "knowledge-update": {
+        "correct": 2
+      },
+      "multi-session": {
+        "correct": 1,
+        "not_in_retrieved_topk": 1
+      },
+      "single-session-assistant": {
+        "correct": 1
+      },
+      "single-session-preference": {
+        "correct": 1
+      },
+      "single-session-user": {
+        "correct": 1
+      },
+      "temporal-reasoning": {
+        "correct": 1,
+        "not_in_retrieved_topk": 1,
+        "zero_retrieved_fact_miss": 1
+      }
+    }
+  },
+  "breadth": {
+    "assistant_selectively_extractable_total": 488.0,
+    "assistant_skipped_total": 36.0,
+    "retrieved_facts_total": 72.0,
+    "baseline_retrieved_facts_total": 73.0,
+    "caveat": "Selective assistant extraction caused a mixed regression from 10/10 baseline to 7/10 and is not safe to scale."
+  },
+  "latency": {
+    "successful_ingests": 98,
+    "avg_sec": 107.0,
+    "max_sec": 239.6,
+    "over_240_sec": 0
+  },
+  "cases": [
+    {
+      "mode": "selective",
+      "index": 1,
+      "case_id": "4b24c848",
+      "question_type": "knowledge-update",
+      "answer": "5 tops.",
+      "primary_correct": true,
+      "assistant_extractable": 44,
+      "assistant_selective": 44,
+      "assistant_skipped": 1,
+      "retrieved_facts": 8
+    },
+    {
+      "mode": "selective",
+      "index": 2,
+      "case_id": "8e91e7d9",
+      "question_type": "multi-session",
+      "answer": "4",
+      "primary_correct": true,
+      "assistant_extractable": 46,
+      "assistant_selective": 46,
+      "assistant_skipped": 4,
+      "retrieved_facts": 4
+    },
+    {
+      "mode": "selective",
+      "index": 3,
+      "case_id": "fea54f57",
+      "question_type": "single-session-assistant",
+      "answer": "Evolution.",
+      "primary_correct": true,
+      "assistant_extractable": 44,
+      "assistant_selective": 44,
+      "assistant_skipped": 7,
+      "retrieved_facts": 8
+    },
+    {
+      "mode": "selective",
+      "index": 4,
+      "case_id": "195a1a1b",
+      "question_type": "single-session-preference",
+      "answer": "Yes — good evening activities for you would be calming, screen-light wind-down options like:\n- a 15-minute guided meditation such as Guided Sleep Meditation in Meditation Studio\n- a sleep or relaxation meditation on Insight Timer\n- Headspace’s Sleep meditation, especially if you like peaceful imagery like a beach or forest\n- Sleep Meditation by Andrew Weil on YouTube\n\nIt would also fit your routine to start these during a 60–90 minute wind-down period and avoid stimulating activities like work, screens, or intense conversations — especially phones, tablets, laptops, or TVs for at least 30 minutes before bed.",
+      "primary_correct": true,
+      "assistant_extractable": 52,
+      "assistant_selective": 52,
+      "assistant_skipped": 3,
+      "retrieved_facts": 8
+    },
+    {
+      "mode": "selective",
+      "index": 5,
+      "case_id": "b320f3f8",
+      "question_type": "single-session-user",
+      "answer": "A rare blue Snaggletooth action figure.",
+      "primary_correct": true,
+      "assistant_extractable": 45,
+      "assistant_selective": 45,
+      "assistant_skipped": 3,
+      "retrieved_facts": 8
+    },
+    {
+      "mode": "selective",
+      "index": 6,
+      "case_id": "gpt4_d6585ce8",
+      "question_type": "temporal-reasoning",
+      "answer": "Billie Eilish concert in Philly → free outdoor concert series in the park → music festival in Brooklyn → jazz night at a local bar → Queen with Adam Lambert at the Prudential Center in Newark, NJ.",
+      "primary_correct": true,
+      "assistant_extractable": 52,
+      "assistant_selective": 52,
+      "assistant_skipped": 5,
+      "retrieved_facts": 12
+    },
+    {
+      "mode": "selective",
+      "index": 7,
+      "case_id": "e3038f8c",
+      "question_type": "multi-session",
+      "answer": "94 rare items.",
+      "primary_correct": false,
+      "assistant_extractable": 57,
+      "assistant_selective": 57,
+      "assistant_skipped": 1,
+      "retrieved_facts": 8
+    },
+    {
+      "mode": "selective",
+      "index": 8,
+      "case_id": "e66b632c",
+      "question_type": "knowledge-update",
+      "answer": "27 minutes and 45 seconds.",
+      "primary_correct": true,
+      "assistant_extractable": 38,
+      "assistant_selective": 38,
+      "assistant_skipped": 6,
+      "retrieved_facts": 8
+    },
+    {
+      "mode": "selective",
+      "index": 9,
+      "case_id": "gpt4_70e84552_abs",
+      "question_type": "temporal-reasoning",
+      "answer": "",
+      "primary_correct": false,
+      "assistant_extractable": 56,
+      "assistant_selective": 56,
+      "assistant_skipped": 3,
+      "retrieved_facts": 0
+    },
+    {
+      "mode": "selective",
+      "index": 10,
+      "case_id": "6e984302",
+      "question_type": "temporal-reasoning",
+      "answer": "The information provided is not enough to answer this question.",
+      "primary_correct": false,
+      "assistant_extractable": 54,
+      "assistant_selective": 54,
+      "assistant_skipped": 3,
+      "retrieved_facts": 8
+    }
+  ]
+}

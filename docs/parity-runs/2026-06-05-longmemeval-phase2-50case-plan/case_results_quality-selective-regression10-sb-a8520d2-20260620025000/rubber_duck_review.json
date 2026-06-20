@@ -1,0 +1,41 @@
+{
+  "review_model": "claude-opus-4.8",
+  "status": "reviewed",
+  "headline": "Current selective assistant extraction is too broad and blocks scaling, but the attributable regression magnitude should be caveated.",
+  "validated_conclusions": {
+    "quality_noise_diagnostic_valid": true,
+    "current_broad_gate_not_safe_to_scale": true,
+    "mechanism_win_supported_by_assistant_slice_not_this_mixed_slice": true,
+    "servicebus_dispatch_acceptable_for_quality_diagnostic_with_caveat": true
+  },
+  "blockers_to_scaling": [
+    {
+      "id": "broad_gate",
+      "summary": "The selective gate is effectively broad extraction: 488 assistant turns extracted and only 36 skipped, roughly 93% pass-through.",
+      "impact": "The gate is not selective enough to run heldout_50 because assistant facts can crowd out user/gold facts."
+    },
+    {
+      "id": "retrieval_crowding",
+      "summary": "At least one clean attributable regression, 6e984302, dropped gold from top-k after assistant extraction.",
+      "impact": "Assistant-origin facts need source-aware retrieval isolation or budgets so they cannot displace user facts."
+    },
+    {
+      "id": "durable_nondeterminism",
+      "summary": "Durable-dispatch attempts failed before materialization with non-deterministic orchestration errors.",
+      "impact": "Durable must be treated as a separate latent blocker before any Durable heldout_50 run."
+    }
+  ],
+  "interpretation_caveats": [
+    "The headline 7/10 versus 10/10 overstates the attributable extraction regression; gpt4_70e84552_abs had zero facts in both baseline and selective, so it is likely judge or abstention noise.",
+    "The mixed run's one assistant case was already correct in baseline, so assistant-origin mechanism gain is supported by the earlier 6-case assistant slice, not this mixed slice.",
+    "This servicebus run is acceptable for quality/noise diagnosis but dispatch differs from the durable prefrefine baseline.",
+    "The selective arm is unreplicated while the prefrefine baseline was repeated successfully."
+  ],
+  "recommended_next_slice": [
+    "Do not run heldout_50 with the current broad selective gate.",
+    "Implement source-aware retrieval isolation or assistant-fact budgets so assistant-origin facts cannot crowd out user/gold facts.",
+    "Tighten the assistant gate so it is high precision instead of roughly 93% pass-through.",
+    "Run a replicated mixed regression/noise slice after isolation/tightening.",
+    "Handle gpt4_70e84552_abs separately as an abstention/judge issue rather than an assistant-extraction signal."
+  ]
+}
