@@ -90,6 +90,15 @@ class AffectedTreePlan:
         return len(self.dirty_root_tree_ids)
 
 
+@dataclass(frozen=True, slots=True)
+class ProjectionTreeScope:
+    full_projection_required: bool
+    projected_tree_ids: tuple[str, ...]
+    deleted_tree_ids: tuple[str, ...]
+    omitted_tree_ids: tuple[str, ...]
+    unknown_changed_tree_ids: tuple[str, ...] = ()
+
+
 def plan_projection_skip(
     projected_records: Iterable[ProjectionRecordRef],
     retained_committed_records: Iterable[ProjectionRecordRef],
@@ -127,6 +136,64 @@ def plan_projection_skip(
         upsert=tuple(sorted(upsert, key=_sort_key)),
         delete=tuple(sorted(delete, key=_sort_key)),
         superseded=tuple(sorted(superseded, key=_sort_key)),
+    )
+
+
+def plan_projection_tree_scope(
+    *,
+    all_tree_ids: Iterable[str],
+    changed_tree_ids: Iterable[str] | None,
+    deleted_tree_ids: Iterable[str] = (),
+) -> ProjectionTreeScope:
+    """Plan which trees are candidates for projection in a known tree delta.
+
+    ``changed_tree_ids=None`` means the delta is unknown, so callers must treat
+    all trees as projection candidates. When the delta is known, unchanged trees
+    can be omitted from future projection inputs; deleted trees are tracked
+    separately because they may no longer exist in the new tree set.
+    """
+
+    all_ids = tuple(sorted({str(tree_id) for tree_id in all_tree_ids if str(tree_id)}))
+    deleted = tuple(sorted({str(tree_id) for tree_id in deleted_tree_ids if str(tree_id)}))
+    if changed_tree_ids is None:
+        return ProjectionTreeScope(
+            full_projection_required=True,
+            projected_tree_ids=all_ids,
+            deleted_tree_ids=deleted,
+            omitted_tree_ids=(),
+            unknown_changed_tree_ids=(),
+        )
+    changed = {str(tree_id) for tree_id in changed_tree_ids if str(tree_id)}
+    projected = tuple(tree_id for tree_id in all_ids if tree_id in changed)
+    omitted = tuple(tree_id for tree_id in all_ids if tree_id not in changed)
+    known_deleted = set(deleted)
+    unknown_changed = tuple(sorted(tree_id for tree_id in changed if tree_id not in set(all_ids) and tree_id not in known_deleted))
+    return ProjectionTreeScope(
+        full_projection_required=False,
+        projected_tree_ids=projected,
+        deleted_tree_ids=deleted,
+        omitted_tree_ids=omitted,
+        unknown_changed_tree_ids=unknown_changed,
+    )
+
+
+def filter_projection_refs_to_tree_scope(
+    records: Iterable[ProjectionRecordRef],
+    *,
+    tree_ids: Iterable[str],
+) -> tuple[ProjectionRecordRef, ...]:
+    """Return refs whose metadata tree_id is in scope.
+
+    This helper is for future incremental projection inputs. It intentionally
+    drops refs with no tree_id metadata so unsupported/shared surfaces cannot be
+    accidentally driven by a tree-scoped plan.
+    """
+
+    scoped = {str(tree_id) for tree_id in tree_ids if str(tree_id)}
+    return tuple(
+        record
+        for record in records
+        if str(record.metadata.get("tree_id") or "") in scoped
     )
 
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.cloud.projection_plan import ProjectionRecordKey, ProjectionRecordRef, ProjectionSkipPlan, plan_affected_trees, plan_projection_skip, tree_node_body_content_id
+from src.cloud.projection_plan import ProjectionRecordKey, ProjectionRecordRef, ProjectionSkipPlan, filter_projection_refs_to_tree_scope, plan_affected_trees, plan_projection_skip, plan_projection_tree_scope, tree_node_body_content_id
 
 
 def test_projection_skip_plan_splits_unchanged_upsert_and_delete_by_content_hash() -> None:
@@ -196,3 +196,42 @@ def test_plan_affected_trees_excludes_unchanged_records_with_valid_metadata() ->
 
     assert plan.affected_tree_ids == ("entity:changed",)
     assert plan.dirty_node_keys == ("entity:changed/root",)
+
+
+def test_plan_projection_tree_scope_projects_all_when_delta_unknown() -> None:
+    scope = plan_projection_tree_scope(
+        all_tree_ids=["entity:b", "entity:a"],
+        changed_tree_ids=None,
+        deleted_tree_ids=["entity:old"],
+    )
+
+    assert scope.full_projection_required is True
+    assert scope.projected_tree_ids == ("entity:a", "entity:b")
+    assert scope.deleted_tree_ids == ("entity:old",)
+    assert scope.omitted_tree_ids == ()
+
+
+def test_plan_projection_tree_scope_projects_only_known_changed_trees() -> None:
+    scope = plan_projection_tree_scope(
+        all_tree_ids=["entity:a", "entity:b", "session:s1"],
+        changed_tree_ids=["entity:b", "missing:new"],
+        deleted_tree_ids=["entity:old"],
+    )
+
+    assert scope.full_projection_required is False
+    assert scope.projected_tree_ids == ("entity:b",)
+    assert scope.omitted_tree_ids == ("entity:a", "session:s1")
+    assert scope.deleted_tree_ids == ("entity:old",)
+    assert scope.unknown_changed_tree_ids == ("missing:new",)
+
+
+def test_filter_projection_refs_to_tree_scope_keeps_only_tree_scoped_records() -> None:
+    refs = [
+        ProjectionRecordRef("tree_node_membership", "entity:a/root", content_hash="a", metadata={"tree_id": "entity:a", "node_id": "root"}),
+        ProjectionRecordRef("tree_node_membership", "entity:b/root", content_hash="b", metadata={"tree_id": "entity:b", "node_id": "root"}),
+        ProjectionRecordRef("summary_cache", "summary", content_hash="s", metadata={}),
+    ]
+
+    filtered = filter_projection_refs_to_tree_scope(refs, tree_ids=["entity:b"])
+
+    assert [record.logical_id for record in filtered] == ["entity:b/root"]
