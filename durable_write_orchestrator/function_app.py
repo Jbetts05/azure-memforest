@@ -11,6 +11,7 @@ app = df.DFApp(http_auth_level=func.AuthLevel.FUNCTION)
 @app.durable_client_input(client_name="client")
 async def start_write(req: func.HttpRequest, client: df.DurableOrchestrationClient) -> func.HttpResponse:
     payload = req.get_json()
+    payload["activity_max_attempts"] = int(os.getenv("AZURE_MEMFOREST_DURABLE_ACTIVITY_MAX_ATTEMPTS", "1"))
     instance_id = str(
         payload.get("instance_id")
         or req.headers.get("x-ms-durable-instance-id")
@@ -51,7 +52,7 @@ def write_orchestrator(context: df.DurableOrchestrationContext):
     }
     retry_options = df.RetryOptions(
         first_retry_interval_in_milliseconds=30000,
-        max_number_of_attempts=int(os.getenv("AZURE_MEMFOREST_DURABLE_ACTIVITY_MAX_ATTEMPTS", "1")),
+        max_number_of_attempts=int(payload.get("activity_max_attempts") or 1),
     )
     try:
         return (yield context.call_activity_with_retry("materialize_write_job", retry_options, activity_input))
