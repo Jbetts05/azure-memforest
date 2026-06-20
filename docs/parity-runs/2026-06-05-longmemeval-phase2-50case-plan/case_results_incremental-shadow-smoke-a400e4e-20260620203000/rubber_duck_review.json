@@ -1,0 +1,23 @@
+{
+  "review_model": "claude-opus-4.8",
+  "status": "reviewed",
+  "headline": "Real-write shadow metadata checkpoint succeeded, but scoped writes are not yet safe.",
+  "checkpoint_valid": true,
+  "smoke_user": "incremental-shadow-smoke-1781987219",
+  "image_sha": "a400e4e44514",
+  "findings": {
+    "generation_1": "shadow comparison supported and non-divergent",
+    "generation_2": "shadow comparison supported and divergent; omitted prior session/scene trees had missing upserts/superseded closures"
+  },
+  "blockers_to_next": [
+    {
+      "id": "unverified_prior_tree_divergence",
+      "summary": "Need to diff omitted prior tree content between G1 and G2 to determine real cross-tree mutation versus projection churn."
+    },
+    {
+      "id": "affected_tree_ids_are_post_projection",
+      "summary": "Do not use affected_tree_ids as projection input because it is derived after full projection/skip planning."
+    }
+  ],
+  "recommendation": "Commit smoke evidence, then inspect one omitted tree content diff before wiring scoped writes."
+}
