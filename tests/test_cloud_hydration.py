@@ -787,6 +787,53 @@ async def test_cloud_hydration_registry_uses_public_session_id_from_cell_id(tmp_
 
 
 @pytest.mark.asyncio
+async def test_delete_session_materialization_snapshot_tracks_emptied_trees(tmp_path) -> None:
+    dim = 4
+    user_forest = _user_forest(tmp_path, dim)
+    state = await load_cloud_user_forest_state(
+        tree_store=FakeTreeStore(
+            {
+                "session:sess_0001": [
+                    _node(
+                        "session-leaf",
+                        level="L0",
+                        child_ids=("public-session#cell_0000_abcd",),
+                        fact_ids=("fact_1",),
+                        tree_id="session:sess_0001",
+                        tree_type="session",
+                        tree_key="sess_0001",
+                        tree_label="sess_0001",
+                    ),
+                ],
+                "entity:user": [
+                    _node("entity-leaf", level="L0", child_ids=("fact_1",), tree_id="entity:user", tree_key="user", tree_label="user"),
+                ],
+                "tree:scene:purchase": [
+                    _node(
+                        "scene-leaf",
+                        level="L0",
+                        child_ids=("fact_1",),
+                        tree_id="tree:scene:purchase",
+                        tree_type="scene",
+                        tree_key="scene:purchase",
+                        tree_label="purchase",
+                    ),
+                ],
+            }
+        ),
+        fact_store=FakeFactStore({"fact_1": _fact_for_cell("fact_1", dim, session_id="public-session", cell_id="public-session#cell_0000_abcd")}),
+    )
+    apply_cloud_state_to_user_forest(user_forest, state)
+
+    user_forest.delete_session("public-session")
+    snapshot = user_forest.snapshot_for_materialization()
+
+    assert snapshot.changed_tree_ids == frozenset({"entity:user", "session:sess_0001", "tree:scene:purchase"})
+    assert snapshot.deleted_tree_ids == frozenset({"entity:user", "session:sess_0001", "tree:scene:purchase"})
+    assert snapshot.changed_tree_ids is not None
+
+
+@pytest.mark.asyncio
 async def test_cloud_hydration_registry_uses_fact_occurrences_for_orphans(tmp_path) -> None:
     dim = 4
     user_forest = _user_forest(tmp_path, dim)

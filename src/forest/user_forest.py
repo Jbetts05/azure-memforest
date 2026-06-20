@@ -509,7 +509,7 @@ class UserForest:
             tree = self._tree_builder._trees.get(tree_id)
             if tree is not None and delete_cell(tree, cell_id):
                 touched_tree_ids.add(tree_id)
-                if not tree.nodes:
+                if _is_empty_tree(tree):
                     deleted_tree_ids.add(tree_id)
             self._cell_store.pop(cell_id, None)
 
@@ -536,7 +536,7 @@ class UserForest:
                     deleted_any = delete_fact(tree, fact_id) or deleted_any
                 if deleted_any:
                     touched_tree_ids.add(tree_id)
-                    if not tree.nodes:
+                    if _is_empty_tree(tree):
                         deleted_tree_ids.add(tree_id)
 
         build_results = self._tree_builder.flush_dirty_trees(tree_ids=touched_tree_ids)
@@ -653,3 +653,10 @@ class UserForest:
 # Sentinel for missing turns — treated as deleted when checking orphan status
 class _DeadTurnSentinel:
     deleted = True
+
+
+def _is_empty_tree(tree) -> bool:
+    if not tree.nodes:
+        return True
+    root = tree.nodes.get(tree.root_node_id)
+    return root is not None and root.item_count == 0 and not root.child_ids
