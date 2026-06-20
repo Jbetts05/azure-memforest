@@ -350,35 +350,6 @@ class FakePreferenceTreeStore:
         return [self.nodes[node_id] for node_id in node_ids if node_id in self.nodes]
 
 
-class FakeSourceIsolationTreeStore:
-    def __init__(self):
-        self.nodes = {
-            "root": StoredTreeNode(tree_id="tree-1", node_id="root", level="L0", summary="", fact_ids=("asst-1", "asst-2", "asst-3", "asst-4", "user-1", "user-2", "user-3"), tenant_id="tenant-1", user_id="user-1", forest_version="v1"),
-        }
-
-    async def get_node(self, tree_id, node_id):
-        return self.nodes.get(node_id)
-
-    async def get_nodes(self, tree_id, node_ids):
-        return [self.nodes[node_id] for node_id in node_ids if node_id in self.nodes]
-
-
-class FakeSourceIsolationFactStore:
-    def __init__(self):
-        self.facts = {
-            "asst-1": _managed_fact("asst-1", "The assistant suggested a noisy detail about travel.", origin="assistant", time=1.0),
-            "asst-2": _managed_fact("asst-2", "The assistant suggested another noisy detail.", origin="assistant", time=1.0),
-            "asst-3": _managed_fact("asst-3", "The assistant gave extra background.", origin="assistant", time=1.0),
-            "asst-4": _managed_fact("asst-4", "The assistant gave a fourth extra detail.", origin="assistant", time=1.0),
-            "user-1": _managed_fact("user-1", "The user bought five tops from H&M.", origin="user", time=1.0),
-            "user-2": _managed_fact("user-2", "The user bought shoes from Zara.", origin="user", time=1.0),
-            "user-3": _managed_fact("user-3", "The user bought a jacket from Uniqlo.", origin="user", time=1.0),
-        }
-
-    async def get_facts(self, fact_ids):
-        return [self.facts[fact_id] for fact_id in fact_ids if fact_id in self.facts]
-
-
 class FakeFactLocationIndex:
     def __init__(self, present):
         self.present = set(present)
@@ -409,14 +380,14 @@ def _manifest():
     )
 
 
-def _managed_fact(fact_id: str, fact_text: str = "fact", *, time: float | None = None, time_start: float | None = None, time_end: float | None = None, origin: str = ""):
+def _managed_fact(fact_id: str, fact_text: str = "fact", *, time: float | None = None, time_start: float | None = None, time_end: float | None = None):
     start = time if time is not None else time_start
     end = time if time is not None else time_end
     return ManagedFact(
         fact_id=fact_id,
         fact_text=fact_text,
         embedding_id="",
-        origin=origin,
+        origin="",
         semantic_role="event",
         entities=[],
         topics=["music"],
@@ -883,83 +854,3 @@ async def test_cloud_query_can_disable_fact_rerank() -> None:
     )
 
     assert [fact.fact_id for fact in response.facts] == ["fact-a", "fact-b"]
-
-
-@pytest.mark.asyncio
-async def test_cloud_query_source_isolation_caps_assistant_facts_for_normal_questions() -> None:
-    response = await _service(
-        _manifest(),
-        fact_store=FakeSourceIsolationFactStore(),
-        tree_store=FakeSourceIsolationTreeStore(),
-        config=CloudQueryConfig(embedding_model_version="embed-v1", default_beam_width=8, assistant_fact_budget=1),
-    ).query(
-        ActorContext(actor_id="user-1", tenant=TenantContext("tenant-1")),
-        user_id="user-1",
-        request=QueryRequest(question="How many tops have I bought?", max_facts=4),
-    )
-
-    assert [fact.fact_id for fact in response.facts] == ["user-1", "user-2", "user-3", "asst-1"]
-
-
-@pytest.mark.asyncio
-async def test_cloud_query_source_isolation_preserves_user_facts_with_default_budget_and_small_max_facts() -> None:
-    response = await _service(
-        _manifest(),
-        fact_store=FakeSourceIsolationFactStore(),
-        tree_store=FakeSourceIsolationTreeStore(),
-        config=CloudQueryConfig(embedding_model_version="embed-v1", default_beam_width=8),
-    ).query(
-        ActorContext(actor_id="user-1", tenant=TenantContext("tenant-1")),
-        user_id="user-1",
-        request=QueryRequest(question="How many tops have I bought?", max_facts=2),
-    )
-
-    assert [fact.fact_id for fact in response.facts] == ["user-1", "user-2"]
-
-
-@pytest.mark.asyncio
-async def test_cloud_query_source_isolation_keeps_user_majority_at_three_facts() -> None:
-    response = await _service(
-        _manifest(),
-        fact_store=FakeSourceIsolationFactStore(),
-        tree_store=FakeSourceIsolationTreeStore(),
-        config=CloudQueryConfig(embedding_model_version="embed-v1", default_beam_width=8),
-    ).query(
-        ActorContext(actor_id="user-1", tenant=TenantContext("tenant-1")),
-        user_id="user-1",
-        request=QueryRequest(question="How many tops have I bought?", max_facts=3),
-    )
-
-    assert [fact.fact_id for fact in response.facts] == ["user-1", "user-2", "user-3"]
-
-
-@pytest.mark.asyncio
-async def test_cloud_query_source_isolation_does_not_treat_bare_remind_me_as_assistant_recall() -> None:
-    response = await _service(
-        _manifest(),
-        fact_store=FakeSourceIsolationFactStore(),
-        tree_store=FakeSourceIsolationTreeStore(),
-        config=CloudQueryConfig(embedding_model_version="embed-v1", default_beam_width=8),
-    ).query(
-        ActorContext(actor_id="user-1", tenant=TenantContext("tenant-1")),
-        user_id="user-1",
-        request=QueryRequest(question="Can you remind me what I bought from H&M?", max_facts=2),
-    )
-
-    assert [fact.fact_id for fact in response.facts] == ["user-1", "user-2"]
-
-
-@pytest.mark.asyncio
-async def test_cloud_query_source_isolation_allows_assistant_recall_questions() -> None:
-    response = await _service(
-        _manifest(),
-        fact_store=FakeSourceIsolationFactStore(),
-        tree_store=FakeSourceIsolationTreeStore(),
-        config=CloudQueryConfig(embedding_model_version="embed-v1", default_beam_width=8, assistant_fact_budget=1),
-    ).query(
-        ActorContext(actor_id="user-1", tenant=TenantContext("tenant-1")),
-        user_id="user-1",
-        request=QueryRequest(question="Can you remind me what you recommended?", max_facts=4),
-    )
-
-    assert [fact.fact_id for fact in response.facts] == ["asst-1", "asst-2", "asst-3", "asst-4"]

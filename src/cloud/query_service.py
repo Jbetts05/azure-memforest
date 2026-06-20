@@ -41,7 +41,6 @@ class CloudQueryConfig:
     lexical_fact_fallback: bool = True
     lexical_fact_fallback_top_k: int = 20
     recency_rerank_weight: float = 0.15
-    assistant_fact_budget: int = 2
 
 
 class CloudMemoryQueryService:
@@ -230,7 +229,7 @@ class CloudMemoryQueryService:
             elif preference_activity_facts:
                 facts = _merge_preference_activity_facts(preference_activity_facts, facts, max_facts=max_facts)
             else:
-                facts = _source_aware_trim_facts(request.question, facts, max_facts=max_facts, assistant_budget=self._config.assistant_fact_budget)
+                facts = facts[:max_facts]
         _validate_retrieved_fact_temporality(facts)
         answer, reason = await self._compose_answer(request.question, facts, request.query_time)
         if answer:
@@ -649,48 +648,6 @@ def _merge_preference_activity_facts(priority: list[Any], facts: list[Any], *, m
     priority_ids = {str(getattr(fact, "fact_id", "")) for fact in priority}
     remaining = [fact for fact in facts if str(getattr(fact, "fact_id", "")) not in priority_ids]
     return _merge_prioritized_facts(priority, remaining, max_facts=max_facts)
-
-
-def _source_aware_trim_facts(question: str, facts: list[Any], *, max_facts: int, assistant_budget: int) -> list[Any]:
-    if max_facts <= 0 or len(facts) <= max_facts:
-        return facts[:max_facts] if max_facts > 0 else facts
-    if _is_assistant_recall_question(question):
-        return facts[:max_facts]
-    assistant = [fact for fact in facts if _is_assistant_origin_fact(fact)]
-    non_assistant = [fact for fact in facts if not _is_assistant_origin_fact(fact)]
-    if not assistant or not non_assistant:
-        return facts[:max_facts]
-    non_assistant_take = min(len(non_assistant), max_facts)
-    assistant_take = min(len(assistant), max(0, int(assistant_budget)), max_facts - non_assistant_take)
-    return [*non_assistant[:non_assistant_take], *assistant[:assistant_take]][:max_facts]
-
-
-_ASSISTANT_RECALL_RE = re.compile(
-    r"\b("
-    r"remind me (?:what|which|who|where|when|how|of|about)?\s*(?:you|the assistant)|"
-    r"previous conversation|earlier conversation|you told me|you mentioned|"
-    r"you said|you gave|you recommended|you suggested|did you say|what did you say|"
-    r"assistant (?:said|recommended|suggested|told)"
-    r")\b",
-    re.IGNORECASE,
-)
-
-
-def _is_assistant_recall_question(question: str) -> bool:
-    return bool(_ASSISTANT_RECALL_RE.search(str(question or "")))
-
-
-def _is_assistant_origin_fact(fact: Any) -> bool:
-    origin = str(getattr(fact, "origin", "") or "").strip().lower()
-    if origin == "assistant":
-        return True
-    metadata = getattr(fact, "metadata", {}) or {}
-    if isinstance(metadata, dict):
-        metadata_origin = str(metadata.get("origin") or metadata.get("source_origin") or "").strip().lower()
-        if metadata_origin == "assistant":
-            return True
-    text = str(getattr(fact, "fact_text", "") or "").strip().lower()
-    return text.startswith("the assistant ") or text.startswith("assistant ")
 
 
 def _event_terms_for_question(question: str) -> set[str]:
