@@ -24,7 +24,7 @@ from src.cloud.projection_baseline import (
     build_committed_projection_baseline,
     summary_cache_refs_from_entries,
 )
-from src.cloud.projection_plan import ProjectionRecordRef, ProjectionSkipPlan, browse_embedding_content_hash, plan_affected_trees, plan_projection_skip, tree_node_body_content_id
+from src.cloud.projection_plan import ProjectionRecordRef, ProjectionSkipPlan, browse_embedding_content_hash, filter_projection_refs_to_tree_scope, plan_affected_trees, plan_projection_skip, plan_projection_tree_scope, tree_node_body_content_id
 from src.cloud.schema import SCHEMA_VERSION
 from src.forest.memforest import _content_key
 from src.forest.user_forest import ForestMaterializationSnapshot
@@ -1603,6 +1603,7 @@ def _materialization_fingerprint_metadata(
         },
         "projection_plan_counts": _projection_plan_counts(projection),
         "dirty_path_plan": _dirty_path_plan_summary(projection),
+        "projection_tree_scope_plan": _projection_tree_scope_plan_summary(projection),
     }
     return {
         "materialization_fingerprint": _hash_json(inputs),
@@ -1622,6 +1623,7 @@ def _materialization_fingerprint_metadata(
         "projection_delta_full_required": projection.changed_tree_ids is None,
         "projection_plan_counts": inputs["projection_plan_counts"],
         "dirty_path_plan": inputs["dirty_path_plan"],
+        "projection_tree_scope_plan": inputs["projection_tree_scope_plan"],
         "projection_plan_live_skipped_browse_embedding_count": len(projection.projection_skip_plans.get("browse_embedding", ProjectionSkipPlan((), (), ())).unchanged),
         "projection_plan_live_skipped_summary_cache_count": len(projection.projection_skip_plans.get("summary_cache", ProjectionSkipPlan((), (), ())).unchanged),
     }, inputs
@@ -1667,6 +1669,60 @@ def _dirty_path_plan_summary(projection: MaterializationProjection) -> dict[str,
         "candidate_delete_fact_location_count": len(location_plan.delete) if location_plan is not None else 0,
         "candidate_upsert_recall_document_count": len(recall_plan.upsert) if recall_plan is not None else len(projection.recall_documents),
         "candidate_close_recall_document_count": (len(recall_plan.delete) + len(recall_plan.superseded)) if recall_plan is not None else 0,
+    }
+
+
+def _projection_tree_scope_plan_summary(projection: MaterializationProjection) -> dict[str, Any]:
+    # Tree-bearing projection surfaces define the scope universe. Fact locations
+    # are counted after scope selection and are not authoritative tree records.
+    all_tree_ids = {
+        str(getattr(record, "tree_id", "") or "")
+        for record in [*projection.stored_nodes, *projection.recall_documents, *projection.browse_embedding_records]
+        if str(getattr(record, "tree_id", "") or "")
+    }
+    scope = plan_projection_tree_scope(
+        all_tree_ids=all_tree_ids,
+        changed_tree_ids=projection.changed_tree_ids,
+        deleted_tree_ids=projection.deleted_tree_ids,
+    )
+    projected_tree_ids = set(scope.projected_tree_ids)
+    tree_node_refs = _tree_node_projection_refs(projection.stored_nodes)
+    fact_location_refs = _fact_location_projection_refs(projection.fact_locations)
+    recall_refs = _recall_document_projection_refs(projection.recall_documents)
+    browse_refs = _browse_embedding_projection_refs(
+        projection.browse_embedding_records,
+        embedding_model_version="",
+    )
+    scoped_tree_nodes = filter_projection_refs_to_tree_scope(tree_node_refs, tree_ids=projected_tree_ids)
+    scoped_fact_locations = filter_projection_refs_to_tree_scope(fact_location_refs, tree_ids=projected_tree_ids)
+    scoped_recall = filter_projection_refs_to_tree_scope(recall_refs, tree_ids=projected_tree_ids)
+    scoped_browse = filter_projection_refs_to_tree_scope(browse_refs, tree_ids=projected_tree_ids)
+    return {
+        "schema_version": 1,
+        "mode": "instrumentation_only",
+        "full_projection_required": scope.full_projection_required,
+        "projected_tree_count": len(scope.projected_tree_ids),
+        "projected_tree_ids": list(scope.projected_tree_ids[:100]),
+        "omitted_tree_count": len(scope.omitted_tree_ids),
+        "omitted_tree_ids": list(scope.omitted_tree_ids[:100]),
+        "deleted_tree_count": len(scope.deleted_tree_ids),
+        "deleted_tree_ids": list(scope.deleted_tree_ids[:100]),
+        "unknown_changed_tree_count": len(scope.unknown_changed_tree_ids),
+        "unknown_changed_tree_ids": list(scope.unknown_changed_tree_ids[:100]),
+        "id_arrays_truncated": (
+            len(scope.projected_tree_ids) > 100
+            or len(scope.omitted_tree_ids) > 100
+            or len(scope.deleted_tree_ids) > 100
+            or len(scope.unknown_changed_tree_ids) > 100
+        ),
+        "scoped_tree_node_ref_count": len(scoped_tree_nodes),
+        "scoped_fact_location_ref_count": len(scoped_fact_locations),
+        "scoped_recall_document_ref_count": len(scoped_recall),
+        "scoped_browse_embedding_ref_count": len(scoped_browse),
+        "full_tree_node_ref_count": len(tree_node_refs),
+        "full_fact_location_ref_count": len(fact_location_refs),
+        "full_recall_document_ref_count": len(recall_refs),
+        "full_browse_embedding_ref_count": len(browse_refs),
     }
 
 

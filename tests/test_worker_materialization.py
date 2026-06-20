@@ -1035,6 +1035,12 @@ async def test_materialization_handler_commits_snapshot_pointer_metadata() -> No
     assert metadata["dirty_path_plan"]["affected_tree_count"] == 1
     assert metadata["dirty_path_plan"]["dirty_node_count"] == 2
     assert metadata["dirty_path_plan"]["affected_fact_count"] == 1
+    assert metadata["projection_tree_scope_plan"]["mode"] == "instrumentation_only"
+    assert metadata["projection_tree_scope_plan"]["full_projection_required"] is True
+    assert metadata["projection_tree_scope_plan"]["projected_tree_count"] == 1
+    assert metadata["projection_tree_scope_plan"]["omitted_tree_count"] == 0
+    assert metadata["projection_tree_scope_plan"]["scoped_tree_node_ref_count"] == 2
+    assert metadata["projection_tree_scope_plan"]["full_tree_node_ref_count"] == 2
 
 
 @pytest.mark.asyncio
@@ -1056,6 +1062,11 @@ async def test_materialization_handler_records_projection_plan_without_unsafe_li
     assert metadata["projection_plan_counts"]["recall_document"] == {"unchanged": 0, "upsert": 1, "delete": 0}
     assert metadata["projection_plan_counts"]["browse_embedding"] == {"unchanged": 0, "upsert": 1, "delete": 0}
     assert metadata["projection_plan_counts"]["summary_cache"] == {"unchanged": 0, "upsert": 1, "delete": 0}
+    assert metadata["projection_tree_scope_plan"]["full_projection_required"] is False
+    assert metadata["projection_tree_scope_plan"]["projected_tree_count"] == 0
+    assert metadata["projection_tree_scope_plan"]["omitted_tree_count"] == 1
+    assert metadata["projection_tree_scope_plan"]["scoped_tree_node_ref_count"] == 0
+    assert metadata["projection_tree_scope_plan"]["full_tree_node_ref_count"] == 2
     assert metadata["projection_plan_live_skipped_browse_embedding_count"] == 0
     assert metadata["projection_plan_live_skipped_summary_cache_count"] == 0
     assert "tree_nodes" in calls
