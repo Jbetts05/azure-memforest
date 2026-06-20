@@ -1604,6 +1604,10 @@ def _materialization_fingerprint_metadata(
         "projection_plan_counts": _projection_plan_counts(projection),
         "dirty_path_plan": _dirty_path_plan_summary(projection),
         "projection_tree_scope_plan": _projection_tree_scope_plan_summary(projection),
+        "projection_tree_scope_shadow": _projection_tree_scope_shadow_summary(
+            projection,
+            embedding_model_version=embedding_model_version,
+        ),
     }
     return {
         "materialization_fingerprint": _hash_json(inputs),
@@ -1624,6 +1628,7 @@ def _materialization_fingerprint_metadata(
         "projection_plan_counts": inputs["projection_plan_counts"],
         "dirty_path_plan": inputs["dirty_path_plan"],
         "projection_tree_scope_plan": inputs["projection_tree_scope_plan"],
+        "projection_tree_scope_shadow": inputs["projection_tree_scope_shadow"],
         "projection_plan_live_skipped_browse_embedding_count": len(projection.projection_skip_plans.get("browse_embedding", ProjectionSkipPlan((), (), ())).unchanged),
         "projection_plan_live_skipped_summary_cache_count": len(projection.projection_skip_plans.get("summary_cache", ProjectionSkipPlan((), (), ())).unchanged),
     }, inputs
@@ -1723,6 +1728,140 @@ def _projection_tree_scope_plan_summary(projection: MaterializationProjection) -
         "full_fact_location_ref_count": len(fact_location_refs),
         "full_recall_document_ref_count": len(recall_refs),
         "full_browse_embedding_ref_count": len(browse_refs),
+    }
+
+
+def _projection_tree_scope_shadow_summary(projection: MaterializationProjection, *, embedding_model_version: str) -> dict[str, Any]:
+    if not projection.projection_skip_plans:
+        return {
+            "schema_version": 1,
+            "mode": "shadow_compare",
+            "skip_plans_present": False,
+            "comparison_supported": False,
+            "reason": "projection_skip_plans_missing",
+        }
+    all_tree_ids = {
+        str(getattr(record, "tree_id", "") or "")
+        for record in [*projection.stored_nodes, *projection.recall_documents, *projection.browse_embedding_records]
+        if str(getattr(record, "tree_id", "") or "")
+    }
+    scope = plan_projection_tree_scope(
+        all_tree_ids=all_tree_ids,
+        changed_tree_ids=projection.changed_tree_ids,
+        deleted_tree_ids=projection.deleted_tree_ids,
+    )
+    if scope.full_projection_required:
+        return {
+            "schema_version": 1,
+            "mode": "shadow_compare",
+            "skip_plans_present": True,
+            "comparison_supported": False,
+            "reason": "full_projection_required",
+            "unknown_changed_tree_count": len(scope.unknown_changed_tree_ids),
+        }
+    if scope.unknown_changed_tree_ids:
+        return {
+            "schema_version": 1,
+            "mode": "shadow_compare",
+            "skip_plans_present": True,
+            "comparison_supported": False,
+            "reason": "unknown_changed_tree_ids",
+            "unknown_changed_tree_count": len(scope.unknown_changed_tree_ids),
+            "unknown_changed_tree_ids": list(scope.unknown_changed_tree_ids[:100]),
+        }
+
+    scoped_tree_ids = set(scope.projected_tree_ids)
+    scoped_projected = _tree_scoped_projection_refs(
+        projection,
+        scoped_tree_ids,
+        embedding_model_version=embedding_model_version,
+    )
+    full_plans = projection.projection_skip_plans
+    full_projected = _projection_refs_by_kind(projection, embedding_model_version=embedding_model_version)
+    shadow: dict[str, dict[str, int | bool]] = {}
+    divergent = False
+    for kind in ("tree_node_membership", "fact_location", "recall_document", "browse_embedding"):
+        scoped_plan = plan_projection_skip(scoped_projected.get(kind, ()), _retained_records_for_shadow(full_plans.get(kind), scoped_projected.get(kind, ())))
+        full_plan = full_plans.get(kind, ProjectionSkipPlan((), (), ()))
+        counts = _skip_plan_divergence_counts(full_plan, scoped_plan)
+        shadow[kind] = counts
+        divergent = divergent or any(
+            counts[key] > 0
+            for key in (
+                "missing_upsert",
+                "extra_upsert",
+                "missing_delete",
+                "extra_delete",
+                "missing_superseded",
+                "extra_superseded",
+            )
+        )
+    return {
+        "schema_version": 1,
+        "mode": "shadow_compare",
+        "skip_plans_present": True,
+        "comparison_supported": True,
+        "projected_tree_count": len(scope.projected_tree_ids),
+        "omitted_tree_count": len(scope.omitted_tree_ids),
+        "unknown_changed_tree_count": len(scope.unknown_changed_tree_ids),
+        "divergent": divergent,
+        "by_kind": shadow,
+        "full_tree_node_ref_count": len(full_projected.get("tree_node_membership", ())),
+        "scoped_tree_node_ref_count": len(scoped_projected.get("tree_node_membership", ())),
+    }
+
+
+def _projection_refs_by_kind(projection: MaterializationProjection, *, embedding_model_version: str) -> dict[str, tuple[ProjectionRecordRef, ...]]:
+    return {
+        "tree_node_membership": _tree_node_projection_refs(projection.stored_nodes),
+        "fact_location": _fact_location_projection_refs(projection.fact_locations),
+        "recall_document": _recall_document_projection_refs(projection.recall_documents),
+        "browse_embedding": _browse_embedding_projection_refs(
+            projection.browse_embedding_records,
+            embedding_model_version=embedding_model_version,
+        ),
+    }
+
+
+def _tree_scoped_projection_refs(projection: MaterializationProjection, tree_ids: set[str], *, embedding_model_version: str) -> dict[str, tuple[ProjectionRecordRef, ...]]:
+    projected = _projection_refs_by_kind(projection, embedding_model_version=embedding_model_version)
+    return {
+        kind: filter_projection_refs_to_tree_scope(records, tree_ids=tree_ids)
+        for kind, records in projected.items()
+    }
+
+
+def _retained_records_for_shadow(plan: ProjectionSkipPlan | None, scoped_projected: tuple[ProjectionRecordRef, ...]) -> tuple[ProjectionRecordRef, ...]:
+    if plan is None:
+        return ()
+    scoped_keys = {record.key for record in scoped_projected}
+    return tuple(
+        record
+        for record in [*plan.unchanged, *plan.delete, *plan.superseded]
+        if record.key in scoped_keys or record.key in plan.delete_keys
+    )
+
+
+def _skip_plan_divergence_counts(full: ProjectionSkipPlan, scoped: ProjectionSkipPlan) -> dict[str, int | bool]:
+    full_superseded = frozenset(record.key for record in full.superseded)
+    scoped_superseded = frozenset(record.key for record in scoped.superseded)
+    return {
+        "full_unchanged": len(full.unchanged),
+        "scoped_unchanged": len(scoped.unchanged),
+        "missing_unchanged": len(full.unchanged_keys - scoped.unchanged_keys),
+        "extra_unchanged": len(scoped.unchanged_keys - full.unchanged_keys),
+        "full_upsert": len(full.upsert),
+        "scoped_upsert": len(scoped.upsert),
+        "missing_upsert": len(full.upsert_keys - scoped.upsert_keys),
+        "extra_upsert": len(scoped.upsert_keys - full.upsert_keys),
+        "full_delete": len(full.delete),
+        "scoped_delete": len(scoped.delete),
+        "missing_delete": len(full.delete_keys - scoped.delete_keys),
+        "extra_delete": len(scoped.delete_keys - full.delete_keys),
+        "full_superseded": len(full.superseded),
+        "scoped_superseded": len(scoped.superseded),
+        "missing_superseded": len(full_superseded - scoped_superseded),
+        "extra_superseded": len(scoped_superseded - full_superseded),
     }
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 import asyncio
 import time
+from dataclasses import replace
 
 from src.build.tree_types import MemTree, MemTreeNode, SessionLeaf
 from src.cloud.cosmos_leases import LeaseConflict
@@ -550,6 +551,64 @@ def _unchanged_incremental_snapshot():
     )
 
 
+def _two_tree_incremental_snapshot():
+    changed = _snapshot().trees[0]
+    unchanged = MemTree(
+        tree_id="entity:bob",
+        tree_type="entity",
+        tree_key="bob",
+        label="Bob",
+        k=4,
+        root_node_id="bob-root",
+        nodes={
+            "bob-root": MemTreeNode(
+                node_id="bob-root",
+                tree_id="entity:bob",
+                level=1,
+                time_start=1.0,
+                time_end=2.0,
+                summary="bob root",
+                summary_dirty=False,
+                child_ids=["bob-leaf"],
+                item_count=1,
+            ),
+            "bob-leaf": MemTreeNode(
+                node_id="bob-leaf",
+                tree_id="entity:bob",
+                level=0,
+                time_start=1.0,
+                time_end=1.0,
+                summary="bob leaf",
+                summary_dirty=False,
+                child_ids=["fact-bob"],
+                item_count=1,
+                parent_id="bob-root",
+            ),
+        },
+        session_leaves={},
+        fact_ids_ordered=["fact-bob"],
+        centroid=None,
+        version=1,
+        lifecycle_state="active",
+        deactivated=False,
+        replacement_tree_ids=[],
+        created_at=1.0,
+        updated_at=2.0,
+    )
+    return ForestMaterializationSnapshot(
+        facts=[],
+        trees=[changed, unchanged],
+        node_embeddings={
+            "root": [1.0, 0.0],
+            "bob-root": [0.0, 1.0],
+        },
+        summary_cache={"k": "summary"},
+        changed_tree_ids=frozenset({"entity:alice"}),
+        deleted_tree_ids=frozenset(),
+        baseline_forest_version="v1",
+    )
+
+
 def _envelope(job_type="ingest_session"):
     return build_write_job_envelope(
         ActorContext(actor_id="user-1", tenant=TenantContext("tenant-1")),
@@ -1041,6 +1100,9 @@ async def test_materialization_handler_commits_snapshot_pointer_metadata() -> No
     assert metadata["projection_tree_scope_plan"]["omitted_tree_count"] == 0
     assert metadata["projection_tree_scope_plan"]["scoped_tree_node_ref_count"] == 2
     assert metadata["projection_tree_scope_plan"]["full_tree_node_ref_count"] == 2
+    assert metadata["projection_tree_scope_shadow"]["mode"] == "shadow_compare"
+    assert metadata["projection_tree_scope_shadow"]["comparison_supported"] is False
+    assert metadata["projection_tree_scope_shadow"]["reason"] == "full_projection_required"
 
 
 @pytest.mark.asyncio
@@ -1067,6 +1129,9 @@ async def test_materialization_handler_records_projection_plan_without_unsafe_li
     assert metadata["projection_tree_scope_plan"]["omitted_tree_count"] == 1
     assert metadata["projection_tree_scope_plan"]["scoped_tree_node_ref_count"] == 0
     assert metadata["projection_tree_scope_plan"]["full_tree_node_ref_count"] == 2
+    assert metadata["projection_tree_scope_shadow"]["comparison_supported"] is True
+    assert metadata["projection_tree_scope_shadow"]["divergent"] is True
+    assert metadata["projection_tree_scope_shadow"]["by_kind"]["tree_node_membership"]["missing_upsert"] == 2
     assert metadata["projection_plan_live_skipped_browse_embedding_count"] == 0
     assert metadata["projection_plan_live_skipped_summary_cache_count"] == 0
     assert "tree_nodes" in calls
@@ -1211,11 +1276,62 @@ async def test_materialization_handler_uses_authoritative_committed_baseline_for
     assert metadata["dirty_path_plan"]["affected_tree_count"] == 0
     assert metadata["dirty_path_plan"]["affected_fact_count"] == 0
     assert metadata["dirty_path_plan"]["dirty_node_count"] == 0
+    assert metadata["projection_tree_scope_shadow"]["comparison_supported"] is True
+    assert metadata["projection_tree_scope_shadow"]["divergent"] is False
+    assert metadata["projection_tree_scope_shadow"]["by_kind"]["tree_node_membership"]["missing_unchanged"] == 2
+    assert metadata["projection_tree_scope_shadow"]["by_kind"]["tree_node_membership"]["missing_upsert"] == 0
     assert "tree_nodes" in calls
     assert "locations" in calls
     assert "recall" in calls
     assert "browse_embeddings" not in calls
     assert "summary_cache" not in calls
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_shadow_compare_uses_embedding_model_version_for_scoped_browse() -> None:
+    calls = []
+    manifest_store = FakeManifestStore()
+    manifest_store.latest = ForestManifest(
+        manifest_id="manifest-v1",
+        tenant_id="tenant-1",
+        user_id="user-1",
+        forest_version="v1",
+        generation=1,
+        status="committed",
+        created_at_unix=1.0,
+        metadata={"job_id": "previous", "job_type": "ingest_session"},
+    )
+    current_projection = project_forest_snapshot(
+        _two_tree_incremental_snapshot(),
+        tenant_id="tenant-1",
+        user_id="user-1",
+        forest_version="v2",
+        generation=2,
+        embedding_model_version="embed-v1",
+    )
+    def _old_if_alice(ref: ProjectionRecordRef) -> ProjectionRecordRef:
+        if str(ref.metadata.get("tree_id") or "") == "entity:alice":
+            return replace(ref, content_hash=f"old-{ref.content_hash}", content_id="")
+        return ref
+    records = {
+        kind: tuple(_old_if_alice(ref) for ref in plan.upsert)
+        for kind, plan in current_projection.projection_skip_plans.items()
+    }
+    handler = _handler(
+        manifest_store=manifest_store,
+        calls=calls,
+        core=FakeIngestCore(_two_tree_incremental_snapshot()),
+        baseline_provider=lambda **kwargs: CommittedProjectionBaseline(scope=kwargs["scope"], records=records),
+    )
+
+    await handler.handle(_envelope(), {"fencing_token": 1})
+
+    shadow = manifest_store.latest.metadata["projection_tree_scope_shadow"]
+    assert shadow["comparison_supported"] is True
+    assert shadow["by_kind"]["browse_embedding"]["missing_upsert"] == 0
+    assert shadow["by_kind"]["browse_embedding"]["extra_upsert"] == 0
+    assert shadow["by_kind"]["tree_node_membership"]["missing_unchanged"] == 2
+    assert shadow["by_kind"]["tree_node_membership"]["missing_upsert"] == 0
 
 
 @pytest.mark.asyncio
