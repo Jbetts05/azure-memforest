@@ -497,6 +497,29 @@ def test_phase2_harness_selective_extraction_does_not_extract_comma_filler(monke
     assert stats["assistant_turns_extractable"] == 0
 
 
+def test_phase2_harness_selective_extraction_requires_specific_user_intent(monkeypatch) -> None:
+    harness = _load_harness(monkeypatch, PHASE2_SELECTIVE_ASSISTANT_EXTRACTION="true")
+
+    turns, stats = harness.turns_for_ingest(
+        {
+            "source_session_id": "session-1",
+            "turns": [
+                {"role": "user", "content_id": "session-1:1", "content": "Tell me more.", "metadata": {}},
+                {
+                    "role": "assistant",
+                    "content_id": "session-1:2",
+                    "content": "Paris, Rome, and Madrid are popular cities; Barcelona is another example.",
+                    "metadata": {},
+                },
+            ],
+        },
+        case_id="case-1",
+    )
+
+    assert turns[1]["metadata"]["skip_extraction"] is True
+    assert stats["assistant_turns_extractable"] == 0
+
+
 def test_phase2_harness_selective_extraction_keeps_inline_named_recommendation(monkeypatch) -> None:
     harness = _load_harness(monkeypatch, PHASE2_SELECTIVE_ASSISTANT_EXTRACTION="true")
 
@@ -543,6 +566,52 @@ def test_phase2_harness_selective_extraction_keeps_concrete_process_list(monkeyp
 
     assert turns[1]["metadata"]["assistant_extraction_context"] is True
     assert turns[1]["metadata"]["override_reason"] == "selective_assistant_extraction"
+    assert stats["assistant_turns_selectively_extractable"] == 1
+
+
+def test_phase2_harness_selective_extraction_keeps_answer_seeking_recommendation_list(monkeypatch) -> None:
+    harness = _load_harness(monkeypatch, PHASE2_SELECTIVE_ASSISTANT_EXTRACTION="true")
+
+    turns, stats = harness.turns_for_ingest(
+        {
+            "source_session_id": "session-1",
+            "turns": [
+                {"role": "user", "content_id": "session-1:1", "content": "Any recommendations for good places nearby?", "metadata": {}},
+                {
+                    "role": "assistant",
+                    "content_id": "session-1:2",
+                    "content": "One popular option is Pizzarium. Another option is La Locanda dei Girasoli. There's also Roscioli, a famous deli.",
+                    "metadata": {},
+                },
+            ],
+        },
+        case_id="case-1",
+    )
+
+    assert turns[1]["metadata"]["assistant_extraction_context"] is True
+    assert stats["assistant_turns_selectively_extractable"] == 1
+
+
+def test_phase2_harness_selective_extraction_keeps_answer_seeking_named_list(monkeypatch) -> None:
+    harness = _load_harness(monkeypatch, PHASE2_SELECTIVE_ASSISTANT_EXTRACTION="true")
+
+    turns, stats = harness.turns_for_ingest(
+        {
+            "source_session_id": "session-1",
+            "turns": [
+                {"role": "user", "content_id": "session-1:1", "content": "What are traditional games at the event?", "metadata": {}},
+                {
+                    "role": "assistant",
+                    "content_id": "session-1:2",
+                    "content": "Some popular games include:\n1. Stick Game\n2. Hand Games\n3. Hoop Dance",
+                    "metadata": {},
+                },
+            ],
+        },
+        case_id="case-1",
+    )
+
+    assert turns[1]["metadata"]["assistant_extraction_context"] is True
     assert stats["assistant_turns_selectively_extractable"] == 1
 
 

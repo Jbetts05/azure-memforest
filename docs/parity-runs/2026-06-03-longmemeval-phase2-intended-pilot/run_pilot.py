@@ -534,10 +534,20 @@ _INLINE_SINGLE_ENTITY_RE = re.compile(
 _SHORT_NAMED_ANSWER_RE = re.compile(r"^\s*(?:[A-Z][A-Za-zÀ-ÖØ-öø-ÿ'’-]{2,})(?:\s+[A-Z][A-Za-zÀ-ÖØ-öø-ÿ'’-]{2,}){0,3}\s*[.!?]?\s*$")
 _QUOTED_TEXT_RE = re.compile(r"[\"'“”‘’][^\"'“”‘’]{2,}[\"'“”‘’]")
 _USER_MEMORY_REQUEST_RE = re.compile(
-    r"\b(?:remember|recall|list|name|enumerate|which|who|where|when|how many|how much|recommend|suggest|suggestion|option|brand|restaurant|song|book|movie|show|place|time|date|number)\b",
+    r"\b(?:remember|remind me|recall|list|name|enumerate|which|who|where|when|how many|how much|recommend|suggest|suggestion|option|brand|example|place|time|date|number)\b",
     re.IGNORECASE,
 )
 _EXPLICIT_LIST_REQUEST_RE = re.compile(r"\b(?:list|name|enumerate|recommend|suggest)\b", re.IGNORECASE)
+_SPECIFIC_WHAT_REQUEST_RE = re.compile(
+    r"\bwhat\b.{0,80}\b(?:process(?:es)?|language(?:s)?|brand|place|time|date|number|item(?:s)?|event(?:s)?|example)\b",
+    re.IGNORECASE,
+)
+_ANSWER_SEEKING_REQUEST_RE = re.compile(
+    r"\b(?:give me|what are|what is|which are|which is|any recommendations|recommendations for|"
+    r"do you think there (?:are|is) any|can you (?:recommend|suggest)|tell me (?:about|which|what))\b",
+    re.IGNORECASE,
+)
+_EXAMPLE_ANSWER_RE = re.compile(r"\b(?:for example|one example|popular option|include:|include)\b", re.IGNORECASE)
 _GENERIC_ADVICE_RE = re.compile(
     r"\b(?:you should|try to|consider|it'?s generally|in general|for example|steps?|tips?|guide|how to)\b",
     re.IGNORECASE,
@@ -561,15 +571,28 @@ def _is_selective_assistant_memory_turn(turn: dict, prior_shaped_turns: list[dic
         "quoted_text": bool(_QUOTED_TEXT_RE.search(text)),
     }
     non_comma_score = sum(1 for key, matched in signals.items() if key != "comma_list" and matched)
-    concrete_score = non_comma_score + int(signals["comma_list"])
     has_memory_request = bool(_USER_MEMORY_REQUEST_RE.search(previous_user_text))
-    if _GENERIC_ADVICE_RE.search(text) and not has_memory_request and concrete_score < 2:
+    has_specific_what_request = bool(_SPECIFIC_WHAT_REQUEST_RE.search(previous_user_text))
+    has_answer_request = bool(_ANSWER_SEEKING_REQUEST_RE.search(previous_user_text))
+    if _GENERIC_ADVICE_RE.search(text) and not has_memory_request and non_comma_score < 2:
         return False
-    if concrete_score >= 2:
+    if signals["short_named_answer"] and has_memory_request:
         return True
-    if non_comma_score == 1 and has_memory_request:
+    if signals["inline_entity"] and has_memory_request:
         return True
-    if signals["comma_list"] and _EXPLICIT_LIST_REQUEST_RE.search(previous_user_text):
+    if (signals["list_marker"] or signals["comma_list"]) and (
+        _EXPLICIT_LIST_REQUEST_RE.search(previous_user_text) or has_specific_what_request
+    ):
+        return True
+    if signals["list_marker"] and signals["named_entity"] and has_answer_request:
+        return True
+    if signals["inline_entity"] and has_answer_request:
+        return True
+    if signals["quoted_text"] and signals["comma_list"] and _EXAMPLE_ANSWER_RE.search(text) and has_answer_request:
+        return True
+    if signals["concrete_value"] and has_memory_request:
+        return True
+    if non_comma_score >= 3 and (has_memory_request or has_specific_what_request):
         return True
     return False
 
