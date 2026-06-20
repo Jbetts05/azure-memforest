@@ -1028,6 +1028,13 @@ async def test_materialization_handler_commits_snapshot_pointer_metadata() -> No
     assert metadata["projection_delta_deleted_tree_ids"] == []
     assert metadata["projection_plan_counts"]["tree_node_membership"]["upsert"] == 2
     assert metadata["projection_plan_counts"]["browse_embedding"]["unchanged"] == 0
+    assert metadata["dirty_path_plan"]["mode"] == "instrumentation_only"
+    assert metadata["dirty_path_plan"]["skip_plans_present"] is True
+    assert metadata["dirty_path_plan"]["id_arrays_truncated"] is False
+    assert metadata["dirty_path_plan"]["full_projection_required"] is True
+    assert metadata["dirty_path_plan"]["affected_tree_count"] == 1
+    assert metadata["dirty_path_plan"]["dirty_node_count"] == 2
+    assert metadata["dirty_path_plan"]["affected_fact_count"] == 1
 
 
 @pytest.mark.asyncio
@@ -1187,6 +1194,12 @@ async def test_materialization_handler_uses_authoritative_committed_baseline_for
     assert metadata["projection_plan_counts"]["summary_cache"] == {"unchanged": 1, "upsert": 0, "delete": 0}
     assert metadata["projection_plan_live_skipped_browse_embedding_count"] == 1
     assert metadata["projection_plan_live_skipped_summary_cache_count"] == 1
+    assert metadata["dirty_path_plan"]["mode"] == "instrumentation_only"
+    assert metadata["dirty_path_plan"]["skip_plans_present"] is True
+    assert metadata["dirty_path_plan"]["id_arrays_truncated"] is False
+    assert metadata["dirty_path_plan"]["affected_tree_count"] == 0
+    assert metadata["dirty_path_plan"]["affected_fact_count"] == 0
+    assert metadata["dirty_path_plan"]["dirty_node_count"] == 0
     assert "tree_nodes" in calls
     assert "locations" in calls
     assert "recall" in calls
