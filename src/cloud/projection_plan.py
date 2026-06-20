@@ -66,6 +66,30 @@ class ProjectionSkipPlan:
         return frozenset(record.key for record in self.delete)
 
 
+@dataclass(frozen=True, slots=True)
+class AffectedTreePlan:
+    affected_tree_ids: tuple[str, ...]
+    affected_fact_ids: tuple[str, ...]
+    dirty_node_keys: tuple[str, ...]
+    dirty_root_tree_ids: tuple[str, ...]
+
+    @property
+    def affected_tree_count(self) -> int:
+        return len(self.affected_tree_ids)
+
+    @property
+    def affected_fact_count(self) -> int:
+        return len(self.affected_fact_ids)
+
+    @property
+    def dirty_node_count(self) -> int:
+        return len(self.dirty_node_keys)
+
+    @property
+    def dirty_root_tree_count(self) -> int:
+        return len(self.dirty_root_tree_ids)
+
+
 def plan_projection_skip(
     projected_records: Iterable[ProjectionRecordRef],
     retained_committed_records: Iterable[ProjectionRecordRef],
@@ -104,6 +128,62 @@ def plan_projection_skip(
         delete=tuple(sorted(delete, key=_sort_key)),
         superseded=tuple(sorted(superseded, key=_sort_key)),
     )
+
+
+def plan_affected_trees(projection_skip_plans: Mapping[str, ProjectionSkipPlan]) -> AffectedTreePlan:
+    """Derive affected tree/fact/node sets from projection delta plans.
+
+    This is a pure planning helper: it only interprets ProjectionRecordRef
+    metadata. It intentionally returns complete sorted ID tuples; callers that
+    persist telemetry may truncate their own serialized copies. Superseded refs
+    contribute their prior committed IDs so future invalidation paths can dirty
+    both old and new locations. Dirty root tree IDs are intentionally derived
+    from recall-document deltas only.
+    """
+
+    dirty_node_refs = _dirty_record_refs(projection_skip_plans.get("tree_node_membership"))
+    dirty_location_refs = _dirty_record_refs(projection_skip_plans.get("fact_location"))
+    dirty_recall_refs = _dirty_record_refs(projection_skip_plans.get("recall_document"))
+    affected_tree_ids = sorted(
+        {
+            str(ref.metadata.get("tree_id") or "")
+            for ref in [*dirty_node_refs, *dirty_location_refs, *dirty_recall_refs]
+            if str(ref.metadata.get("tree_id") or "")
+        }
+    )
+    affected_fact_ids = sorted(
+        {
+            str(ref.metadata.get("fact_id") or "")
+            for ref in dirty_location_refs
+            if str(ref.metadata.get("fact_id") or "")
+        }
+    )
+    dirty_node_keys = sorted(
+        {
+            f"{ref.metadata.get('tree_id')}/{ref.metadata.get('node_id')}"
+            for ref in dirty_node_refs
+            if ref.metadata.get("tree_id") and ref.metadata.get("node_id")
+        }
+    )
+    dirty_root_tree_ids = sorted(
+        {
+            str(ref.metadata.get("tree_id") or "")
+            for ref in dirty_recall_refs
+            if str(ref.metadata.get("tree_id") or "")
+        }
+    )
+    return AffectedTreePlan(
+        affected_tree_ids=tuple(affected_tree_ids),
+        affected_fact_ids=tuple(affected_fact_ids),
+        dirty_node_keys=tuple(dirty_node_keys),
+        dirty_root_tree_ids=tuple(dirty_root_tree_ids),
+    )
+
+
+def _dirty_record_refs(plan: ProjectionSkipPlan | None) -> tuple[ProjectionRecordRef, ...]:
+    if plan is None:
+        return ()
+    return (*plan.upsert, *plan.delete, *plan.superseded)
 
 
 def _index_unique(records: Iterable[ProjectionRecordRef], *, label: str) -> dict[ProjectionRecordKey, ProjectionRecordRef]:

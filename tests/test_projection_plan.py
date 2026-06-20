@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.cloud.projection_plan import ProjectionRecordKey, ProjectionRecordRef, plan_projection_skip, tree_node_body_content_id
+from src.cloud.projection_plan import ProjectionRecordKey, ProjectionRecordRef, ProjectionSkipPlan, plan_affected_trees, plan_projection_skip, tree_node_body_content_id
 
 
 def test_projection_skip_plan_splits_unchanged_upsert_and_delete_by_content_hash() -> None:
@@ -115,3 +115,84 @@ def test_projection_skip_plan_rejects_records_without_content_identity() -> None
             projected_records=[ProjectionRecordRef("recall_document", "tree-1/root")],
             retained_committed_records=[],
         )
+
+
+def test_plan_affected_trees_collects_changed_tree_fact_node_and_root_sets() -> None:
+    plan = plan_affected_trees(
+        {
+            "tree_node_membership": ProjectionSkipPlan(
+                unchanged=(),
+                upsert=(
+                    ProjectionRecordRef("tree_node_membership", "entity:alice/root", content_hash="new", metadata={"tree_id": "entity:alice", "node_id": "root"}),
+                    ProjectionRecordRef("tree_node_membership", "entity:alice/leaf", content_hash="new", metadata={"tree_id": "entity:alice", "node_id": "leaf"}),
+                ),
+                delete=(
+                    ProjectionRecordRef("tree_node_membership", "entity:old/root", content_hash="old", metadata={"tree_id": "entity:old", "node_id": "root"}),
+                ),
+            ),
+            "fact_location": ProjectionSkipPlan(
+                unchanged=(),
+                upsert=(
+                    ProjectionRecordRef("fact_location", "fact-1/entity:alice/leaf/entity/L0", content_hash="new", metadata={"tree_id": "entity:alice", "node_id": "leaf", "fact_id": "fact-1"}),
+                ),
+                delete=(
+                    ProjectionRecordRef("fact_location", "fact-old/entity:old/leaf/entity/L0", content_hash="old", metadata={"tree_id": "entity:old", "node_id": "leaf", "fact_id": "fact-old"}),
+                ),
+            ),
+            "recall_document": ProjectionSkipPlan(
+                unchanged=(),
+                upsert=(
+                    ProjectionRecordRef("recall_document", "entity:alice/root", content_hash="new", metadata={"tree_id": "entity:alice", "node_id": "root"}),
+                ),
+                delete=(),
+                superseded=(
+                    ProjectionRecordRef("recall_document", "entity:old/root", content_hash="old", metadata={"tree_id": "entity:old", "node_id": "root"}),
+                ),
+            ),
+        }
+    )
+
+    assert plan.affected_tree_ids == ("entity:alice", "entity:old")
+    assert plan.affected_fact_ids == ("fact-1", "fact-old")
+    assert plan.dirty_node_keys == ("entity:alice/leaf", "entity:alice/root", "entity:old/root")
+    assert plan.dirty_root_tree_ids == ("entity:alice", "entity:old")
+
+
+def test_plan_affected_trees_ignores_unchanged_records_and_missing_metadata() -> None:
+    plan = plan_affected_trees(
+        {
+            "tree_node_membership": ProjectionSkipPlan(
+                unchanged=(
+                    ProjectionRecordRef("tree_node_membership", "entity:alice/root", content_hash="same", metadata={"tree_id": "entity:alice", "node_id": "root"}),
+                ),
+                upsert=(
+                    ProjectionRecordRef("tree_node_membership", "bad", content_hash="new", metadata={}),
+                ),
+                delete=(),
+            )
+        }
+    )
+
+    assert plan.affected_tree_ids == ()
+    assert plan.affected_fact_ids == ()
+    assert plan.dirty_node_keys == ()
+    assert plan.dirty_root_tree_ids == ()
+
+
+def test_plan_affected_trees_excludes_unchanged_records_with_valid_metadata() -> None:
+    plan = plan_affected_trees(
+        {
+            "tree_node_membership": ProjectionSkipPlan(
+                unchanged=(
+                    ProjectionRecordRef("tree_node_membership", "entity:unchanged/root", content_hash="same", metadata={"tree_id": "entity:unchanged", "node_id": "root"}),
+                ),
+                upsert=(
+                    ProjectionRecordRef("tree_node_membership", "entity:changed/root", content_hash="new", metadata={"tree_id": "entity:changed", "node_id": "root"}),
+                ),
+                delete=(),
+            )
+        }
+    )
+
+    assert plan.affected_tree_ids == ("entity:changed",)
+    assert plan.dirty_node_keys == ("entity:changed/root",)

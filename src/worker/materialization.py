@@ -24,7 +24,7 @@ from src.cloud.projection_baseline import (
     build_committed_projection_baseline,
     summary_cache_refs_from_entries,
 )
-from src.cloud.projection_plan import ProjectionRecordRef, ProjectionSkipPlan, browse_embedding_content_hash, plan_projection_skip, tree_node_body_content_id
+from src.cloud.projection_plan import ProjectionRecordRef, ProjectionSkipPlan, browse_embedding_content_hash, plan_affected_trees, plan_projection_skip, tree_node_body_content_id
 from src.cloud.schema import SCHEMA_VERSION
 from src.forest.memforest import _content_key
 from src.forest.user_forest import ForestMaterializationSnapshot
@@ -1638,61 +1638,29 @@ def _dirty_path_plan_summary(projection: MaterializationProjection) -> dict[str,
     location_plan = projection.projection_skip_plans.get("fact_location")
     recall_plan = projection.projection_skip_plans.get("recall_document")
     skip_plans_present = bool(projection.projection_skip_plans)
-
-    dirty_node_refs = _dirty_record_refs(tree_plan)
-    dirty_fact_location_refs = _dirty_record_refs(location_plan)
-    dirty_recall_refs = _dirty_record_refs(recall_plan)
-
-    affected_tree_ids = sorted(
-        {
-            str(ref.metadata.get("tree_id") or "")
-            for ref in [*dirty_node_refs, *dirty_fact_location_refs, *dirty_recall_refs]
-            if str(ref.metadata.get("tree_id") or "")
-        }
-    )
-    affected_fact_ids = sorted(
-        {
-            str(ref.metadata.get("fact_id") or "")
-            for ref in dirty_fact_location_refs
-            if str(ref.metadata.get("fact_id") or "")
-        }
-    )
-    dirty_node_keys = sorted(
-        {
-            f"{ref.metadata.get('tree_id')}/{ref.metadata.get('node_id')}"
-            for ref in dirty_node_refs
-            if ref.metadata.get("tree_id") and ref.metadata.get("node_id")
-        }
-    )
-    dirty_root_tree_ids = sorted(
-        {
-            str(ref.metadata.get("tree_id") or "")
-            for ref in dirty_recall_refs
-            if str(ref.metadata.get("tree_id") or "")
-        }
-    )
+    affected = plan_affected_trees(projection.projection_skip_plans)
     return {
         "schema_version": 1,
         "mode": "instrumentation_only",
         "skip_plans_present": skip_plans_present,
         "id_arrays_truncated": (
-            len(affected_tree_ids) > 100
-            or len(affected_fact_ids) > 100
-            or len(dirty_node_keys) > 200
-            or len(dirty_root_tree_ids) > 100
+            affected.affected_tree_count > 100
+            or affected.affected_fact_count > 100
+            or affected.dirty_node_count > 200
+            or affected.dirty_root_tree_count > 100
         ),
         "baseline_forest_version": projection.baseline_forest_version,
         "full_projection_required": projection.changed_tree_ids is None,
         "changed_tree_ids": None if projection.changed_tree_ids is None else sorted(projection.changed_tree_ids),
         "deleted_tree_ids": sorted(projection.deleted_tree_ids),
-        "affected_tree_count": len(affected_tree_ids),
-        "affected_tree_ids": affected_tree_ids[:100],
-        "affected_fact_count": len(affected_fact_ids),
-        "affected_fact_ids": affected_fact_ids[:100],
-        "dirty_node_count": len(dirty_node_keys),
-        "dirty_node_keys": dirty_node_keys[:200],
-        "dirty_root_tree_count": len(dirty_root_tree_ids),
-        "dirty_root_tree_ids": dirty_root_tree_ids[:100],
+        "affected_tree_count": affected.affected_tree_count,
+        "affected_tree_ids": list(affected.affected_tree_ids[:100]),
+        "affected_fact_count": affected.affected_fact_count,
+        "affected_fact_ids": list(affected.affected_fact_ids[:100]),
+        "dirty_node_count": affected.dirty_node_count,
+        "dirty_node_keys": list(affected.dirty_node_keys[:200]),
+        "dirty_root_tree_count": affected.dirty_root_tree_count,
+        "dirty_root_tree_ids": list(affected.dirty_root_tree_ids[:100]),
         "candidate_upsert_tree_node_count": len(tree_plan.upsert) if tree_plan is not None else len(projection.stored_nodes),
         "candidate_delete_tree_node_count": len(tree_plan.delete) if tree_plan is not None else 0,
         "candidate_upsert_fact_location_count": len(location_plan.upsert) if location_plan is not None else len(projection.fact_locations),
@@ -1700,12 +1668,6 @@ def _dirty_path_plan_summary(projection: MaterializationProjection) -> dict[str,
         "candidate_upsert_recall_document_count": len(recall_plan.upsert) if recall_plan is not None else len(projection.recall_documents),
         "candidate_close_recall_document_count": (len(recall_plan.delete) + len(recall_plan.superseded)) if recall_plan is not None else 0,
     }
-
-
-def _dirty_record_refs(plan: ProjectionSkipPlan | None) -> tuple[ProjectionRecordRef, ...]:
-    if plan is None:
-        return ()
-    return (*plan.upsert, *plan.delete, *plan.superseded)
 
 
 def _fingerprint_inputs_id(*, tenant_id: str, user_id: str, forest_version: str) -> str:
