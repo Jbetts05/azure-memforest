@@ -948,6 +948,7 @@ def project_forest_snapshot(
     browse_embedding_records: list[BrowseEmbeddingRecord] = []
 
     for tree in snapshot.trees:
+        persisted_k = _cloud_tree_fanout_k(tree.k)
         root = tree.nodes.get(tree.root_node_id)
         for node in tree.nodes.values():
             stored_nodes.append(
@@ -966,7 +967,7 @@ def project_forest_snapshot(
                         "tree_type": tree.tree_type,
                         "tree_label": tree.label,
                         "tree_key": tree.tree_key,
-                        "k": tree.k,
+                        "k": persisted_k,
                         "time_start": node.time_start,
                         "time_end": node.time_end,
                         "item_count": node.item_count,
@@ -1327,6 +1328,10 @@ def _safe_upsert_tree_nodes(projection: MaterializationProjection) -> list[Store
         return list(projection.stored_nodes)
     upsert_keys = {record.logical_id for record in plan.upsert}
     return [node for node in projection.stored_nodes if f"{node.tree_id}/{node.node_id}" in upsert_keys]
+
+
+def _cloud_tree_fanout_k(k: int) -> int:
+    return max(int(k), 3)
 
 
 def _tree_node_delete_keys(projection: MaterializationProjection) -> list[tuple[str, str]]:

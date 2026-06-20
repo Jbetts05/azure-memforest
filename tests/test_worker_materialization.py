@@ -187,6 +187,74 @@ def test_project_forest_snapshot_tags_cloud_artifacts() -> None:
     assert len(projection.projection_skip_plans["summary_cache"].upsert) == 1
 
 
+def test_project_forest_snapshot_normalizes_cloud_fanout_k_for_stable_hashes() -> None:
+    def _projection_for_k(k: int):
+        tree = MemTree(
+            tree_id="session:s1",
+            tree_type="session",
+            tree_key="s1",
+            label="s1",
+            k=k,
+            root_node_id="session-root",
+            nodes={
+                "session-root": MemTreeNode(
+                    node_id="session-root",
+                    tree_id="session:s1",
+                    level=0,
+                    time_start=1.0,
+                    time_end=1.0,
+                    summary="User bought a blue kayak.",
+                    summary_dirty=False,
+                    child_ids=["session-raw#cell_0000"],
+                    item_count=1,
+                )
+            },
+            session_leaves={
+                "session-raw#cell_0000": SessionLeaf(
+                    cell_id="session-raw#cell_0000",
+                    session_id="session-raw",
+                    cell_index=0,
+                    time_start=1.0,
+                    time_end=1.0,
+                    raw_turns=[],
+                    raw_text="User bought a blue kayak.",
+                    fact_ids=["fact-1"],
+                )
+            },
+            fact_ids_ordered=[],
+            centroid=None,
+            version=1,
+            lifecycle_state="active",
+            deactivated=False,
+            replacement_tree_ids=[],
+            created_at=1.0,
+            updated_at=2.0,
+        )
+        return project_forest_snapshot(
+            ForestMaterializationSnapshot(
+                facts=[],
+                trees=[tree],
+                node_embeddings={},
+                summary_cache={},
+            ),
+            tenant_id="tenant-1",
+            user_id="user-1",
+            forest_version=f"v{k}",
+            generation=k,
+            embedding_model_version="embed-v1",
+        )
+
+    k2_projection = _projection_for_k(2)
+    k3_projection = _projection_for_k(3)
+    k2_ref = k2_projection.projection_skip_plans["tree_node_membership"].upsert[0]
+    k3_ref = k3_projection.projection_skip_plans["tree_node_membership"].upsert[0]
+
+    assert k2_projection.stored_nodes[0].metadata["k"] == 3
+    assert k3_projection.stored_nodes[0].metadata["k"] == 3
+    assert k2_ref.content_hash == k3_ref.content_hash
+    assert k2_ref.content_id == k3_ref.content_id
+
+
 def test_project_forest_snapshot_defaults_to_full_projection_required() -> None:
     snapshot = ForestMaterializationSnapshot(
         facts=[],

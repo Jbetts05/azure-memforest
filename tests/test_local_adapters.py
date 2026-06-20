@@ -133,7 +133,7 @@ def test_tree_store_node_adapter_converts_loaded_tree_node(tmp_path):
     assert root.level == "L1"
     assert root.metadata["tree_type"] == "entity"
     assert root.metadata["tree_key"] == "user"
-    assert root.metadata["k"] == 2
+    assert root.metadata["k"] == 3
     assert leaf is not None
     assert leaf.fact_ids == ("fact-1",)
 

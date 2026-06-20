@@ -124,7 +124,7 @@ class TreeStoreNodeAdapter:
                 "tree_type": tree.tree_type,
                 "tree_label": tree.label,
                 "tree_key": tree.tree_key,
-                "k": tree.k,
+                "k": max(int(tree.k), 3),
                 "time_start": node.time_start,
                 "time_end": node.time_end,
                 "item_count": node.item_count,
