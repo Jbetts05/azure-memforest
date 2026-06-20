@@ -50,18 +50,7 @@ def write_orchestrator(context: df.DurableOrchestrationContext):
         "owner_id": f"durable:{context.instance_id}",
         "instance_id": context.instance_id,
     }
-    retry_options = df.RetryOptions(
-        first_retry_interval_in_milliseconds=30000,
-        max_number_of_attempts=int(payload.get("activity_max_attempts") or 1),
-    )
-    try:
-        return (yield context.call_activity_with_retry("materialize_write_job", retry_options, activity_input))
-    except Exception as exc:
-        failure_input = {
-            **activity_input,
-            "reason": f"durable_activity_retries_exhausted: {type(exc).__name__}: {exc}",
-        }
-        return (yield context.call_activity("fail_write_job", failure_input))
+    return (yield context.call_activity("materialize_write_job", activity_input))
 
 
 @app.activity_trigger(input_name="payload")
