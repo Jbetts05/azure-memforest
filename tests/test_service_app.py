@@ -252,6 +252,33 @@ def test_memory_command_service_selector_uses_hybrid_durable_ingest_when_service
     assert isinstance(service, DurableIngestMemoryCommandService)
 
 
+def test_memory_command_service_selector_defaults_to_durable_when_configured() -> None:
+    from src.service.jobs import DurableIngestMemoryCommandService
+
+    service = _memory_command_service_from_env(
+        {
+            "AZURE_MEMFOREST_DURABLE_START_URL": "https://functions.example/start",
+            "AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE": "example.servicebus.windows.net",
+            "AZURE_SERVICEBUS_WRITES_QUEUE_NAME": "queue",
+            "AZURE_CLIENT_ID": "client-id",
+        }
+    )
+
+    assert isinstance(service, DurableIngestMemoryCommandService)
+
+
+def test_memory_command_service_selector_default_falls_back_to_servicebus_without_durable_url() -> None:
+    service = _memory_command_service_from_env(
+        {
+            "AZURE_SERVICEBUS_FULLY_QUALIFIED_NAMESPACE": "example.servicebus.windows.net",
+            "AZURE_SERVICEBUS_WRITES_QUEUE_NAME": "queue",
+            "AZURE_CLIENT_ID": "client-id",
+        }
+    )
+
+    assert isinstance(service, ServiceBusMemoryCommandService)
+
+
 def test_ui_cors_is_gated_by_feature_flag() -> None:
     app = create_app(
         settings=ServiceSettings(ui_enabled=True, ui_allowed_origins=("https://ui.example",)),

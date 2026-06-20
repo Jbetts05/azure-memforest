@@ -254,7 +254,7 @@ Important deployment switches:
 - `enableDevHeaderAuth`: development-only header auth.
 - `deployDurableOrchestrator`: deploy the Durable Functions orchestrator scaffold.
 - `durableHostingPlan`: `flex` or `ep1` for the Durable Function App.
-- `apiDispatchMode`: `servicebus` by default, `durable` for guarded ingest-dispatch tests.
+- `apiDispatchMode`: `durable` by default for write orchestration; `servicebus` remains available as an explicit direct-worker fallback.
 - `durableStartUrl` and `durableStartFunctionKey`: Durable starter endpoint and secret-backed Function key.
 - `entraTenantId` and `entraAudiences`: production bearer-token validation settings.
 

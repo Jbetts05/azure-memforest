@@ -57,10 +57,10 @@ API dispatch is controlled by environment variables:
 - `AZURE_MEMFOREST_DURABLE_START_URL`
 - `AZURE_MEMFOREST_DURABLE_START_TOKEN`
 
-Defaults are safe:
+Defaults prefer Durable orchestration:
 
-- Bicep defaults `apiDispatchMode` to `servicebus`.
-- Durable dispatch settings are only emitted when `apiDispatchMode=durable`.
+- Bicep defaults `apiDispatchMode` to `durable`.
+- Durable dispatch settings are emitted when `apiDispatchMode=durable`; if the Durable start URL is not configured, the API falls back to Service Bus.
 - The Durable function key is stored as a Container Apps secret and referenced via `secretRef`.
 
 When Durable dispatch is enabled and Service Bus fallback is configured:
@@ -117,7 +117,7 @@ Important parameters:
 
 - `deployDurableOrchestrator=false` by default
 - `durableHostingPlan='flex'` by default, with `ep1` as explicit fallback
-- `apiDispatchMode='servicebus'` by default
+- `apiDispatchMode='durable'` by default
 - `durableStartFunctionKey` is `@secure()`
 
 Hosting notes:
@@ -205,8 +205,8 @@ Committed artifacts:
 
 ## Limitations and open issues
 
-1. **Durable is enabled only during guarded windows**
-   The live API is reverted to `apiDispatchMode=servicebus` and `enableDevHeaderAuth=false` after smoke runs. Durable should not be left on by accident until operating gates are added.
+1. **Durable is the default write control plane**
+   The live API should use `apiDispatchMode=durable` for production-like writes. Service Bus remains the direct-worker fallback and the Durable activity offload transport; `enableDevHeaderAuth=false` should still be restored after smoke runs.
 
 2. **Delete and clear still use Service Bus**
    Durable migration currently covers `ingest_session`. `delete_session` and `clear_memory` remain on Service Bus fallback.

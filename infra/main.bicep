@@ -74,8 +74,8 @@ param enableDevHeaderAuth bool = false
   'servicebus'
   'durable'
 ])
-@description('Write dispatch mode for the API. Keep servicebus unless running an approved Durable smoke or migration gate.')
-param apiDispatchMode string = 'servicebus'
+@description('Write dispatch mode for the API. Durable is the default control plane; Service Bus remains the materialization/offload fallback.')
+param apiDispatchMode string = 'durable'
 
 @description('Durable Functions /writes/start endpoint used when apiDispatchMode=durable.')
 param durableStartUrl string = ''
@@ -83,6 +83,8 @@ param durableStartUrl string = ''
 @secure()
 @description('Function key for the Durable /writes/start endpoint. Stored as a Container Apps secret when provided.')
 param durableStartFunctionKey string = ''
+
+var durableStartFunctionKeyConfigured = !empty(durableStartFunctionKey)
 
 @description('Enable UI routes/assets when a frontend is deployed. Keep false until UI feature gate is ready.')
 param enableUiFeature bool = false
@@ -721,7 +723,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
           identity: appIdentity.id
         }
       ]
-      secrets: apiDispatchMode == 'durable' ? [
+      secrets: apiDispatchMode == 'durable' && durableStartFunctionKeyConfigured ? [
         {
           name: 'durable-start-function-key'
           value: durableStartFunctionKey
@@ -862,7 +864,7 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
               name: 'ENTRA_AUDIENCES'
               value: entraAudiences
             }
-          ], apiDispatchMode == 'durable' ? [
+          ], apiDispatchMode == 'durable' ? concat([
             {
               name: 'AZURE_MEMFOREST_DISPATCH_MODE'
               value: 'durable'
@@ -871,11 +873,12 @@ resource containerApp 'Microsoft.App/containerApps@2024-03-01' = {
               name: 'AZURE_MEMFOREST_DURABLE_START_URL'
               value: durableStartUrl
             }
+          ], durableStartFunctionKeyConfigured ? [
             {
               name: 'AZURE_MEMFOREST_DURABLE_START_TOKEN'
               secretRef: 'durable-start-function-key'
             }
-          ] : [])
+          ] : []) : [])
           resources: {
             cpu: json('0.5')
             memory: '1Gi'

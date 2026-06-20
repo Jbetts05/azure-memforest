@@ -142,7 +142,7 @@ def create_app(
 
 
 def _memory_command_service_from_env(environ: dict[str, str]):
-    mode = str(environ.get("AZURE_MEMFOREST_DISPATCH_MODE", "servicebus")).strip().lower()
+    mode = str(environ.get("AZURE_MEMFOREST_DISPATCH_MODE", "durable")).strip().lower()
     if mode == "durable":
         durable = durable_command_service_from_env(environ)
         if durable is not None:
