@@ -1,0 +1,33 @@
+{
+  "review_model": "claude-opus-4.8",
+  "status": "reviewed",
+  "headline": "The hard-cap source-aware retrieval isolation form failed and should not be kept active, but the attributable regression is narrower than the raw 5/10 total.",
+  "validated_conclusions": {
+    "hard_cap_isolation_failed": true,
+    "do_not_scale_this_form": true,
+    "revert_runtime_commit": true,
+    "operational_success_valid": true
+  },
+  "per_case_attribution": {
+    "gpt4_d6585ce8": {
+      "classification": "clean_mechanistic_regression",
+      "summary": "Selective without isolation presented 12 facts and was correct; hard-cap isolation presented 7 facts and was wrong. The failure is attributable to context starvation from shrinking below max_facts."
+    },
+    "195a1a1b": {
+      "classification": "likely_noise_or_order_sensitivity",
+      "summary": "Both selective and isolation had 8 retrieved facts and neither had lexical gold in top-k; the selective run happened to pass while isolation did not."
+    }
+  },
+  "interpretation_caveats": [
+    "The experiment conflated source-aware reordering with hard-capping assistant facts below max_facts.",
+    "The evidence disproves the hard-cap truncation form, not all source-aware ordering.",
+    "The regression magnitude is based on a single n=10 servicebus run; treat the direction as useful but not a precise stable effect.",
+    "The breadth signal remains the main root-cause evidence: 488 assistant turns extracted and only 36 skipped."
+  ],
+  "recommended_next_slice": [
+    "Revert the hard-cap runtime isolation commit.",
+    "Prioritize a genuinely stricter assistant extraction gate before more retrieval isolation.",
+    "If testing retrieval isolation again, use a soft-reorder/fill-to-max variant or assistant-facts-as-fallback-only so context is not starved.",
+    "Preserve the 488/36 breadth number as the before metric for the next extraction-gate slice."
+  ]
+}
