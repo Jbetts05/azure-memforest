@@ -1,0 +1,38 @@
+{
+  "review_model": "claude-opus-4.8",
+  "status": "reviewed",
+  "headline": "Selective assistant extraction is a mechanism win, not a readiness signal.",
+  "validated_conclusions": {
+    "mechanism_win": true,
+    "not_ready_to_scale": true,
+    "operational_success_valid": true,
+    "safe_idle_restoration_sufficient": true
+  },
+  "pre_rerun_review": {
+    "assistant_origin_slice_result": "3/6 selective versus 0/6 baseline",
+    "blocker_to_scaling": "Cross-type regression and retrieval displacement remain unmeasured because the slice is single-session-assistant only.",
+    "next_required_gate": "Run a mixed-type regression/noise slice before any heldout_50 scaling."
+  },
+  "miss_diagnosis_after_first_slice": {
+    "1de5cff2": "Gold-bearing Veja assistant turn was selected by the gate, but the gold evidence was not retrieved in top-k.",
+    "dc439ea3": "Gold-bearing Hoop Dance assistant turn was selected by the gate, but the gold evidence was not retrieved in top-k.",
+    "6ae235be": "Gold-bearing refining-process assistant turn was skipped by the gate because generic-advice suppression overrode strong concrete signals."
+  },
+  "gate_fix_review": {
+    "change": "Generic-advice suppression now applies only when there is no memory request and concrete_score < 2.",
+    "blockers_to_rerun": "none",
+    "expected_impact": "Fixes the 6ae235be-class skipped concrete assistant answer; does not address retrieval/top-k misses."
+  },
+  "final_rerun": {
+    "artifact": "case_results_quality-selective-assistant6b-9f190ee-20260619234000",
+    "quality": "4/6 primary-correct versus 0/6 baseline",
+    "operational": "54/54 durable instances completed, 0 failed, 0 DLQ, queue_after 0/0/0",
+    "breadth_caveat": "260/282 assistant turns were extractable after the loosening, so the cross-type displacement/noise risk is larger and must be measured before scaling."
+  },
+  "recommended_next_slice": [
+    "Do not run heldout_50 yet.",
+    "Run a mixed-type regression/noise slice with selective assistant extraction enabled.",
+    "Measure non-assistant answer regressions, retrieved-fact displacement, assistant extraction rate, residue, and latency.",
+    "Treat remaining assistant misses 1de5cff2 and dc439ea3 as retrieval/top-k problems unless store inspection proves extraction absence."
+  ]
+}

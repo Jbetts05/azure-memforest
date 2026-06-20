@@ -563,7 +563,7 @@ def _is_selective_assistant_memory_turn(turn: dict, prior_shaped_turns: list[dic
     non_comma_score = sum(1 for key, matched in signals.items() if key != "comma_list" and matched)
     concrete_score = non_comma_score + int(signals["comma_list"])
     has_memory_request = bool(_USER_MEMORY_REQUEST_RE.search(previous_user_text))
-    if _GENERIC_ADVICE_RE.search(text) and not has_memory_request:
+    if _GENERIC_ADVICE_RE.search(text) and not has_memory_request and concrete_score < 2:
         return False
     if concrete_score >= 2:
         return True

@@ -516,6 +516,36 @@ def test_phase2_harness_selective_extraction_keeps_inline_named_recommendation(m
     assert stats["assistant_turns_selectively_extractable"] == 1
 
 
+def test_phase2_harness_selective_extraction_keeps_concrete_process_list(monkeypatch) -> None:
+    harness = _load_harness(monkeypatch, PHASE2_SELECTIVE_ASSISTANT_EXTRACTION="true")
+
+    turns, stats = harness.turns_for_ingest(
+        {
+            "source_session_id": "session-1",
+            "turns": [
+                {"role": "user", "content_id": "session-1:1", "content": "What refining processes does CITGO use?", "metadata": {}},
+                {
+                    "role": "assistant",
+                    "content_id": "session-1:2",
+                    "content": (
+                        "CITGO operates refineries in Lake Charles, Lemont, and Corpus Christi.\n"
+                        "* Atmospheric distillation: first separation step.\n"
+                        "* Fluid catalytic cracking (FCC): breaks down heavier fractions.\n"
+                        "* Alkylation: creates high-octane gasoline components.\n"
+                        "* Hydrotreating: removes impurities."
+                    ),
+                    "metadata": {},
+                },
+            ],
+        },
+        case_id="case-1",
+    )
+
+    assert turns[1]["metadata"]["assistant_extraction_context"] is True
+    assert turns[1]["metadata"]["override_reason"] == "selective_assistant_extraction"
+    assert stats["assistant_turns_selectively_extractable"] == 1
+
+
 def test_phase2_turns_for_ingest_backfills_turn_timestamp_from_session_date(monkeypatch) -> None:
     harness = _load_harness(monkeypatch)
 
