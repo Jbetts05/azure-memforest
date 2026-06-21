@@ -1185,6 +1185,21 @@ async def test_materialization_handler_commits_snapshot_pointer_metadata() -> No
     assert metadata["projection_tree_scope_shadow"]["mode"] == "shadow_compare"
     assert metadata["projection_tree_scope_shadow"]["comparison_supported"] is False
     assert metadata["projection_tree_scope_shadow"]["reason"] == "full_projection_required"
+    assert set(metadata["materialization_stage_timings_ms"]) >= {
+        "hydrate",
+        "source_write",
+        "extract_build",
+        "manifest_pending",
+        "project",
+        "baseline",
+        "write_projection",
+        "total_before_commit",
+    }
+    assert metadata["projection_input_counts"]["stored_nodes"] == 2
+    assert metadata["projection_input_counts"]["recall_documents"] == 1
+    assert metadata["projection_input_counts"]["browse_embedding_records"] == 1
+    assert metadata["actual_projection_write_plan_counts"]["tree_node_membership"]["upsert"] == 2
+    assert metadata["actual_projection_write_plan_counts"]["recall_document"]["upsert"] == 1
 
 
 @pytest.mark.asyncio

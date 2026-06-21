@@ -189,15 +189,20 @@ class MemForestMaterializationHandler:
 
         stop_renewal = asyncio.Event()
         renewal_task = asyncio.create_task(self._renew_lease_until_stopped(lease, stop_renewal))
+        stage_timings_ms: dict[str, int] = {}
+        materialization_started = time.perf_counter()
         try:
             await self._update_job_stage(envelope, fencing_token=fencing_token, stage="hydrate", detail="Loading latest committed forest.", telemetry=telemetry)
+            hydrate_started = time.perf_counter()
             if await self._latest_committed_matches_job(envelope):
                 return
             latest = await _maybe_await(self._stores.manifest_store.latest_committed())
             await self._hydrate_core_from_manifest(latest)
+            stage_timings_ms["hydrate"] = _elapsed_ms(hydrate_started)
             generation = 1 if latest is None else int(latest.generation) + 1
             forest_version = _forest_version(generation=generation, job_id=envelope.job_id)
             turns = [turn.model_dump(mode="json") for turn in request.turns]
+            source_write_started = time.perf_counter()
             await _maybe_await(
                 self._stores.source_session_store.upsert_session(
                     envelope.session_id,
@@ -209,10 +214,12 @@ class MemForestMaterializationHandler:
                 )
             )
             await _maybe_await(self._stores.source_turn_store.upsert_turns(envelope.session_id, turns))
+            stage_timings_ms["source_write"] = _elapsed_ms(source_write_started)
 
             await self._update_job_stage(envelope, fencing_token=fencing_token, stage="extract_build", detail="Extracting facts, deduping, and rebuilding MemTrees.", telemetry=telemetry)
             try:
                 with collect_model_telemetry() as telemetry:
+                    extract_build_started = time.perf_counter()
                     snapshot = await self._run_ingest_session(
                         envelope,
                         fencing_token=fencing_token,
@@ -222,6 +229,7 @@ class MemForestMaterializationHandler:
                         telemetry=telemetry,
                         session_id=envelope.session_id,
                     )
+                    stage_timings_ms["extract_build"] = _elapsed_ms(extract_build_started)
             except asyncio.TimeoutError as exc:
                 raise TransientHandlerError(
                     f"ingest_session timed out after {self._config.ingest_timeout_seconds:.0f}s",
@@ -235,6 +243,7 @@ class MemForestMaterializationHandler:
                 await self._update_job_stage(envelope, fencing_token=fencing_token, stage="factless_noop", detail="No extractable facts found.", telemetry=telemetry)
                 return
             await self._update_job_stage(envelope, fencing_token=fencing_token, stage="manifest_pending", detail="Creating pending forest manifest.", telemetry=telemetry)
+            manifest_pending_started = time.perf_counter()
             manifest = await _maybe_await(
                 self._stores.manifest_store.create_pending(
                     forest_version=forest_version,
@@ -252,7 +261,9 @@ class MemForestMaterializationHandler:
                     },
                 )
             )
+            stage_timings_ms["manifest_pending"] = _elapsed_ms(manifest_pending_started)
             await self._update_job_stage(envelope, fencing_token=fencing_token, stage="project", detail="Projecting forest snapshot to durable stores.", telemetry=telemetry)
+            project_started = time.perf_counter()
             projection = project_forest_snapshot(
                 snapshot,
                 tenant_id=envelope.tenant_id,
@@ -261,8 +272,12 @@ class MemForestMaterializationHandler:
                 generation=generation,
                 embedding_model_version=self._config.embedding_model_version,
             )
+            stage_timings_ms["project"] = _elapsed_ms(project_started)
+            baseline_started = time.perf_counter()
             projection = await self._apply_committed_projection_baseline(latest, projection)
+            stage_timings_ms["baseline"] = _elapsed_ms(baseline_started)
             await self._update_job_stage(envelope, fencing_token=fencing_token, stage="write_projection", detail="Writing facts, trees, embeddings, recall documents, and snapshot.", telemetry=telemetry)
+            write_projection_started = time.perf_counter()
             projection_metadata = await self._write_projection(
                 envelope=envelope,
                 manifest_id=manifest.manifest_id,
@@ -271,11 +286,16 @@ class MemForestMaterializationHandler:
                 snapshot=snapshot,
                 projection=projection,
             )
+            stage_timings_ms["write_projection"] = _elapsed_ms(write_projection_started)
+            projection_metadata["materialization_stage_timings_ms"] = stage_timings_ms
+            projection_metadata["projection_input_counts"] = _projection_input_counts(projection, snapshot=snapshot)
             try:
                 await self._stores.lease_store.assert_current(lease)
             except LeaseConflict as exc:
                 raise TransientHandlerError("tenant/user write lease expired before manifest commit") from exc
             await self._update_job_stage(envelope, fencing_token=fencing_token, stage="commit", detail="Committing latest forest manifest.", telemetry=telemetry)
+            commit_started = time.perf_counter()
+            projection_metadata["materialization_stage_timings_ms"]["total_before_commit"] = _elapsed_ms(materialization_started)
             await _maybe_await(
                 self._stores.manifest_store.commit_manifest(
                     manifest.manifest_id,
@@ -638,6 +658,7 @@ class MemForestMaterializationHandler:
         )
         metadata: dict[str, Any] = dict(fingerprint_metadata)
         metadata["projection_tree_scope_writes"] = tree_scope_write_plan
+        metadata["actual_projection_write_plan_counts"] = _actual_projection_write_plan_counts(write_projection)
         if self._stores.snapshot_store is not None and self._should_write_archive_snapshot():
             snapshot_payload = await self._snapshot_payload(projection)
             snapshot_id = _snapshot_id(
@@ -1476,6 +1497,50 @@ def _projection_plan_counts(projection: MaterializationProjection) -> dict[str, 
         }
         for kind, plan in sorted(projection.projection_skip_plans.items())
     }
+
+
+def _projection_input_counts(projection: MaterializationProjection, *, snapshot: ForestMaterializationSnapshot) -> dict[str, int]:
+    return {
+        "facts": len(snapshot.facts),
+        "trees": len(snapshot.trees),
+        "node_embeddings": len(snapshot.node_embeddings),
+        "summary_cache_entries": len(snapshot.summary_cache),
+        "stored_nodes": len(projection.stored_nodes),
+        "fact_locations": len(projection.fact_locations),
+        "recall_documents": len(projection.recall_documents),
+        "browse_embedding_records": len(projection.browse_embedding_records),
+        "projected_tree_count": len({node.tree_id for node in projection.stored_nodes}),
+    }
+
+
+def _actual_projection_write_plan_counts(projection: MaterializationProjection) -> dict[str, dict[str, int]]:
+    plans = projection.projection_skip_plans
+    return {
+        "tree_node_membership": {
+            "upsert": len(plans.get("tree_node_membership", ProjectionSkipPlan((), (), ())).upsert),
+            "delete": len(plans.get("tree_node_membership", ProjectionSkipPlan((), (), ())).delete),
+            "unchanged_repair": len(plans.get("tree_node_membership", ProjectionSkipPlan((), (), ())).unchanged),
+        },
+        "fact_location": {
+            "upsert": len(plans.get("fact_location", ProjectionSkipPlan((), (), ())).upsert),
+            "delete": len(plans.get("fact_location", ProjectionSkipPlan((), (), ())).delete),
+            "unchanged_repair": len(plans.get("fact_location", ProjectionSkipPlan((), (), ())).unchanged),
+        },
+        "recall_document": {
+            "upsert": len(plans.get("recall_document", ProjectionSkipPlan((), (), ())).upsert),
+            "close": len(_recall_close_refs(projection)),
+        },
+        "browse_embedding": {
+            "upsert": len(plans.get("browse_embedding", ProjectionSkipPlan((), (), ())).upsert),
+        },
+        "summary_cache": {
+            "upsert": len(plans.get("summary_cache", ProjectionSkipPlan((), (), ())).upsert),
+        },
+    }
+
+
+def _elapsed_ms(started: float) -> int:
+    return max(0, int((time.perf_counter() - started) * 1000))
 
 
 def _tree_node_stable_content_hash(node: StoredTreeNode) -> str:
