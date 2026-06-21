@@ -194,6 +194,7 @@ def fixed_materialization_config_factory(
     exit_on_ingest_timeout: bool = False,
     snapshot_policy: str = "always",
     cloud_checkpoint_hydration_supported: bool = False,
+    enable_tree_scoped_projection_writes: bool = False,
 ) -> Callable[[WriteJobEnvelope], MaterializationHandlerConfig]:
     def build(envelope: WriteJobEnvelope) -> MaterializationHandlerConfig:
         return MaterializationHandlerConfig(
@@ -209,6 +210,7 @@ def fixed_materialization_config_factory(
             exit_on_ingest_timeout=exit_on_ingest_timeout,
             snapshot_policy=snapshot_policy,
             cloud_checkpoint_hydration_supported=cloud_checkpoint_hydration_supported,
+            enable_tree_scoped_projection_writes=enable_tree_scoped_projection_writes,
         )
 
     return build
@@ -322,6 +324,7 @@ def build_scoped_materialization_handler_from_env(
             exit_on_ingest_timeout=_env_flag(values.get("AZURE_MEMFOREST_EXIT_ON_INGEST_TIMEOUT", "")),
             snapshot_policy=values.get("AZURE_MEMFOREST_SNAPSHOT_POLICY", "always"),
             cloud_checkpoint_hydration_supported=cloud_checkpoint_hydration_supported,
+            enable_tree_scoped_projection_writes=_env_flag(values.get("AZURE_MEMFOREST_ENABLE_TREE_SCOPED_PROJECTION_WRITES", "")),
         ),
     )
     return MaterializationRuntime(

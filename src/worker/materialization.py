@@ -118,6 +118,7 @@ class MaterializationHandlerConfig:
     exit_on_ingest_timeout: bool = False
     snapshot_policy: str = SNAPSHOT_POLICY_ALWAYS
     cloud_checkpoint_hydration_supported: bool = False
+    enable_tree_scoped_projection_writes: bool = False
 
     def __post_init__(self) -> None:
         policy = _normalize_snapshot_policy(self.snapshot_policy)
@@ -613,13 +614,18 @@ class MemForestMaterializationHandler:
         snapshot: ForestMaterializationSnapshot,
         projection: MaterializationProjection,
     ) -> dict[str, Any]:
+        write_projection, tree_scope_write_plan = _projection_for_store_writes(
+            projection,
+            enabled=self._config.enable_tree_scoped_projection_writes,
+            embedding_model_version=self._config.embedding_model_version,
+        )
         await asyncio.gather(
             self._call_store_method(self._stores.fact_store.upsert_facts, snapshot.facts),
-            self._write_tree_nodes(forest_version, projection),
-            self._write_fact_locations(forest_version, projection),
-            self._write_browse_embeddings(forest_version, projection),
+            self._write_tree_nodes(forest_version, write_projection),
+            self._write_fact_locations(forest_version, write_projection),
+            self._write_browse_embeddings(forest_version, write_projection),
             self._write_summary_cache_entries(projection),
-            self._write_recall_documents(forest_version, projection),
+            self._write_recall_documents(forest_version, write_projection),
         )
         fingerprint_metadata, fingerprint_payload = _materialization_fingerprint_metadata(
             projection=projection,
@@ -631,6 +637,7 @@ class MemForestMaterializationHandler:
             prompt_config_hash=self._config.prompt_config_hash,
         )
         metadata: dict[str, Any] = dict(fingerprint_metadata)
+        metadata["projection_tree_scope_writes"] = tree_scope_write_plan
         if self._stores.snapshot_store is not None and self._should_write_archive_snapshot():
             snapshot_payload = await self._snapshot_payload(projection)
             snapshot_id = _snapshot_id(
@@ -1885,6 +1892,135 @@ def _tree_scoped_projection_refs(projection: MaterializationProjection, tree_ids
         kind: filter_projection_refs_to_tree_scope(records, tree_ids=tree_ids)
         for kind, records in projected.items()
     }
+
+
+def _projection_for_store_writes(
+    projection: MaterializationProjection,
+    *,
+    enabled: bool,
+    embedding_model_version: str,
+) -> tuple[MaterializationProjection, dict[str, Any]]:
+    if not enabled:
+        return projection, {"schema_version": 1, "enabled": False, "applied": False, "reason": "disabled"}
+    if not projection.projection_skip_plans:
+        return projection, {"schema_version": 1, "enabled": True, "applied": False, "reason": "projection_skip_plans_missing"}
+
+    shadow = _projection_tree_scope_shadow_summary(projection, embedding_model_version=embedding_model_version)
+    if not shadow.get("comparison_supported"):
+        return projection, {
+            "schema_version": 1,
+            "enabled": True,
+            "applied": False,
+            "reason": str(shadow.get("reason") or "shadow_not_supported"),
+        }
+    if shadow.get("divergent"):
+        return projection, {"schema_version": 1, "enabled": True, "applied": False, "reason": "shadow_divergent"}
+
+    all_tree_ids = {
+        str(getattr(record, "tree_id", "") or "")
+        for record in [*projection.stored_nodes, *projection.recall_documents, *projection.browse_embedding_records]
+        if str(getattr(record, "tree_id", "") or "")
+    }
+    scope = plan_projection_tree_scope(
+        all_tree_ids=all_tree_ids,
+        changed_tree_ids=projection.changed_tree_ids,
+        deleted_tree_ids=projection.deleted_tree_ids,
+    )
+    scoped_tree_ids = set(scope.projected_tree_ids) | set(scope.deleted_tree_ids)
+    scoped_projected = _tree_scoped_projection_refs(
+        projection,
+        scoped_tree_ids,
+        embedding_model_version=embedding_model_version,
+    )
+    scoped_plans: dict[str, ProjectionSkipPlan] = {}
+    for kind in ("tree_node_membership", "fact_location", "recall_document", "browse_embedding"):
+        scoped_records = scoped_projected.get(kind, ())
+        retained = _retained_records_for_scoped_writes(
+            projection.projection_skip_plans.get(kind),
+            scoped_records,
+            scoped_tree_ids=scoped_tree_ids,
+        )
+        scoped_plans[kind] = plan_projection_skip(scoped_records, retained)
+    divergence = _scoped_write_divergence(projection.projection_skip_plans, scoped_plans)
+    if divergence:
+        return projection, {
+            "schema_version": 1,
+            "enabled": True,
+            "applied": False,
+            "reason": "scoped_write_divergent",
+            "by_kind": divergence,
+        }
+    if "summary_cache" in projection.projection_skip_plans:
+        scoped_plans["summary_cache"] = projection.projection_skip_plans["summary_cache"]
+
+    return (
+        MaterializationProjection(
+            stored_nodes=projection.stored_nodes,
+            fact_locations=projection.fact_locations,
+            recall_documents=projection.recall_documents,
+            browse_embeddings=projection.browse_embeddings,
+            browse_embedding_records=projection.browse_embedding_records,
+            summary_cache_entries=projection.summary_cache_entries,
+            snapshot_payload=projection.snapshot_payload,
+            changed_tree_ids=projection.changed_tree_ids,
+            deleted_tree_ids=projection.deleted_tree_ids,
+            baseline_forest_version=projection.baseline_forest_version,
+            projection_skip_plans=scoped_plans,
+        ),
+        {
+            "schema_version": 1,
+            "enabled": True,
+            "applied": True,
+            "reason": "shadow_clean",
+            "projected_tree_count": len(scope.projected_tree_ids),
+            "omitted_tree_count": len(scope.omitted_tree_ids),
+            "deleted_tree_count": len(scope.deleted_tree_ids),
+            "unknown_changed_tree_count": len(scope.unknown_changed_tree_ids),
+        },
+    )
+
+
+def _scoped_write_divergence(
+    full_plans: Mapping[str, ProjectionSkipPlan],
+    scoped_plans: Mapping[str, ProjectionSkipPlan],
+) -> dict[str, dict[str, int | bool]]:
+    divergent: dict[str, dict[str, int | bool]] = {}
+    for kind in ("tree_node_membership", "fact_location", "recall_document", "browse_embedding"):
+        counts = _skip_plan_divergence_counts(
+            full_plans.get(kind, ProjectionSkipPlan((), (), ())),
+            scoped_plans.get(kind, ProjectionSkipPlan((), (), ())),
+        )
+        mutating_divergence = any(
+            counts[key] > 0
+            for key in (
+                "missing_upsert",
+                "extra_upsert",
+                "missing_delete",
+                "extra_delete",
+                "missing_superseded",
+                "extra_superseded",
+            )
+        )
+        if mutating_divergence:
+            divergent[kind] = counts
+    return divergent
+
+
+def _retained_records_for_scoped_writes(
+    plan: ProjectionSkipPlan | None,
+    scoped_projected: tuple[ProjectionRecordRef, ...],
+    *,
+    scoped_tree_ids: set[str],
+) -> tuple[ProjectionRecordRef, ...]:
+    if plan is None:
+        return ()
+    scoped_keys = {record.key for record in scoped_projected}
+    return tuple(
+        record
+        for record in [*plan.unchanged, *plan.delete, *plan.superseded]
+        if record.key in scoped_keys
+        or (record.key in plan.delete_keys and str(record.metadata.get("tree_id") or "") in scoped_tree_ids)
+    )
 
 
 def _retained_records_for_shadow(plan: ProjectionSkipPlan | None, scoped_projected: tuple[ProjectionRecordRef, ...]) -> tuple[ProjectionRecordRef, ...]:

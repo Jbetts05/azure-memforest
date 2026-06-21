@@ -678,6 +678,19 @@ def _two_tree_incremental_snapshot():
     )
 
 
+def _two_tree_incremental_snapshot_with_deleted_tree():
+    snapshot = _two_tree_incremental_snapshot()
+    return ForestMaterializationSnapshot(
+        facts=snapshot.facts,
+        trees=snapshot.trees,
+        node_embeddings=snapshot.node_embeddings,
+        summary_cache=snapshot.summary_cache,
+        changed_tree_ids=snapshot.changed_tree_ids,
+        deleted_tree_ids=frozenset({"entity:old"}),
+        baseline_forest_version=snapshot.baseline_forest_version,
+    )
+
+
 def _envelope(job_type="ingest_session"):
     return build_write_job_envelope(
         ActorContext(actor_id="user-1", tenant=TenantContext("tenant-1")),
@@ -1354,6 +1367,204 @@ async def test_materialization_handler_uses_authoritative_committed_baseline_for
     assert "recall" in calls
     assert "browse_embeddings" not in calls
     assert "summary_cache" not in calls
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_applies_tree_scoped_writes_when_shadow_is_clean() -> None:
+    calls = []
+    manifest_store = FakeManifestStore()
+    manifest_store.latest = ForestManifest(
+        manifest_id="manifest-v1",
+        tenant_id="tenant-1",
+        user_id="user-1",
+        forest_version="v1",
+        generation=1,
+        status="committed",
+        created_at_unix=1.0,
+        metadata={"job_id": "previous", "job_type": "ingest_session", "embedding_model_version": "embed-v1"},
+    )
+    handler = _handler(
+        manifest_store=manifest_store,
+        calls=calls,
+        core=FakeIngestCore(_two_tree_incremental_snapshot()),
+        baseline_provider=MatchingProjectionBaselineProvider(),
+        config=MaterializationHandlerConfig(
+            owner_id="worker-1",
+            embedding_model_version="embed-v1",
+            code_version="test-sha",
+            prompt_config_hash="prompt-hash",
+            lease_renewal_seconds=9999,
+            enable_tree_scoped_projection_writes=True,
+        ),
+    )
+
+    await handler.handle(_envelope(), {"fencing_token": 1})
+
+    metadata = manifest_store.latest.metadata
+    assert metadata["projection_tree_scope_writes"]["enabled"] is True
+    assert metadata["projection_tree_scope_writes"]["applied"] is True
+    assert metadata["projection_tree_scope_writes"]["reason"] == "shadow_clean"
+    tree_write = next(item for item in handler._stores.tree_node_store.items if isinstance(item, dict))
+    assert {tree_id for tree_id, _node_id in tree_write["unchanged_keys"]} == {"entity:alice"}
+    assert len(tree_write["unchanged_keys"]) == 2
+    location_write = next(item for item in handler._stores.fact_location_index.items if isinstance(item, dict))
+    assert {key.split("/", 2)[1] for key in location_write["unchanged_keys"]} == {"entity:alice"}
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_tree_scoped_writes_fall_back_on_shadow_divergence() -> None:
+    calls = []
+    manifest_store = FakeManifestStore()
+    manifest_store.latest = ForestManifest(
+        manifest_id="manifest-v1",
+        tenant_id="tenant-1",
+        user_id="user-1",
+        forest_version="v1",
+        generation=1,
+        status="committed",
+        created_at_unix=1.0,
+        metadata={"job_id": "previous", "job_type": "ingest_session", "embedding_model_version": "embed-v1"},
+    )
+    handler = _handler(
+        manifest_store=manifest_store,
+        calls=calls,
+        core=FakeIngestCore(_two_tree_incremental_snapshot()),
+        baseline_provider=lambda **kwargs: CommittedProjectionBaseline(scope=kwargs["scope"], records={}),
+        config=MaterializationHandlerConfig(
+            owner_id="worker-1",
+            embedding_model_version="embed-v1",
+            code_version="test-sha",
+            prompt_config_hash="prompt-hash",
+            lease_renewal_seconds=9999,
+            enable_tree_scoped_projection_writes=True,
+        ),
+    )
+
+    await handler.handle(_envelope(), {"fencing_token": 1})
+
+    metadata = manifest_store.latest.metadata
+    assert metadata["projection_tree_scope_writes"]["enabled"] is True
+    assert metadata["projection_tree_scope_writes"]["applied"] is False
+    assert metadata["projection_tree_scope_writes"]["reason"] == "shadow_divergent"
+    tree_write = next(item for item in handler._stores.tree_node_store.items if isinstance(item, dict))
+    assert len(tree_write["upsert_nodes"]) == 4
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_tree_scoped_writes_preserve_scoped_deletes() -> None:
+    calls = []
+    manifest_store = FakeManifestStore()
+    manifest_store.latest = ForestManifest(
+        manifest_id="manifest-v1",
+        tenant_id="tenant-1",
+        user_id="user-1",
+        forest_version="v1",
+        generation=1,
+        status="committed",
+        created_at_unix=1.0,
+        metadata={"job_id": "previous", "job_type": "ingest_session", "embedding_model_version": "embed-v1"},
+    )
+    baseline_provider = MatchingProjectionBaselineProvider()
+    original_build = baseline_provider.__call__
+
+    def _with_scoped_deletes(**kwargs):
+        baseline = original_build(scope=kwargs["scope"], projection=kwargs["projection"])
+        records = baseline.as_retained_committed_records()
+        records["tree_node_membership"] = (
+            *records["tree_node_membership"],
+            ProjectionRecordRef("tree_node_membership", "entity:alice/removed", content_hash="removed-node", metadata={"tree_id": "entity:alice", "node_id": "removed"}),
+            ProjectionRecordRef("tree_node_membership", "entity:old/root", content_hash="old-node", metadata={"tree_id": "entity:old", "node_id": "root"}),
+        )
+        records["fact_location"] = (
+            *records["fact_location"],
+            ProjectionRecordRef("fact_location", "old-fact/entity:alice/removed/entity/L0", content_hash="removed-location", metadata={"tree_id": "entity:alice", "node_id": "removed", "fact_id": "old-fact"}),
+            ProjectionRecordRef("fact_location", "old-fact/entity:old/root/entity/L0", content_hash="old-location", metadata={"tree_id": "entity:old", "node_id": "root", "fact_id": "old-fact"}),
+        )
+        records["recall_document"] = (
+            *records["recall_document"],
+            ProjectionRecordRef("recall_document", "entity:alice/removed", content_hash="removed-recall", metadata={"tree_id": "entity:alice", "node_id": "removed"}),
+            ProjectionRecordRef("recall_document", "entity:old/root", content_hash="old-recall", metadata={"tree_id": "entity:old", "node_id": "root"}),
+        )
+        return CommittedProjectionBaseline(scope=baseline.scope, records=records)
+
+    handler = _handler(
+        manifest_store=manifest_store,
+        calls=calls,
+        core=FakeIngestCore(_two_tree_incremental_snapshot_with_deleted_tree()),
+        baseline_provider=_with_scoped_deletes,
+        config=MaterializationHandlerConfig(
+            owner_id="worker-1",
+            embedding_model_version="embed-v1",
+            code_version="test-sha",
+            prompt_config_hash="prompt-hash",
+            lease_renewal_seconds=9999,
+            enable_tree_scoped_projection_writes=True,
+        ),
+    )
+
+    await handler.handle(_envelope(), {"fencing_token": 1})
+
+    metadata = manifest_store.latest.metadata
+    assert metadata["projection_tree_scope_writes"]["applied"] is True
+    tree_write = next(item for item in handler._stores.tree_node_store.items if isinstance(item, dict))
+    assert ("entity:alice", "removed") in tree_write["delete_keys"]
+    assert ("entity:old", "root") in tree_write["delete_keys"]
+    location_write = next(item for item in handler._stores.fact_location_index.items if isinstance(item, dict))
+    assert "old-fact/entity:alice/removed/entity/L0" in location_write["delete_keys"]
+    assert "old-fact/entity:old/root/entity/L0" in location_write["delete_keys"]
+    recall_write = next(item for item in handler._stores.recall_index.items if isinstance(item, dict))
+    assert {ref.logical_id for ref in recall_write["close_refs"]} >= {"entity:alice/removed", "entity:old/root"}
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_tree_scoped_writes_fall_back_on_out_of_scope_delete() -> None:
+    calls = []
+    manifest_store = FakeManifestStore()
+    manifest_store.latest = ForestManifest(
+        manifest_id="manifest-v1",
+        tenant_id="tenant-1",
+        user_id="user-1",
+        forest_version="v1",
+        generation=1,
+        status="committed",
+        created_at_unix=1.0,
+        metadata={"job_id": "previous", "job_type": "ingest_session", "embedding_model_version": "embed-v1"},
+    )
+    baseline_provider = MatchingProjectionBaselineProvider()
+    original_build = baseline_provider.__call__
+
+    def _with_out_of_scope_delete(**kwargs):
+        baseline = original_build(scope=kwargs["scope"], projection=kwargs["projection"])
+        records = baseline.as_retained_committed_records()
+        records["tree_node_membership"] = (
+            *records["tree_node_membership"],
+            ProjectionRecordRef("tree_node_membership", "entity:omitted/removed", content_hash="removed", metadata={"tree_id": "entity:omitted", "node_id": "removed"}),
+        )
+        return CommittedProjectionBaseline(scope=baseline.scope, records=records)
+
+    handler = _handler(
+        manifest_store=manifest_store,
+        calls=calls,
+        core=FakeIngestCore(_two_tree_incremental_snapshot()),
+        baseline_provider=_with_out_of_scope_delete,
+        config=MaterializationHandlerConfig(
+            owner_id="worker-1",
+            embedding_model_version="embed-v1",
+            code_version="test-sha",
+            prompt_config_hash="prompt-hash",
+            lease_renewal_seconds=9999,
+            enable_tree_scoped_projection_writes=True,
+        ),
+    )
+
+    await handler.handle(_envelope(), {"fencing_token": 1})
+
+    metadata = manifest_store.latest.metadata
+    assert metadata["projection_tree_scope_writes"]["applied"] is False
+    assert metadata["projection_tree_scope_writes"]["reason"] == "scoped_write_divergent"
+    assert metadata["projection_tree_scope_writes"]["by_kind"]["tree_node_membership"]["missing_delete"] == 1
+    tree_write = next(item for item in handler._stores.tree_node_store.items if isinstance(item, dict))
+    assert ("entity:omitted", "removed") in tree_write["delete_keys"]
 
 
 @pytest.mark.asyncio
