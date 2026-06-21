@@ -1404,6 +1404,12 @@ async def test_materialization_handler_applies_tree_scoped_writes_when_shadow_is
     assert metadata["projection_tree_scope_writes"]["enabled"] is True
     assert metadata["projection_tree_scope_writes"]["applied"] is True
     assert metadata["projection_tree_scope_writes"]["reason"] == "shadow_clean"
+    assert metadata["projection_tree_scope_writes"]["scoped_projection_plan_counts"]["tree_node_membership"] == {
+        "unchanged": 2,
+        "upsert": 0,
+        "delete": 0,
+        "superseded": 0,
+    }
     tree_write = next(item for item in handler._stores.tree_node_store.items if isinstance(item, dict))
     assert {tree_id for tree_id, _node_id in tree_write["unchanged_keys"]} == {"entity:alice"}
     assert len(tree_write["unchanged_keys"]) == 2

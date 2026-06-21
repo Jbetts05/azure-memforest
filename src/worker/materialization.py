@@ -1972,6 +1972,7 @@ def _projection_for_store_writes(
             "enabled": True,
             "applied": True,
             "reason": "shadow_clean",
+            "scoped_projection_plan_counts": _projection_skip_plan_counts(scoped_plans),
             "projected_tree_count": len(scope.projected_tree_ids),
             "omitted_tree_count": len(scope.omitted_tree_ids),
             "deleted_tree_count": len(scope.deleted_tree_ids),
@@ -2004,6 +2005,18 @@ def _scoped_write_divergence(
         if mutating_divergence:
             divergent[kind] = counts
     return divergent
+
+
+def _projection_skip_plan_counts(plans: Mapping[str, ProjectionSkipPlan]) -> dict[str, dict[str, int]]:
+    return {
+        kind: {
+            "unchanged": len(plan.unchanged),
+            "upsert": len(plan.upsert),
+            "delete": len(plan.delete),
+            "superseded": len(plan.superseded),
+        }
+        for kind, plan in sorted(plans.items())
+    }
 
 
 def _retained_records_for_scoped_writes(
