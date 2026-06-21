@@ -1259,9 +1259,11 @@ resource durableFunctionApp 'Microsoft.Web/sites@2024-04-01' = if (deployDurable
     serverFarmId: durableHostingPlan == 'flex' ? durableFlexFunctionPlan.id : durablePremiumFunctionPlan.id
     httpsOnly: true
     siteConfig: durableHostingPlan == 'flex' ? {
+      webJobsEnabled: true
       appSettings: durableFlexFunctionAppSettings
     } : {
       linuxFxVersion: 'Python|3.11'
+      webJobsEnabled: true
       appSettings: durablePremiumFunctionAppSettings
     }
   }, durableHostingPlan == 'flex' ? {
