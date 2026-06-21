@@ -199,6 +199,7 @@ class MemForestMaterializationHandler:
             latest = await _maybe_await(self._stores.manifest_store.latest_committed())
             await self._hydrate_core_from_manifest(latest)
             stage_timings_ms["hydrate"] = _elapsed_ms(hydrate_started)
+            hydration_summary = _hydration_summary(self._ingest_core)
             generation = 1 if latest is None else int(latest.generation) + 1
             forest_version = _forest_version(generation=generation, job_id=envelope.job_id)
             turns = [turn.model_dump(mode="json") for turn in request.turns]
@@ -289,6 +290,7 @@ class MemForestMaterializationHandler:
             stage_timings_ms["write_projection"] = _elapsed_ms(write_projection_started)
             projection_metadata["materialization_stage_timings_ms"] = stage_timings_ms
             projection_metadata["projection_input_counts"] = _projection_input_counts(projection, snapshot=snapshot)
+            projection_metadata["hydration_summary"] = hydration_summary
             try:
                 await self._stores.lease_store.assert_current(lease)
             except LeaseConflict as exc:
@@ -1510,6 +1512,23 @@ def _projection_input_counts(projection: MaterializationProjection, *, snapshot:
         "recall_documents": len(projection.recall_documents),
         "browse_embedding_records": len(projection.browse_embedding_records),
         "projected_tree_count": len({node.tree_id for node in projection.stored_nodes}),
+    }
+
+
+def _hydration_summary(ingest_core: Any) -> dict[str, Any]:
+    result = getattr(ingest_core, "last_hydration_result", None)
+    if result is None:
+        return {"available": False}
+    return {
+        "available": True,
+        "tree_count": int(getattr(result, "tree_count", 0) or 0),
+        "fact_count": int(getattr(result, "fact_count", 0) or 0),
+        "summary_cache_count": int(getattr(result, "summary_cache_count", 0) or 0),
+        "node_embedding_count": int(getattr(result, "node_embedding_count", 0) or 0),
+        "missing_fact_count": len(getattr(result, "missing_fact_ids", ()) or ()),
+        "missing_summary_cache_count": len(getattr(result, "missing_summary_cache_keys", ()) or ()),
+        "missing_node_embedding_count": len(getattr(result, "missing_node_embedding_ids", ()) or ()),
+        "used_snapshot_fallback": bool(getattr(result, "used_snapshot_fallback", False)),
     }
 
 

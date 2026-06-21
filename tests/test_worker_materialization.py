@@ -520,6 +520,7 @@ class FakeIngestCore:
         self.ingested_turns = None
         self.ingest_delay = ingest_delay
         self.model_calls = model_calls
+        self.last_hydration_result = None
 
     def ingest_session(self, *, session_id, turns, metadata):
         self.called = True
@@ -544,6 +545,21 @@ class FakeIngestCore:
 
     def hydrate_from_manifest(self, manifest):
         self.hydrated_from = manifest
+        if manifest is not None:
+            self.last_hydration_result = type(
+                "HydrationResult",
+                (),
+                {
+                    "tree_count": 2,
+                    "fact_count": 1,
+                    "summary_cache_count": 3,
+                    "node_embedding_count": 4,
+                    "missing_fact_ids": (),
+                    "missing_summary_cache_keys": ("missing-summary",),
+                    "missing_node_embedding_ids": (),
+                    "used_snapshot_fallback": False,
+                },
+            )()
 
 
 class FakeDeletionLog:
@@ -1200,6 +1216,41 @@ async def test_materialization_handler_commits_snapshot_pointer_metadata() -> No
     assert metadata["projection_input_counts"]["browse_embedding_records"] == 1
     assert metadata["actual_projection_write_plan_counts"]["tree_node_membership"]["upsert"] == 2
     assert metadata["actual_projection_write_plan_counts"]["recall_document"]["upsert"] == 1
+    assert metadata["hydration_summary"] == {"available": False}
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_records_hydration_summary_when_manifest_exists() -> None:
+    manifest_store = FakeManifestStore()
+    manifest_store.latest = ForestManifest(
+        manifest_id="manifest-v1",
+        tenant_id="tenant-1",
+        user_id="user-1",
+        forest_version="v1",
+        generation=1,
+        status="committed",
+        created_at_unix=1.0,
+        metadata={"job_id": "previous", "job_type": "ingest_session", "embedding_model_version": "embed-v1"},
+    )
+    handler = _handler(
+        manifest_store=manifest_store,
+        core=FakeIngestCore(_unchanged_incremental_snapshot()),
+        baseline_provider=MatchingProjectionBaselineProvider(),
+    )
+
+    await handler.handle(_envelope(), {"fencing_token": 1})
+
+    assert manifest_store.latest.metadata["hydration_summary"] == {
+        "available": True,
+        "tree_count": 2,
+        "fact_count": 1,
+        "summary_cache_count": 3,
+        "node_embedding_count": 4,
+        "missing_fact_count": 0,
+        "missing_summary_cache_count": 1,
+        "missing_node_embedding_count": 0,
+        "used_snapshot_fallback": False,
+    }
 
 
 @pytest.mark.asyncio
