@@ -728,6 +728,7 @@ class MemForestMaterializationHandler:
             scope,
             tree_nodes_container=_container_from_store(baseline_tree_store),
             fact_locations_container=_container_from_store(baseline_fact_location_store),
+            recall_search_client=_baseline_recall_search_client(self._stores.recall_index),
             browse_embeddings_container=_container_from_store(baseline_browse_store),
         )
         summary_entries = await self._read_committed_summary_cache_entries(projection)
@@ -1105,10 +1106,23 @@ def _build_projection_skip_plans(
         "summary_cache": _summary_cache_projection_refs(projection.summary_cache_entries),
     }
     retained = _retained_committed_projection_refs(projection, projected, committed_baseline=committed_baseline)
-    return {
-        kind: plan_projection_skip(records, retained.get(kind, ()))
-        for kind, records in projected.items()
+    tree_node_plan = plan_projection_skip(projected["tree_node_membership"], retained.get("tree_node_membership", ()))
+    projected = _reuse_committed_embedding_refs_for_unchanged_nodes(
+        projected,
+        retained,
+        tree_node_plan=tree_node_plan,
+    )
+    plans = {
+        "tree_node_membership": tree_node_plan,
     }
+    plans.update(
+        {
+            kind: plan_projection_skip(records, retained.get(kind, ()))
+            for kind, records in projected.items()
+            if kind != "tree_node_membership"
+        }
+    )
+    return plans
 
 
 def _with_projection_skip_plans(
@@ -1176,6 +1190,43 @@ def _retained_committed_projection_refs(
             if record.key in projected_keys
         )
     return retained
+
+
+def _reuse_committed_embedding_refs_for_unchanged_nodes(
+    projected: Mapping[str, tuple[ProjectionRecordRef, ...]],
+    retained: Mapping[str, tuple[ProjectionRecordRef, ...]],
+    *,
+    tree_node_plan: ProjectionSkipPlan,
+) -> dict[str, tuple[ProjectionRecordRef, ...]]:
+    unchanged_nodes = {
+        (str(record.metadata.get("tree_id") or ""), str(record.metadata.get("node_id") or ""))
+        for record in tree_node_plan.unchanged
+        if record.metadata.get("tree_id") and record.metadata.get("node_id")
+    }
+    if not unchanged_nodes:
+        return dict(projected)
+
+    adjusted = dict(projected)
+    for kind in ("recall_document", "browse_embedding"):
+        committed_by_key = {record.key: record for record in retained.get(kind, ())}
+        records: list[ProjectionRecordRef] = []
+        for record in adjusted.get(kind, ()):
+            node_key = (str(record.metadata.get("tree_id") or ""), str(record.metadata.get("node_id") or ""))
+            committed = committed_by_key.get(record.key)
+            if node_key in unchanged_nodes and committed is not None:
+                records.append(
+                    ProjectionRecordRef(
+                        record.record_kind,
+                        record.logical_id,
+                        content_hash=committed.content_hash,
+                        content_id=committed.content_id,
+                        metadata=record.metadata,
+                    )
+                )
+            else:
+                records.append(record)
+        adjusted[kind] = tuple(records)
+    return adjusted
 
 
 def _tree_node_projection_refs(nodes: list[StoredTreeNode]) -> tuple[ProjectionRecordRef, ...]:
