@@ -102,7 +102,15 @@ class CloudStateHydratingUserForestCore:
         self.cloud_state_read_attempts = max(1, int(cloud_state_read_attempts))
         self.last_hydration_result: CloudHydrationApplyResult | None = None
 
-    async def hydrate_from_manifest(self, manifest: Any) -> None:
+    async def hydrate_from_manifest(self, manifest: Any, *, tree_ids: list[str] | tuple[str, ...] | set[str] | None = None) -> None:
+        """Hydrate local state from a committed manifest.
+
+        ``tree_ids`` filters which cloud trees are loaded, but this method still
+        resets the local ``UserForest`` before applying state. Passing a subset
+        therefore replaces the resident forest with that subset; it is not an
+        additive merge operation.
+        """
+
         if not self.enable_cloud_state_hydration:
             self.last_hydration_result = self._snapshot_fallback(manifest)
             return
@@ -112,7 +120,11 @@ class CloudStateHydratingUserForestCore:
             browse_embedding_store = _store_for_manifest_version(self.browse_embedding_store, self.browse_embedding_store_factory, forest_version)
             if tree_store is None:
                 raise CloudStateHydrationIncomplete("tree_store is required for cloud state hydration")
-            state = await self._load_cloud_state_with_retry(tree_store=tree_store, browse_embedding_store=browse_embedding_store)
+            state = await self._load_cloud_state_with_retry(
+                tree_store=tree_store,
+                browse_embedding_store=browse_embedding_store,
+                tree_ids=tree_ids,
+            )
             if _cloud_state_missing_prerequisites(state):
                 raise CloudStateHydrationIncomplete("cloud state hydration is incomplete")
             self.last_hydration_result = apply_cloud_state_to_user_forest(self.user_forest, state)
@@ -138,7 +150,13 @@ class CloudStateHydratingUserForestCore:
 
         return build_user_forest_archive(self.user_forest)
 
-    async def _load_cloud_state_with_retry(self, *, tree_store: Any, browse_embedding_store: Any | None) -> CloudUserForestState:
+    async def _load_cloud_state_with_retry(
+        self,
+        *,
+        tree_store: Any,
+        browse_embedding_store: Any | None,
+        tree_ids: list[str] | tuple[str, ...] | set[str] | None = None,
+    ) -> CloudUserForestState:
         last_error: Exception | None = None
         for _attempt in range(self.cloud_state_read_attempts):
             try:
@@ -147,6 +165,7 @@ class CloudStateHydratingUserForestCore:
                     fact_store=self.fact_store,
                     summary_cache=self.summary_cache,
                     browse_embedding_store=browse_embedding_store,
+                    tree_ids=tree_ids,
                 )
             except Exception as exc:
                 last_error = exc

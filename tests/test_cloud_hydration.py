@@ -1087,6 +1087,90 @@ async def test_cloud_state_core_hydrates_complete_cloud_state_without_snapshot(t
 
 
 @pytest.mark.asyncio
+async def test_cloud_state_core_can_hydrate_explicit_tree_subset(tmp_path) -> None:
+    dim = 4
+    target = _user_forest(tmp_path / "target-root", dim)
+    tree_store = FakeTreeStore(
+        {
+            "tree-1": [
+                _node("root", child_ids=("leaf",), tree_id="tree-1"),
+                _node("leaf", parent_id="root", level="L0", child_ids=("fact_1",), tree_id="tree-1"),
+            ],
+            "tree-2": [
+                _node("root-2", child_ids=("leaf-2",), tree_id="tree-2"),
+                _node("leaf-2", parent_id="root-2", level="L0", child_ids=("fact_2",), tree_id="tree-2"),
+            ],
+        }
+    )
+    core = CloudStateHydratingUserForestCore(
+        user_forest=target,
+        tree_store=tree_store,
+        fact_store=FakeFactStore({"fact_1": _fact("fact_1", dim), "fact_2": _fact("fact_2", dim)}),
+        browse_embedding_store=FakeBrowseEmbeddingStore({"root-2": _embedding(dim)}),
+        snapshot_store=None,
+        enable_cloud_state_hydration=True,
+    )
+
+    await core.hydrate_from_manifest(
+        FakeManifest({"forest_version": "v7", "embedding_model_version": "embed-v1"}),
+        tree_ids=["tree-2"],
+    )
+
+    assert core.last_hydration_result is not None
+    assert core.last_hydration_result.tree_count == 1
+    assert set(target._tree_builder.trees) == {"tree-2"}
+    assert target._fact_manager.get_fact("fact_1") is None
+    assert target._fact_manager.get_fact("fact_2") is not None
+    assert tree_store.list_tree_ids_calls == 0
+    assert tree_store.requested_tree_ids == ["tree-2"]
+
+
+@pytest.mark.asyncio
+async def test_cloud_state_core_subset_hydration_replaces_resident_state(tmp_path) -> None:
+    dim = 4
+    target = _user_forest(tmp_path / "target-root", dim)
+    initial_state = await load_cloud_user_forest_state(
+        tree_store=FakeTreeStore(
+            {
+                "tree-1": [
+                    _node("root", child_ids=("leaf",), tree_id="tree-1"),
+                    _node("leaf", parent_id="root", level="L0", child_ids=("fact_1",), tree_id="tree-1"),
+                ]
+            }
+        ),
+        fact_store=FakeFactStore({"fact_1": _fact("fact_1", dim)}),
+        browse_embedding_store=FakeBrowseEmbeddingStore({"root": _embedding(dim)}),
+    )
+    apply_cloud_state_to_user_forest(target, initial_state)
+    assert set(target._tree_builder.trees) == {"tree-1"}
+
+    core = CloudStateHydratingUserForestCore(
+        user_forest=target,
+        tree_store=FakeTreeStore(
+            {
+                "tree-2": [
+                    _node("root-2", child_ids=("leaf-2",), tree_id="tree-2"),
+                    _node("leaf-2", parent_id="root-2", level="L0", child_ids=("fact_2",), tree_id="tree-2"),
+                ]
+            }
+        ),
+        fact_store=FakeFactStore({"fact_2": _fact("fact_2", dim)}),
+        browse_embedding_store=FakeBrowseEmbeddingStore({"root-2": _embedding(dim)}),
+        snapshot_store=None,
+        enable_cloud_state_hydration=True,
+    )
+
+    await core.hydrate_from_manifest(
+        FakeManifest({"forest_version": "v7", "embedding_model_version": "embed-v1"}),
+        tree_ids=["tree-2"],
+    )
+
+    assert set(target._tree_builder.trees) == {"tree-2"}
+    assert target._fact_manager.get_fact("fact_1") is None
+    assert target._fact_manager.get_fact("fact_2") is not None
+
+
+@pytest.mark.asyncio
 async def test_cloud_state_core_without_snapshot_surfaces_cloud_read_errors(tmp_path) -> None:
     target = _user_forest(tmp_path / "target-root", 4)
     core = CloudStateHydratingUserForestCore(
