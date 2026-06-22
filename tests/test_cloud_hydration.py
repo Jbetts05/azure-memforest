@@ -13,6 +13,7 @@ from src.worker.cloud_hydration import (
     CloudStateHydratingUserForestCore,
     CloudUserForestState,
     apply_cloud_state_to_user_forest,
+    merge_cloud_state_into_user_forest,
     load_fact_ids_from_tree_store,
     load_cloud_hydration_prerequisites,
     load_cloud_user_forest_state,
@@ -1168,6 +1169,129 @@ async def test_cloud_state_core_subset_hydration_replaces_resident_state(tmp_pat
     assert set(target._tree_builder.trees) == {"tree-2"}
     assert target._fact_manager.get_fact("fact_1") is None
     assert target._fact_manager.get_fact("fact_2") is not None
+
+
+@pytest.mark.asyncio
+async def test_merge_cloud_state_preserves_resident_trees_and_facts(tmp_path) -> None:
+    dim = 4
+    target = _user_forest(tmp_path / "target-root", dim)
+    initial_state = await load_cloud_user_forest_state(
+        tree_store=FakeTreeStore(
+            {
+                "tree-1": [
+                    _node("root", child_ids=("leaf",), tree_id="tree-1"),
+                    _node("leaf", parent_id="root", level="L0", child_ids=("fact_1",), tree_id="tree-1"),
+                ]
+            }
+        ),
+        fact_store=FakeFactStore({"fact_1": _fact("fact_1", dim)}),
+        browse_embedding_store=FakeBrowseEmbeddingStore({"root": _embedding(dim)}),
+    )
+    apply_cloud_state_to_user_forest(target, initial_state)
+
+    merge_state = await load_cloud_user_forest_state(
+        tree_store=FakeTreeStore(
+            {
+                "tree-2": [
+                    _node("root-2", child_ids=("leaf-2",), tree_id="tree-2"),
+                    _node("leaf-2", parent_id="root-2", level="L0", child_ids=("fact_2",), tree_id="tree-2"),
+                ]
+            }
+        ),
+        fact_store=FakeFactStore({"fact_2": _fact("fact_2", dim)}),
+        browse_embedding_store=FakeBrowseEmbeddingStore({"root-2": _embedding(dim)}),
+        tree_ids=["tree-2"],
+    )
+
+    result = merge_cloud_state_into_user_forest(target, merge_state)
+
+    assert result.tree_count == 1
+    assert set(target._tree_builder.trees) == {"tree-1", "tree-2"}
+    assert target._fact_manager.get_fact("fact_1") is not None
+    assert target._fact_manager.get_fact("fact_2") is not None
+    assert target._node_index.get_embedding("root") is not None
+    assert target._node_index.get_embedding("root-2") is not None
+
+
+@pytest.mark.asyncio
+async def test_merge_cloud_state_replaces_loaded_tree_and_fact_without_reset(tmp_path) -> None:
+    dim = 4
+    target = _user_forest(tmp_path / "target-root", dim)
+    old_fact = _fact("fact_1", dim)
+    old_state = await load_cloud_user_forest_state(
+        tree_store=FakeTreeStore(
+            {
+                "tree-1": [
+                    _node("root", child_ids=("old-leaf",), tree_id="tree-1"),
+                    _node("old-leaf", parent_id="root", level="L0", child_ids=("fact_1",), tree_id="tree-1"),
+                ]
+            }
+        ),
+        fact_store=FakeFactStore({"fact_1": old_fact}),
+        browse_embedding_store=FakeBrowseEmbeddingStore({"root": _embedding(dim)}),
+    )
+    apply_cloud_state_to_user_forest(target, old_state)
+    assert set(target._tree_builder.trees["tree-1"].nodes) == {"root", "old-leaf"}
+
+    new_fact = replace(old_fact, fact_text="updated fact text fact_1")
+    new_state = await load_cloud_user_forest_state(
+        tree_store=FakeTreeStore(
+            {
+                "tree-1": [
+                    _node("root", child_ids=("new-leaf",), tree_id="tree-1"),
+                    _node("new-leaf", parent_id="root", level="L0", child_ids=("fact_1",), tree_id="tree-1"),
+                ]
+            }
+        ),
+        fact_store=FakeFactStore({"fact_1": new_fact}),
+        browse_embedding_store=FakeBrowseEmbeddingStore({"root": _embedding(dim)}),
+    )
+
+    merge_cloud_state_into_user_forest(target, new_state)
+
+    assert set(target._tree_builder.trees) == {"tree-1"}
+    assert set(target._tree_builder.trees["tree-1"].nodes) == {"root", "new-leaf"}
+    assert target._fact_manager.get_fact("fact_1").fact_text == "updated fact text fact_1"
+
+
+@pytest.mark.asyncio
+async def test_merge_cloud_state_preserves_resident_session_turn_provenance(tmp_path) -> None:
+    dim = 4
+    target = _user_forest(tmp_path / "target-root", dim)
+    resident_fact = _fact_for_cell("fact_1", dim, session_id="resident-session", cell_id="resident-session#cell_0000_a", turn_id="resident-session:0")
+    resident_state = await load_cloud_user_forest_state(
+        tree_store=FakeTreeStore(
+            {
+                "session:sess_0001": [
+                    _node("resident-leaf", level="L0", child_ids=("resident-session#cell_0000_a",), fact_ids=("fact_1",), tree_id="session:sess_0001", tree_type="session", tree_key="sess_0001", tree_label="sess_0001"),
+                ]
+            }
+        ),
+        fact_store=FakeFactStore({"fact_1": resident_fact}),
+    )
+    apply_cloud_state_to_user_forest(target, resident_state)
+    from src.worker.cloud_hydration import _populate_registry_from_fact_occurrences
+
+    _populate_registry_from_fact_occurrences(target._registry, [resident_fact])
+    assert target._registry._cells["resident-session#cell_0000_a"].turn_ids == ["resident-session:0"]
+
+    merge_fact = _fact_for_cell("fact_2", dim, session_id="new-session", cell_id="new-session#cell_0000_b", turn_id="new-session:0")
+    merge_state = await load_cloud_user_forest_state(
+        tree_store=FakeTreeStore(
+            {
+                "session:sess_0002": [
+                    _node("new-leaf", level="L0", child_ids=("new-session#cell_0000_b",), fact_ids=("fact_2",), tree_id="session:sess_0002", tree_type="session", tree_key="sess_0002", tree_label="sess_0002"),
+                ]
+            }
+        ),
+        fact_store=FakeFactStore({"fact_2": merge_fact}),
+    )
+
+    merge_cloud_state_into_user_forest(target, merge_state)
+
+    assert target._registry._cells["resident-session#cell_0000_a"].turn_ids == ["resident-session:0"]
+    assert target._registry._turns["resident-session:0"].cell_id == "resident-session#cell_0000_a"
+    assert target._registry._cells["new-session#cell_0000_b"].turn_ids == []
 
 
 @pytest.mark.asyncio

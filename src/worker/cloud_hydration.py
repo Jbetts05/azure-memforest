@@ -455,6 +455,22 @@ def apply_cloud_state_to_user_forest(user_forest: Any, state: CloudUserForestSta
         return _apply_cloud_state_locked(user_forest, state)
 
 
+def merge_cloud_state_into_user_forest(user_forest: Any, state: CloudUserForestState) -> CloudHydrationApplyResult:
+    """Merge a partial cloud state slice into an existing local ``UserForest``.
+
+    This helper is intentionally non-destructive: it replaces only the loaded
+    tree IDs, adds/updates loaded facts and summaries, and refreshes node-index
+    entries for the loaded trees. It does not remove facts that are absent from
+    the partial slice; deletion semantics must be supplied by a future caller.
+    """
+
+    lock = getattr(user_forest, "_lock", None)
+    if lock is None:
+        return _merge_cloud_state_locked(user_forest, state)
+    with lock:
+        return _merge_cloud_state_locked(user_forest, state)
+
+
 def _level_int(level: str | int) -> int:
     text = str(level)
     if text.upper().startswith("L"):
@@ -701,6 +717,37 @@ def _apply_cloud_state_locked(user_forest: Any, state: CloudUserForestState) -> 
     )
 
 
+def _merge_cloud_state_locked(user_forest: Any, state: CloudUserForestState) -> CloudHydrationApplyResult:
+    facts = [_managed_fact_from_any(fact) for fact in state.facts]
+    _upsert_facts_into_fact_manager(user_forest._fact_manager, facts)
+    user_forest._summary_cache.update(dict(state.summary_cache))
+    user_forest._tree_builder.set_summary_cache(user_forest._summary_cache)
+    for fact in facts:
+        user_forest._tree_builder._fact_catalog[fact.fact_id] = fact
+
+    for tree in state.trees:
+        validate_tree_structure(tree)
+        user_forest._tree_builder._trees[tree.tree_id] = tree
+        user_forest._tree_store.register(tree)
+        user_forest._node_index.remove_tree(tree.tree_id)
+    _add_cloud_embeddings_to_node_index(user_forest, state.trees, state.node_embeddings)
+
+    _populate_registry_from_loaded_session_trees(user_forest._registry, state.trees)
+    _merge_session_alias_map(user_forest, state.trees)
+    _populate_registry_from_fact_occurrences(user_forest._registry, facts)
+    user_forest._rewire_query_pipeline()
+    user_forest._record_projection_delta(changed_tree_ids=set(), deleted_tree_ids=set())
+    return CloudHydrationApplyResult(
+        tree_count=len(state.trees),
+        fact_count=len(facts),
+        summary_cache_count=len(state.summary_cache),
+        node_embedding_count=len(state.node_embeddings),
+        missing_fact_ids=state.missing_fact_ids,
+        missing_summary_cache_keys=state.missing_summary_cache_keys,
+        missing_node_embedding_ids=state.missing_node_embedding_ids,
+    )
+
+
 def _clear_fact_manager(fact_manager: Any) -> None:
     with fact_manager._lock:
         fact_manager._facts = {}
@@ -721,6 +768,37 @@ def _populate_session_alias_map(user_forest: Any, trees: list[MemTree]) -> None:
                 if raw_session_id:
                     alias_map[raw_session_id] = alias
         user_forest._tree_builder._session_alias_map = alias_map
+
+
+def _merge_session_alias_map(user_forest: Any, trees: list[MemTree]) -> None:
+        alias_map = dict(getattr(user_forest._tree_builder, "_session_alias_map", {}) or {})
+        for tree in trees:
+            if tree.tree_type != "session":
+                continue
+            alias = str(tree.tree_key or tree.tree_id).removeprefix("session:")
+            for leaf in tree.session_leaves.values():
+                raw_session_id = str(getattr(leaf, "session_id", "") or "")
+                if raw_session_id:
+                    alias_map[raw_session_id] = alias
+        user_forest._tree_builder._session_alias_map = alias_map
+
+
+def _populate_registry_from_loaded_session_trees(registry: Any, trees: list[MemTree]) -> None:
+        for tree in trees:
+            if tree.tree_type != "session":
+                continue
+            cells_by_session: dict[str, list[str]] = {}
+            cell_fact_ids_by_session: dict[str, dict[str, list[str]]] = {}
+            for cell_id, leaf in tree.session_leaves.items():
+                session_id = str(getattr(leaf, "session_id", "") or tree.tree_key or tree.tree_id).removeprefix("session:")
+                cells_by_session.setdefault(session_id, []).append(cell_id)
+                cell_fact_ids_by_session.setdefault(session_id, {})[cell_id] = list(getattr(leaf, "fact_ids", []))
+            for session_id, cell_ids in cells_by_session.items():
+                registry.register_synthetic_session(
+                    session_id=session_id,
+                    cell_ids=cell_ids,
+                    cell_fact_ids=cell_fact_ids_by_session.get(session_id, {}),
+                )
 
 
 def _populate_registry_from_fact_occurrences(registry: Any, facts: list[ManagedFact]) -> None:
@@ -802,6 +880,13 @@ def _load_facts_into_fact_manager(fact_manager: Any, facts: list[ManagedFact]) -
             fact_manager._index.add(arr.reshape(1, -1))
 
 
+def _upsert_facts_into_fact_manager(fact_manager: Any, facts: list[ManagedFact]) -> None:
+    fact_ids = {fact.fact_id for fact in facts}
+    if fact_ids:
+        fact_manager.delete_facts(fact_ids)
+    _load_facts_into_fact_manager(fact_manager, facts)
+
+
 def _node_index_from_cloud_embeddings(
     user_forest: Any,
     trees: list[MemTree],
@@ -822,6 +907,26 @@ def _node_index_from_cloud_embeddings(
                 searchable=(node_id == root_id and not is_depth0_scene),
             )
     return index
+
+
+def _add_cloud_embeddings_to_node_index(
+    user_forest: Any,
+    trees: list[MemTree],
+    embeddings: dict[str, list[float]],
+) -> None:
+    for tree in trees:
+        root_id = tree.root_node_id
+        root = tree.nodes.get(root_id)
+        is_depth0_scene = tree.tree_type == "scene" and root is not None and root.level == 0
+        for node_id, embedding in embeddings.items():
+            node = tree.nodes.get(node_id)
+            if node is None or node.level == 0:
+                continue
+            user_forest._node_index.add_node(
+                NodeEntry(node_id=node_id, tree_id=tree.tree_id, level=_node_index_level(tree, node)),
+                embedding,
+                searchable=(node_id == root_id and not is_depth0_scene),
+            )
 
 
 def _node_index_level(tree: MemTree, node: MemTreeNode) -> str:
