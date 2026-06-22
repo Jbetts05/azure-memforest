@@ -723,6 +723,59 @@ def _two_tree_incremental_snapshot_with_deleted_tree():
     )
 
 
+def _many_changed_tree_snapshot(count: int):
+    trees = []
+    node_embeddings = {}
+    changed_tree_ids = set()
+    for index in range(count):
+        tree_id = f"entity:tree-{index:03d}"
+        node_id = f"root-{index:03d}"
+        fact_id = f"fact-{index:03d}"
+        trees.append(
+            MemTree(
+                tree_id=tree_id,
+                tree_type="entity",
+                tree_key=f"tree-{index:03d}",
+                label=f"Tree {index:03d}",
+                k=4,
+                root_node_id=node_id,
+                nodes={
+                    node_id: MemTreeNode(
+                        node_id=node_id,
+                        tree_id=tree_id,
+                        level=0,
+                        time_start=1.0,
+                        time_end=1.0,
+                        summary=f"summary {index}",
+                        summary_dirty=False,
+                        child_ids=[fact_id],
+                        item_count=1,
+                    )
+                },
+                session_leaves={},
+                fact_ids_ordered=[fact_id],
+                centroid=None,
+                version=1,
+                lifecycle_state="active",
+                deactivated=False,
+                replacement_tree_ids=[],
+                created_at=1.0,
+                updated_at=1.0,
+            )
+        )
+        node_embeddings[node_id] = [1.0, 0.0]
+        changed_tree_ids.add(tree_id)
+    return ForestMaterializationSnapshot(
+        facts=[],
+        trees=trees,
+        node_embeddings=node_embeddings,
+        summary_cache={},
+        changed_tree_ids=frozenset(changed_tree_ids),
+        deleted_tree_ids=frozenset(),
+        baseline_forest_version="v1",
+    )
+
+
 def _envelope(job_type="ingest_session"):
     return build_write_job_envelope(
         ActorContext(actor_id="user-1", tenant=TenantContext("tenant-1")),
@@ -1319,6 +1372,44 @@ async def test_materialization_handler_records_partial_hydration_shadow_when_ena
     assert shadow["plan"]["planned_tree_ids"] == ["entity:alice"]
     assert shadow["check"]["tree_count"] == 1
     assert core.partial_hydration_checks[0]["tree_ids"] == ("entity:alice",)
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_partial_hydration_shadow_checks_full_planned_tree_set() -> None:
+    manifest_store = FakeManifestStore()
+    manifest_store.latest = ForestManifest(
+        manifest_id="manifest-v1",
+        tenant_id="tenant-1",
+        user_id="user-1",
+        forest_version="v1",
+        generation=1,
+        status="committed",
+        created_at_unix=1.0,
+        metadata={"job_id": "previous", "job_type": "ingest_session", "embedding_model_version": "embed-v1"},
+    )
+    core = FakeIngestCore(_many_changed_tree_snapshot(101))
+    handler = _handler(
+        manifest_store=manifest_store,
+        core=core,
+        baseline_provider=MatchingProjectionBaselineProvider(),
+        config=MaterializationHandlerConfig(
+            owner_id="worker-1",
+            embedding_model_version="embed-v1",
+            code_version="test-sha",
+            prompt_config_hash="prompt-hash",
+            lease_renewal_seconds=9999,
+            enable_partial_hydration_shadow=True,
+        ),
+    )
+
+    await handler.handle(_envelope(), {"fencing_token": 1})
+
+    shadow = manifest_store.latest.metadata["partial_hydration_shadow"]
+    assert shadow["plan"]["planned_tree_load_count"] == 101
+    assert len(shadow["plan"]["planned_tree_ids"]) == 100
+    assert shadow["plan"]["id_arrays_truncated"] is True
+    assert len(core.partial_hydration_checks[0]["tree_ids"]) == 101
+    assert "entity:tree-100" in core.partial_hydration_checks[0]["tree_ids"]
 
 
 @pytest.mark.asyncio

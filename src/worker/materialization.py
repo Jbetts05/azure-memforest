@@ -24,7 +24,18 @@ from src.cloud.projection_baseline import (
     build_committed_projection_baseline,
     summary_cache_refs_from_entries,
 )
-from src.cloud.projection_plan import ProjectionRecordRef, ProjectionSkipPlan, browse_embedding_content_hash, filter_projection_refs_to_tree_scope, plan_affected_trees, plan_partial_hydration, plan_projection_skip, plan_projection_tree_scope, tree_node_body_content_id
+from src.cloud.projection_plan import (
+    PartialHydrationPlan,
+    ProjectionRecordRef,
+    ProjectionSkipPlan,
+    browse_embedding_content_hash,
+    filter_projection_refs_to_tree_scope,
+    plan_affected_trees,
+    plan_partial_hydration,
+    plan_projection_skip,
+    plan_projection_tree_scope,
+    tree_node_body_content_id,
+)
 from src.cloud.schema import SCHEMA_VERSION
 from src.forest.memforest import _content_key
 from src.forest.user_forest import ForestMaterializationSnapshot
@@ -353,8 +364,8 @@ class MemForestMaterializationHandler:
             return {"schema_version": 1, "enabled": False, "supported": False, "reason": "disabled"}
         if latest is None:
             return {"schema_version": 1, "enabled": True, "supported": False, "reason": "no_committed_manifest"}
-        plan_summary = _partial_hydration_plan_summary(projection, snapshot=snapshot)
-        if plan_summary["full_hydration_required"]:
+        plan, plan_summary = _partial_hydration_plan_and_summary(projection, snapshot=snapshot)
+        if plan.full_hydration_required:
             return {
                 "schema_version": 1,
                 "enabled": True,
@@ -372,7 +383,7 @@ class MemForestMaterializationHandler:
                 "plan": plan_summary,
             }
         try:
-            check = await _maybe_await(checker(latest, tree_ids=plan_summary["planned_tree_ids"]))
+            check = await _maybe_await(checker(latest, tree_ids=plan.tree_ids_to_load))
             check = dict(check)
         except Exception as exc:
             return {
@@ -1932,7 +1943,9 @@ def _projection_tree_scope_plan_summary(projection: MaterializationProjection) -
     }
 
 
-def _partial_hydration_plan_summary(projection: MaterializationProjection, *, snapshot: ForestMaterializationSnapshot) -> dict[str, Any]:
+def _partial_hydration_plan_and_summary(
+    projection: MaterializationProjection, *, snapshot: ForestMaterializationSnapshot
+) -> tuple[PartialHydrationPlan, dict[str, Any]]:
     all_tree_ids = {
         str(getattr(record, "tree_id", "") or "")
         for record in [*projection.stored_nodes, *projection.recall_documents, *projection.browse_embedding_records]
@@ -1943,7 +1956,7 @@ def _partial_hydration_plan_summary(projection: MaterializationProjection, *, sn
         changed_tree_ids=projection.changed_tree_ids,
         deleted_tree_ids=projection.deleted_tree_ids,
     )
-    return {
+    summary = {
         "schema_version": 1,
         "mode": "instrumentation_only",
         "full_hydration_required": plan.full_hydration_required,
@@ -1964,6 +1977,12 @@ def _partial_hydration_plan_summary(projection: MaterializationProjection, *, sn
             or len(plan.unknown_changed_tree_ids) > 100
         ),
     }
+    return plan, summary
+
+
+def _partial_hydration_plan_summary(projection: MaterializationProjection, *, snapshot: ForestMaterializationSnapshot) -> dict[str, Any]:
+    _, summary = _partial_hydration_plan_and_summary(projection, snapshot=snapshot)
+    return summary
 
 
 def _projection_tree_scope_shadow_summary(projection: MaterializationProjection, *, embedding_model_version: str) -> dict[str, Any]:
