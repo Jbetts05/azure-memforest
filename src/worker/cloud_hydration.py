@@ -134,6 +134,33 @@ class CloudStateHydratingUserForestCore:
                 raise
             self.last_hydration_result = self._snapshot_fallback(manifest)
 
+    async def merge_from_manifest(self, manifest: Any, *, tree_ids: list[str] | tuple[str, ...] | set[str]) -> None:
+        """Merge a requested tree subset from a committed manifest into resident state.
+
+        This is an explicit partial-hydration entry point. It never falls back to
+        snapshots because snapshot restore is whole-forest, not partial.
+        """
+
+        if not self.enable_cloud_state_hydration:
+            raise CloudStateHydrationIncomplete("cloud state hydration is disabled")
+        requested_tree_ids = tuple(str(tree_id) for tree_id in tree_ids if str(tree_id))
+        if not requested_tree_ids:
+            raise ValueError("tree_ids must contain at least one tree id for partial merge hydration")
+        forest_version = _manifest_forest_version(manifest)
+        tree_store = _store_for_manifest_version(self.tree_store, self.tree_store_factory, forest_version)
+        browse_embedding_store = _store_for_manifest_version(self.browse_embedding_store, self.browse_embedding_store_factory, forest_version)
+        if tree_store is None:
+            raise CloudStateHydrationIncomplete("tree_store is required for partial cloud state hydration")
+        state = await self._load_cloud_state_with_retry(
+            tree_store=tree_store,
+            browse_embedding_store=browse_embedding_store,
+            tree_ids=requested_tree_ids,
+        )
+        if _cloud_state_missing_prerequisites(state):
+            raise CloudStateHydrationIncomplete("partial cloud state hydration is incomplete")
+        self.last_hydration_result = merge_cloud_state_into_user_forest(self.user_forest, state)
+        self.user_forest._mark_projection_delta_unknown()
+
     def ingest_session(self, *, session_id: str, turns: list[dict[str, Any]], metadata: dict[str, Any]) -> Any:
         self.user_forest.ingest_session(session_id, turns)
         return self.user_forest.snapshot_for_materialization()

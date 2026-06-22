@@ -1565,6 +1565,54 @@ async def test_materialization_handler_tree_scoped_writes_fall_back_on_shadow_di
 
 
 @pytest.mark.asyncio
+async def test_materialization_handler_partial_merge_without_baseline_does_not_delete_unloaded_committed_trees() -> None:
+    calls = []
+    manifest_store = FakeManifestStore()
+    manifest_store.latest = ForestManifest(
+        manifest_id="manifest-v1",
+        tenant_id="tenant-1",
+        user_id="user-1",
+        forest_version="v1",
+        generation=1,
+        status="committed",
+        created_at_unix=1.0,
+        metadata={"job_id": "previous", "job_type": "ingest_session", "embedding_model_version": "embed-v1"},
+    )
+    handler = _handler(
+        manifest_store=manifest_store,
+        calls=calls,
+        core=FakeIngestCore(_snapshot()),
+        baseline_provider=MatchingProjectionBaselineProvider(),
+        config=MaterializationHandlerConfig(
+            owner_id="worker-1",
+            embedding_model_version="embed-v1",
+            code_version="test-sha",
+            prompt_config_hash="prompt-hash",
+            lease_renewal_seconds=9999,
+            enable_tree_scoped_projection_writes=True,
+        ),
+    )
+    handler._ingest_core.snapshot = ForestMaterializationSnapshot(
+        facts=handler._ingest_core.snapshot.facts,
+        trees=handler._ingest_core.snapshot.trees,
+        node_embeddings=handler._ingest_core.snapshot.node_embeddings,
+        summary_cache=handler._ingest_core.snapshot.summary_cache,
+        changed_tree_ids=None,
+        deleted_tree_ids=frozenset(),
+        baseline_forest_version=None,
+    )
+
+    await handler.handle(_envelope(), {"fencing_token": 1})
+
+    metadata = manifest_store.latest.metadata
+    assert metadata["projection_delta_baseline_forest_version"] is None
+    assert metadata["projection_tree_scope_writes"]["applied"] is False
+    assert metadata["projection_tree_scope_writes"]["reason"] == "full_projection_required"
+    tree_write = next(item for item in handler._stores.tree_node_store.items if isinstance(item, dict))
+    assert tree_write["delete_keys"] == []
+
+
+@pytest.mark.asyncio
 async def test_materialization_handler_tree_scoped_writes_preserve_scoped_deletes() -> None:
     calls = []
     manifest_store = FakeManifestStore()

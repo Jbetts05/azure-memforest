@@ -11,6 +11,7 @@ from src.forest.user_forest import UserForest
 from src.utils.types import FactOccurrence, ManagedFact, MemoryItem
 from src.worker.cloud_hydration import (
     CloudStateHydratingUserForestCore,
+    CloudStateHydrationIncomplete,
     CloudUserForestState,
     apply_cloud_state_to_user_forest,
     merge_cloud_state_into_user_forest,
@@ -1292,6 +1293,102 @@ async def test_merge_cloud_state_preserves_resident_session_turn_provenance(tmp_
     assert target._registry._cells["resident-session#cell_0000_a"].turn_ids == ["resident-session:0"]
     assert target._registry._turns["resident-session:0"].cell_id == "resident-session#cell_0000_a"
     assert target._registry._cells["new-session#cell_0000_b"].turn_ids == []
+
+
+@pytest.mark.asyncio
+async def test_cloud_state_core_merge_from_manifest_merges_explicit_subset(tmp_path) -> None:
+    dim = 4
+    target = _user_forest(tmp_path / "target-root", dim)
+    initial_state = await load_cloud_user_forest_state(
+        tree_store=FakeTreeStore(
+            {
+                "tree-1": [
+                    _node("root", child_ids=("leaf",), tree_id="tree-1"),
+                    _node("leaf", parent_id="root", level="L0", child_ids=("fact_1",), tree_id="tree-1"),
+                ]
+            }
+        ),
+        fact_store=FakeFactStore({"fact_1": _fact("fact_1", dim)}),
+        browse_embedding_store=FakeBrowseEmbeddingStore({"root": _embedding(dim)}),
+    )
+    apply_cloud_state_to_user_forest(target, initial_state)
+    tree_store = FakeTreeStore(
+        {
+            "tree-1": [
+                _node("root", child_ids=("leaf",), tree_id="tree-1"),
+                _node("leaf", parent_id="root", level="L0", child_ids=("fact_1",), tree_id="tree-1"),
+            ],
+            "tree-2": [
+                _node("root-2", child_ids=("leaf-2",), tree_id="tree-2"),
+                _node("leaf-2", parent_id="root-2", level="L0", child_ids=("fact_2",), tree_id="tree-2"),
+            ],
+        }
+    )
+    core = CloudStateHydratingUserForestCore(
+        user_forest=target,
+        tree_store=tree_store,
+        fact_store=FakeFactStore({"fact_1": _fact("fact_1", dim), "fact_2": _fact("fact_2", dim)}),
+        browse_embedding_store=FakeBrowseEmbeddingStore({"root-2": _embedding(dim)}),
+        snapshot_store=None,
+        enable_cloud_state_hydration=True,
+    )
+
+    await core.merge_from_manifest(
+        FakeManifest({"forest_version": "v7", "embedding_model_version": "embed-v1"}),
+        tree_ids=["tree-2"],
+    )
+
+    assert core.last_hydration_result is not None
+    assert core.last_hydration_result.tree_count == 1
+    assert set(target._tree_builder.trees) == {"tree-1", "tree-2"}
+    snapshot = target.snapshot_for_materialization()
+    assert snapshot.baseline_forest_version is None
+    assert snapshot.changed_tree_ids is None
+    assert tree_store.list_tree_ids_calls == 0
+    assert tree_store.requested_tree_ids == ["tree-2"]
+
+
+@pytest.mark.asyncio
+async def test_cloud_state_core_merge_from_manifest_surfaces_incomplete_partial_state(tmp_path) -> None:
+    target = _user_forest(tmp_path / "target-root", 4)
+    core = CloudStateHydratingUserForestCore(
+        user_forest=target,
+        tree_store=FakeTreeStore(
+            {
+                "tree-1": [
+                    _node("root", child_ids=("leaf",)),
+                    _node("leaf", parent_id="root", level="L0", child_ids=("missing-fact",)),
+                ]
+            }
+        ),
+        fact_store=FakeFactStore({}),
+        browse_embedding_store=FakeBrowseEmbeddingStore({}),
+        snapshot_store=FakeSnapshotStore({"snapshot-1": b"not-used"}),
+        enable_cloud_state_hydration=True,
+    )
+
+    with pytest.raises(CloudStateHydrationIncomplete, match="partial cloud state hydration is incomplete"):
+        await core.merge_from_manifest(
+            FakeManifest({"forest_version": "v7", "embedding_model_version": "embed-v1", "snapshot_id": "snapshot-1", "snapshot_content_sha256": "bad"}),
+            tree_ids=["tree-1"],
+        )
+
+
+@pytest.mark.asyncio
+async def test_cloud_state_core_merge_from_manifest_rejects_empty_tree_ids(tmp_path) -> None:
+    target = _user_forest(tmp_path / "target-root", 4)
+    core = CloudStateHydratingUserForestCore(
+        user_forest=target,
+        tree_store=FakeTreeStore({}),
+        snapshot_store=None,
+        enable_cloud_state_hydration=True,
+    )
+
+    with pytest.raises(ValueError, match="tree_ids must contain at least one tree id"):
+        await core.merge_from_manifest(
+            FakeManifest({"forest_version": "v7", "embedding_model_version": "embed-v1"}),
+            tree_ids=[],
+        )
 
 
 @pytest.mark.asyncio
