@@ -99,6 +99,17 @@ class ProjectionTreeScope:
     unknown_changed_tree_ids: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class PartialHydrationPlan:
+    """Tree/state subset required for a future partial cloud hydration attempt."""
+
+    full_hydration_required: bool
+    tree_ids_to_load: tuple[str, ...]
+    deleted_tree_ids: tuple[str, ...]
+    omitted_tree_ids: tuple[str, ...]
+    unknown_changed_tree_ids: tuple[str, ...] = ()
+
+
 def plan_projection_skip(
     projected_records: Iterable[ProjectionRecordRef],
     retained_committed_records: Iterable[ProjectionRecordRef],
@@ -173,6 +184,49 @@ def plan_projection_tree_scope(
         projected_tree_ids=projected,
         deleted_tree_ids=deleted,
         omitted_tree_ids=omitted,
+        unknown_changed_tree_ids=unknown_changed,
+    )
+
+
+def plan_partial_hydration(
+    *,
+    all_tree_ids: Iterable[str],
+    changed_tree_ids: Iterable[str] | None,
+    deleted_tree_ids: Iterable[str] = (),
+) -> PartialHydrationPlan:
+    """Plan the tree subset needed to hydrate for an incremental mutation.
+
+    This is intentionally conservative and side-effect free. ``changed_tree_ids``
+    being ``None`` means the writer does not know the dirty-tree frontier, so a
+    future partial-hydration path must fall back to full hydration. Deleted tree
+    IDs are included in ``tree_ids_to_load`` in every mode because deletion and
+    tombstone paths may need committed node/location metadata even when the tree
+    is absent from the new active tree set. Passing ``[]`` for
+    ``changed_tree_ids`` means a known no-op delta; pass ``None`` for unknown.
+    """
+
+    all_ids = tuple(sorted({str(tree_id) for tree_id in all_tree_ids if str(tree_id)}))
+    deleted = tuple(sorted({str(tree_id) for tree_id in deleted_tree_ids if str(tree_id)}))
+    if changed_tree_ids is None:
+        return PartialHydrationPlan(
+            full_hydration_required=True,
+            tree_ids_to_load=tuple(sorted(set(all_ids) | set(deleted))),
+            deleted_tree_ids=deleted,
+            omitted_tree_ids=(),
+            unknown_changed_tree_ids=(),
+        )
+
+    changed = {str(tree_id) for tree_id in changed_tree_ids if str(tree_id)}
+    known_deleted = set(deleted)
+    known_active = set(all_ids)
+    unknown_changed = tuple(sorted(tree_id for tree_id in changed if tree_id not in known_active and tree_id not in known_deleted))
+    tree_ids_to_load = tuple(sorted((changed & known_active) | known_deleted))
+    omitted = tuple(tree_id for tree_id in all_ids if tree_id not in set(tree_ids_to_load))
+    return PartialHydrationPlan(
+        full_hydration_required=bool(unknown_changed),
+        tree_ids_to_load=tuple(sorted(set(all_ids) | known_deleted)) if unknown_changed else tree_ids_to_load,
+        deleted_tree_ids=deleted,
+        omitted_tree_ids=() if unknown_changed else omitted,
         unknown_changed_tree_ids=unknown_changed,
     )
 

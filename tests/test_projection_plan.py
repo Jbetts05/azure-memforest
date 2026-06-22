@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.cloud.projection_plan import ProjectionRecordKey, ProjectionRecordRef, ProjectionSkipPlan, filter_projection_refs_to_tree_scope, plan_affected_trees, plan_projection_skip, plan_projection_tree_scope, tree_node_body_content_id
+from src.cloud.projection_plan import ProjectionRecordKey, ProjectionRecordRef, ProjectionSkipPlan, filter_projection_refs_to_tree_scope, plan_affected_trees, plan_partial_hydration, plan_projection_skip, plan_projection_tree_scope, tree_node_body_content_id
 
 
 def test_projection_skip_plan_splits_unchanged_upsert_and_delete_by_content_hash() -> None:
@@ -235,3 +235,56 @@ def test_filter_projection_refs_to_tree_scope_keeps_only_tree_scoped_records() -
     filtered = filter_projection_refs_to_tree_scope(refs, tree_ids=["entity:b"])
 
     assert [record.logical_id for record in filtered] == ["entity:b/root"]
+
+
+def test_plan_partial_hydration_requires_full_when_delta_unknown() -> None:
+    plan = plan_partial_hydration(
+        all_tree_ids=["entity:b", "entity:a"],
+        changed_tree_ids=None,
+        deleted_tree_ids=["entity:old"],
+    )
+
+    assert plan.full_hydration_required is True
+    assert plan.tree_ids_to_load == ("entity:a", "entity:b", "entity:old")
+    assert plan.deleted_tree_ids == ("entity:old",)
+    assert plan.omitted_tree_ids == ()
+
+
+def test_plan_partial_hydration_loads_changed_and_deleted_trees_only() -> None:
+    plan = plan_partial_hydration(
+        all_tree_ids=["entity:a", "entity:b", "session:s1", "tree:scene:x"],
+        changed_tree_ids=["entity:b", "session:s1"],
+        deleted_tree_ids=["entity:old"],
+    )
+
+    assert plan.full_hydration_required is False
+    assert plan.tree_ids_to_load == ("entity:b", "entity:old", "session:s1")
+    assert plan.deleted_tree_ids == ("entity:old",)
+    assert plan.omitted_tree_ids == ("entity:a", "tree:scene:x")
+    assert plan.unknown_changed_tree_ids == ()
+
+
+def test_plan_partial_hydration_fails_closed_on_unknown_changed_tree() -> None:
+    plan = plan_partial_hydration(
+        all_tree_ids=["entity:a", "entity:b"],
+        changed_tree_ids=["entity:b", "missing:new"],
+        deleted_tree_ids=[],
+    )
+
+    assert plan.full_hydration_required is True
+    assert plan.tree_ids_to_load == ("entity:a", "entity:b")
+    assert plan.omitted_tree_ids == ()
+    assert plan.unknown_changed_tree_ids == ("missing:new",)
+
+
+def test_plan_partial_hydration_distinguishes_empty_known_delta_from_unknown() -> None:
+    plan = plan_partial_hydration(
+        all_tree_ids=["entity:a", "entity:b"],
+        changed_tree_ids=[],
+        deleted_tree_ids=["entity:old"],
+    )
+
+    assert plan.full_hydration_required is False
+    assert plan.tree_ids_to_load == ("entity:old",)
+    assert plan.deleted_tree_ids == ("entity:old",)
+    assert plan.omitted_tree_ids == ("entity:a", "entity:b")
