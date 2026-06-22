@@ -119,6 +119,7 @@ class MaterializationHandlerConfig:
     snapshot_policy: str = SNAPSHOT_POLICY_ALWAYS
     cloud_checkpoint_hydration_supported: bool = False
     enable_tree_scoped_projection_writes: bool = False
+    enable_partial_hydration_shadow: bool = False
 
     def __post_init__(self) -> None:
         policy = _normalize_snapshot_policy(self.snapshot_policy)
@@ -277,6 +278,7 @@ class MemForestMaterializationHandler:
             baseline_started = time.perf_counter()
             projection = await self._apply_committed_projection_baseline(latest, projection)
             stage_timings_ms["baseline"] = _elapsed_ms(baseline_started)
+            partial_hydration_shadow = await self._partial_hydration_shadow_summary(latest, projection, snapshot=snapshot)
             await self._update_job_stage(envelope, fencing_token=fencing_token, stage="write_projection", detail="Writing facts, trees, embeddings, recall documents, and snapshot.", telemetry=telemetry)
             write_projection_started = time.perf_counter()
             projection_metadata = await self._write_projection(
@@ -291,6 +293,7 @@ class MemForestMaterializationHandler:
             projection_metadata["materialization_stage_timings_ms"] = stage_timings_ms
             projection_metadata["projection_input_counts"] = _projection_input_counts(projection, snapshot=snapshot)
             projection_metadata["hydration_summary"] = hydration_summary
+            projection_metadata["partial_hydration_shadow"] = partial_hydration_shadow
             try:
                 await self._stores.lease_store.assert_current(lease)
             except LeaseConflict as exc:
@@ -338,6 +341,55 @@ class MemForestMaterializationHandler:
             )
         except Exception:
             log.exception("failed to update materialization job stage", extra={"job_id": envelope.job_id, "stage": stage})
+
+    async def _partial_hydration_shadow_summary(
+        self,
+        latest: Any | None,
+        projection: MaterializationProjection,
+        *,
+        snapshot: ForestMaterializationSnapshot,
+    ) -> dict[str, Any]:
+        if not self._config.enable_partial_hydration_shadow:
+            return {"schema_version": 1, "enabled": False, "supported": False, "reason": "disabled"}
+        if latest is None:
+            return {"schema_version": 1, "enabled": True, "supported": False, "reason": "no_committed_manifest"}
+        plan_summary = _partial_hydration_plan_summary(projection, snapshot=snapshot)
+        if plan_summary["full_hydration_required"]:
+            return {
+                "schema_version": 1,
+                "enabled": True,
+                "supported": False,
+                "reason": "full_hydration_required",
+                "plan": plan_summary,
+            }
+        checker = getattr(self._ingest_core, "check_partial_hydration_from_manifest", None)
+        if checker is None or not callable(checker):
+            return {
+                "schema_version": 1,
+                "enabled": True,
+                "supported": False,
+                "reason": "partial_hydration_checker_missing",
+                "plan": plan_summary,
+            }
+        try:
+            check = await _maybe_await(checker(latest, tree_ids=plan_summary["planned_tree_ids"]))
+            check = dict(check)
+        except Exception as exc:
+            return {
+                "schema_version": 1,
+                "enabled": True,
+                "supported": False,
+                "reason": f"partial_hydration_check_failed:{type(exc).__name__}",
+                "plan": plan_summary,
+            }
+        return {
+            "schema_version": 1,
+            "enabled": True,
+            "supported": bool(check.get("supported")),
+            "complete": bool(check.get("complete")),
+            "plan": plan_summary,
+            "check": check,
+        }
 
     async def _run_ingest_session(
         self,

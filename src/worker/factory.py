@@ -195,6 +195,7 @@ def fixed_materialization_config_factory(
     snapshot_policy: str = "always",
     cloud_checkpoint_hydration_supported: bool = False,
     enable_tree_scoped_projection_writes: bool = False,
+    enable_partial_hydration_shadow: bool = False,
 ) -> Callable[[WriteJobEnvelope], MaterializationHandlerConfig]:
     def build(envelope: WriteJobEnvelope) -> MaterializationHandlerConfig:
         return MaterializationHandlerConfig(
@@ -211,6 +212,7 @@ def fixed_materialization_config_factory(
             snapshot_policy=snapshot_policy,
             cloud_checkpoint_hydration_supported=cloud_checkpoint_hydration_supported,
             enable_tree_scoped_projection_writes=enable_tree_scoped_projection_writes,
+            enable_partial_hydration_shadow=enable_partial_hydration_shadow,
         )
 
     return build
@@ -325,6 +327,7 @@ def build_scoped_materialization_handler_from_env(
             snapshot_policy=values.get("AZURE_MEMFOREST_SNAPSHOT_POLICY", "always"),
             cloud_checkpoint_hydration_supported=cloud_checkpoint_hydration_supported,
             enable_tree_scoped_projection_writes=_env_flag(values.get("AZURE_MEMFOREST_ENABLE_TREE_SCOPED_PROJECTION_WRITES", "")),
+            enable_partial_hydration_shadow=_env_flag(values.get("AZURE_MEMFOREST_ENABLE_PARTIAL_HYDRATION_SHADOW", "")),
         ),
     )
     return MaterializationRuntime(

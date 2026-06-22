@@ -521,6 +521,18 @@ class FakeIngestCore:
         self.ingest_delay = ingest_delay
         self.model_calls = model_calls
         self.last_hydration_result = None
+        self.partial_hydration_checks = []
+        self.partial_hydration_check_result = {
+            "supported": True,
+            "complete": True,
+            "tree_count": 1,
+            "fact_count": 1,
+            "summary_cache_count": 0,
+            "node_embedding_count": 1,
+            "missing_fact_count": 0,
+            "missing_summary_cache_count": 0,
+            "missing_node_embedding_count": 0,
+        }
 
     def ingest_session(self, *, session_id, turns, metadata):
         self.called = True
@@ -560,6 +572,10 @@ class FakeIngestCore:
                     "used_snapshot_fallback": False,
                 },
             )()
+
+    def check_partial_hydration_from_manifest(self, manifest, *, tree_ids):
+        self.partial_hydration_checks.append({"manifest": manifest, "tree_ids": tuple(tree_ids)})
+        return dict(self.partial_hydration_check_result)
 
 
 class FakeDeletionLog:
@@ -1221,6 +1237,12 @@ async def test_materialization_handler_commits_snapshot_pointer_metadata() -> No
     assert metadata["actual_projection_write_plan_counts"]["tree_node_membership"]["upsert"] == 2
     assert metadata["actual_projection_write_plan_counts"]["recall_document"]["upsert"] == 1
     assert metadata["hydration_summary"] == {"available": False}
+    assert metadata["partial_hydration_shadow"] == {
+        "schema_version": 1,
+        "enabled": False,
+        "supported": False,
+        "reason": "disabled",
+    }
 
 
 @pytest.mark.asyncio
@@ -1255,6 +1277,84 @@ async def test_materialization_handler_records_hydration_summary_when_manifest_e
         "missing_node_embedding_count": 0,
         "used_snapshot_fallback": False,
     }
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_records_partial_hydration_shadow_when_enabled() -> None:
+    calls = []
+    manifest_store = FakeManifestStore()
+    manifest_store.latest = ForestManifest(
+        manifest_id="manifest-v1",
+        tenant_id="tenant-1",
+        user_id="user-1",
+        forest_version="v1",
+        generation=1,
+        status="committed",
+        created_at_unix=1.0,
+        metadata={"job_id": "previous", "job_type": "ingest_session", "embedding_model_version": "embed-v1"},
+    )
+    core = FakeIngestCore(_two_tree_incremental_snapshot())
+    handler = _handler(
+        manifest_store=manifest_store,
+        calls=calls,
+        core=core,
+        baseline_provider=MatchingProjectionBaselineProvider(),
+        config=MaterializationHandlerConfig(
+            owner_id="worker-1",
+            embedding_model_version="embed-v1",
+            code_version="test-sha",
+            prompt_config_hash="prompt-hash",
+            lease_renewal_seconds=9999,
+            enable_partial_hydration_shadow=True,
+        ),
+    )
+
+    await handler.handle(_envelope(), {"fencing_token": 1})
+
+    shadow = manifest_store.latest.metadata["partial_hydration_shadow"]
+    assert shadow["enabled"] is True
+    assert shadow["supported"] is True
+    assert shadow["complete"] is True
+    assert shadow["plan"]["full_hydration_required"] is False
+    assert shadow["plan"]["planned_tree_ids"] == ["entity:alice"]
+    assert shadow["check"]["tree_count"] == 1
+    assert core.partial_hydration_checks[0]["tree_ids"] == ("entity:alice",)
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_partial_hydration_shadow_fails_closed_on_unknown_delta() -> None:
+    manifest_store = FakeManifestStore()
+    manifest_store.latest = ForestManifest(
+        manifest_id="manifest-v1",
+        tenant_id="tenant-1",
+        user_id="user-1",
+        forest_version="v1",
+        generation=1,
+        status="committed",
+        created_at_unix=1.0,
+        metadata={"job_id": "previous", "job_type": "ingest_session", "embedding_model_version": "embed-v1"},
+    )
+    core = FakeIngestCore(_snapshot())
+    handler = _handler(
+        manifest_store=manifest_store,
+        core=core,
+        config=MaterializationHandlerConfig(
+            owner_id="worker-1",
+            embedding_model_version="embed-v1",
+            code_version="test-sha",
+            prompt_config_hash="prompt-hash",
+            lease_renewal_seconds=9999,
+            enable_partial_hydration_shadow=True,
+        ),
+    )
+
+    await handler.handle(_envelope(), {"fencing_token": 1})
+
+    shadow = manifest_store.latest.metadata["partial_hydration_shadow"]
+    assert shadow["enabled"] is True
+    assert shadow["supported"] is False
+    assert shadow["reason"] == "full_hydration_required"
+    assert core.partial_hydration_checks == []
 
 
 @pytest.mark.asyncio

@@ -95,12 +95,14 @@ def test_fixed_materialization_config_factory_sets_owner_and_embedding_version()
         owner_id="worker-1",
         embedding_model_version="embed-v1",
         enable_tree_scoped_projection_writes=True,
+        enable_partial_hydration_shadow=True,
     )(_envelope())
 
     assert config.owner_id == "worker-1"
     assert config.embedding_model_version == "embed-v1"
     assert config.snapshot_policy == "always"
     assert config.enable_tree_scoped_projection_writes is True
+    assert config.enable_partial_hydration_shadow is True
 
 
 def test_fixed_materialization_config_factory_fails_closed_for_checkpoint_policy() -> None:

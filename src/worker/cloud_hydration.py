@@ -161,6 +161,46 @@ class CloudStateHydratingUserForestCore:
         self.last_hydration_result = merge_cloud_state_into_user_forest(self.user_forest, state)
         self.user_forest._mark_projection_delta_unknown()
 
+    async def check_partial_hydration_from_manifest(self, manifest: Any, *, tree_ids: list[str] | tuple[str, ...] | set[str]) -> dict[str, Any]:
+        """Load a requested tree subset and report completeness without applying it."""
+
+        if not self.enable_cloud_state_hydration:
+            return {"supported": False, "reason": "cloud_state_hydration_disabled"}
+        requested_tree_ids = tuple(str(tree_id) for tree_id in tree_ids if str(tree_id))
+        if not requested_tree_ids:
+            return {
+                "supported": True,
+                "complete": True,
+                "tree_count": 0,
+                "fact_count": 0,
+                "summary_cache_count": 0,
+                "node_embedding_count": 0,
+                "missing_fact_count": 0,
+                "missing_summary_cache_count": 0,
+                "missing_node_embedding_count": 0,
+            }
+        forest_version = _manifest_forest_version(manifest)
+        tree_store = _store_for_manifest_version(self.tree_store, self.tree_store_factory, forest_version)
+        browse_embedding_store = _store_for_manifest_version(self.browse_embedding_store, self.browse_embedding_store_factory, forest_version)
+        if tree_store is None:
+            return {"supported": False, "reason": "tree_store_missing"}
+        state = await self._load_cloud_state_with_retry(
+            tree_store=tree_store,
+            browse_embedding_store=browse_embedding_store,
+            tree_ids=requested_tree_ids,
+        )
+        return {
+            "supported": True,
+            "complete": not _cloud_state_missing_prerequisites(state),
+            "tree_count": len(state.trees),
+            "fact_count": len(state.facts),
+            "summary_cache_count": len(state.summary_cache),
+            "node_embedding_count": len(state.node_embeddings),
+            "missing_fact_count": len(state.missing_fact_ids),
+            "missing_summary_cache_count": len(state.missing_summary_cache_keys),
+            "missing_node_embedding_count": len(state.missing_node_embedding_ids),
+        }
+
     def ingest_session(self, *, session_id: str, turns: list[dict[str, Any]], metadata: dict[str, Any]) -> Any:
         self.user_forest.ingest_session(session_id, turns)
         return self.user_forest.snapshot_for_materialization()
