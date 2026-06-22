@@ -1201,6 +1201,10 @@ async def test_materialization_handler_commits_snapshot_pointer_metadata() -> No
     assert metadata["projection_tree_scope_shadow"]["mode"] == "shadow_compare"
     assert metadata["projection_tree_scope_shadow"]["comparison_supported"] is False
     assert metadata["projection_tree_scope_shadow"]["reason"] == "full_projection_required"
+    assert metadata["partial_hydration_plan"]["mode"] == "instrumentation_only"
+    assert metadata["partial_hydration_plan"]["full_hydration_required"] is True
+    assert metadata["partial_hydration_plan"]["planned_tree_load_count"] == 1
+    assert metadata["partial_hydration_plan"]["current_full_tree_count"] == 1
     assert set(metadata["materialization_stage_timings_ms"]) >= {
         "hydrate",
         "source_write",
@@ -1280,6 +1284,9 @@ async def test_materialization_handler_records_projection_plan_without_unsafe_li
     assert metadata["projection_tree_scope_shadow"]["comparison_supported"] is True
     assert metadata["projection_tree_scope_shadow"]["divergent"] is True
     assert metadata["projection_tree_scope_shadow"]["by_kind"]["tree_node_membership"]["missing_upsert"] == 2
+    assert metadata["partial_hydration_plan"]["full_hydration_required"] is False
+    assert metadata["partial_hydration_plan"]["planned_tree_load_count"] == 0
+    assert metadata["partial_hydration_plan"]["omitted_tree_count"] == 1
     assert metadata["projection_plan_live_skipped_browse_embedding_count"] == 0
     assert metadata["projection_plan_live_skipped_summary_cache_count"] == 0
     assert "tree_nodes" in calls
@@ -1287,6 +1294,41 @@ async def test_materialization_handler_records_projection_plan_without_unsafe_li
     assert "recall" in calls
     assert "browse_embeddings" in calls
     assert "summary_cache" in calls
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_records_partial_hydration_deleted_tree_plan() -> None:
+    calls = []
+    manifest_store = FakeManifestStore()
+    manifest_store.latest = ForestManifest(
+        manifest_id="manifest-v1",
+        tenant_id="tenant-1",
+        user_id="user-1",
+        forest_version="v1",
+        generation=1,
+        status="committed",
+        created_at_unix=1.0,
+        metadata={"job_id": "previous", "job_type": "ingest_session", "embedding_model_version": "embed-v1"},
+    )
+    handler = _handler(
+        manifest_store=manifest_store,
+        calls=calls,
+        core=FakeIngestCore(_two_tree_incremental_snapshot_with_deleted_tree()),
+        baseline_provider=MatchingProjectionBaselineProvider(),
+    )
+
+    await handler.handle(_envelope(), {"fencing_token": 1})
+
+    plan = manifest_store.latest.metadata["partial_hydration_plan"]
+    assert plan["full_hydration_required"] is False
+    assert plan["current_full_tree_count"] == 2
+    assert plan["projected_surface_tree_count"] == 2
+    assert plan["planned_tree_load_count"] == 2
+    assert plan["planned_tree_ids"] == ["entity:alice", "entity:old"]
+    assert plan["deleted_tree_count"] == 1
+    assert plan["deleted_tree_ids"] == ["entity:old"]
+    assert plan["omitted_tree_count"] == 1
+    assert plan["omitted_tree_ids"] == ["entity:bob"]
 
 
 @pytest.mark.asyncio

@@ -24,7 +24,7 @@ from src.cloud.projection_baseline import (
     build_committed_projection_baseline,
     summary_cache_refs_from_entries,
 )
-from src.cloud.projection_plan import ProjectionRecordRef, ProjectionSkipPlan, browse_embedding_content_hash, filter_projection_refs_to_tree_scope, plan_affected_trees, plan_projection_skip, plan_projection_tree_scope, tree_node_body_content_id
+from src.cloud.projection_plan import ProjectionRecordRef, ProjectionSkipPlan, browse_embedding_content_hash, filter_projection_refs_to_tree_scope, plan_affected_trees, plan_partial_hydration, plan_projection_skip, plan_projection_tree_scope, tree_node_body_content_id
 from src.cloud.schema import SCHEMA_VERSION
 from src.forest.memforest import _content_key
 from src.forest.user_forest import ForestMaterializationSnapshot
@@ -1751,6 +1751,7 @@ def _materialization_fingerprint_metadata(
         "projection_plan_counts": _projection_plan_counts(projection),
         "dirty_path_plan": _dirty_path_plan_summary(projection),
         "projection_tree_scope_plan": _projection_tree_scope_plan_summary(projection),
+        "partial_hydration_plan": _partial_hydration_plan_summary(projection, snapshot=snapshot),
         "projection_tree_scope_shadow": _projection_tree_scope_shadow_summary(
             projection,
             embedding_model_version=embedding_model_version,
@@ -1775,6 +1776,7 @@ def _materialization_fingerprint_metadata(
         "projection_plan_counts": inputs["projection_plan_counts"],
         "dirty_path_plan": inputs["dirty_path_plan"],
         "projection_tree_scope_plan": inputs["projection_tree_scope_plan"],
+        "partial_hydration_plan": inputs["partial_hydration_plan"],
         "projection_tree_scope_shadow": inputs["projection_tree_scope_shadow"],
         "projection_plan_live_skipped_browse_embedding_count": len(projection.projection_skip_plans.get("browse_embedding", ProjectionSkipPlan((), (), ())).unchanged),
         "projection_plan_live_skipped_summary_cache_count": len(projection.projection_skip_plans.get("summary_cache", ProjectionSkipPlan((), (), ())).unchanged),
@@ -1875,6 +1877,40 @@ def _projection_tree_scope_plan_summary(projection: MaterializationProjection) -
         "full_fact_location_ref_count": len(fact_location_refs),
         "full_recall_document_ref_count": len(recall_refs),
         "full_browse_embedding_ref_count": len(browse_refs),
+    }
+
+
+def _partial_hydration_plan_summary(projection: MaterializationProjection, *, snapshot: ForestMaterializationSnapshot) -> dict[str, Any]:
+    all_tree_ids = {
+        str(getattr(record, "tree_id", "") or "")
+        for record in [*projection.stored_nodes, *projection.recall_documents, *projection.browse_embedding_records]
+        if str(getattr(record, "tree_id", "") or "")
+    }
+    plan = plan_partial_hydration(
+        all_tree_ids=all_tree_ids,
+        changed_tree_ids=projection.changed_tree_ids,
+        deleted_tree_ids=projection.deleted_tree_ids,
+    )
+    return {
+        "schema_version": 1,
+        "mode": "instrumentation_only",
+        "full_hydration_required": plan.full_hydration_required,
+        "current_full_tree_count": len(snapshot.trees),
+        "projected_surface_tree_count": len(all_tree_ids),
+        "planned_tree_load_count": len(plan.tree_ids_to_load),
+        "planned_tree_ids": list(plan.tree_ids_to_load[:100]),
+        "omitted_tree_count": len(plan.omitted_tree_ids),
+        "omitted_tree_ids": list(plan.omitted_tree_ids[:100]),
+        "deleted_tree_count": len(plan.deleted_tree_ids),
+        "deleted_tree_ids": list(plan.deleted_tree_ids[:100]),
+        "unknown_changed_tree_count": len(plan.unknown_changed_tree_ids),
+        "unknown_changed_tree_ids": list(plan.unknown_changed_tree_ids[:100]),
+        "id_arrays_truncated": (
+            len(plan.tree_ids_to_load) > 100
+            or len(plan.omitted_tree_ids) > 100
+            or len(plan.deleted_tree_ids) > 100
+            or len(plan.unknown_changed_tree_ids) > 100
+        ),
     }
 
 
