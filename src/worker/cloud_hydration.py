@@ -198,12 +198,20 @@ def _manifest_has_snapshot(manifest: Any) -> bool:
     return bool(metadata.get("snapshot_id") and metadata.get("snapshot_content_sha256"))
 
 
-async def load_memtrees_from_tree_store(tree_store: Any) -> list[MemTree]:
-    """Load committed MemTree structures from a cloud tree-node store."""
+async def load_memtrees_from_tree_store(tree_store: Any, *, tree_ids: list[str] | tuple[str, ...] | set[str] | None = None) -> list[MemTree]:
+    """Load committed MemTree structures from a cloud tree-node store.
 
-    tree_ids = await tree_store.list_tree_ids()
+    ``tree_ids=None`` loads all tree IDs from the store. An explicit iterable is
+    a filter: duplicate IDs are collapsed into sorted canonical order, and an
+    empty iterable intentionally loads no trees.
+    """
+
+    if tree_ids is None:
+        tree_ids_to_load = await tree_store.list_tree_ids()
+    else:
+        tree_ids_to_load = tuple(sorted({str(tree_id) for tree_id in tree_ids if str(tree_id)}))
     trees: list[MemTree] = []
-    for tree_id in tree_ids:
+    for tree_id in tree_ids_to_load:
         stored_nodes = await tree_store.list_nodes_in_tree(tree_id, limit=100000)
         if not stored_nodes:
             continue
@@ -348,10 +356,11 @@ async def load_cloud_hydration_prerequisites(
     tree_store: Any,
     fact_store: Any | None = None,
     summary_cache: Any | None = None,
+    tree_ids: list[str] | tuple[str, ...] | set[str] | None = None,
 ) -> CloudHydrationPrerequisites:
     """Load cloud hydration prerequisite state without changing hot-path behavior."""
 
-    trees = await load_memtrees_from_tree_store(tree_store)
+    trees = await load_memtrees_from_tree_store(tree_store, tree_ids=tree_ids)
     facts: list[Any] = []
     missing_fact_ids: tuple[str, ...] = ()
     if fact_store is not None:
@@ -382,6 +391,7 @@ async def load_cloud_user_forest_state(
     fact_store: Any | None = None,
     summary_cache: Any | None = None,
     browse_embedding_store: Any | None = None,
+    tree_ids: list[str] | tuple[str, ...] | set[str] | None = None,
 ) -> CloudUserForestState:
     """Load cloud state that can be applied to a local ``UserForest`` instance."""
 
@@ -389,6 +399,7 @@ async def load_cloud_user_forest_state(
         tree_store=tree_store,
         fact_store=fact_store,
         summary_cache=summary_cache,
+        tree_ids=tree_ids,
     )
     node_ids = _node_ids_requiring_embeddings(prerequisites.trees)
     node_embeddings: dict[str, list[float]] = {}

@@ -26,11 +26,15 @@ from src.worker.snapshot_hydration import build_user_forest_archive
 class FakeTreeStore:
     def __init__(self, nodes_by_tree):
         self.nodes_by_tree = nodes_by_tree
+        self.list_tree_ids_calls = 0
+        self.requested_tree_ids = []
 
     async def list_tree_ids(self, *, limit=10000):
+        self.list_tree_ids_calls += 1
         return list(self.nodes_by_tree)
 
     async def list_nodes_in_tree(self, tree_id, *, limit=100000):
+        self.requested_tree_ids.append(tree_id)
         return list(self.nodes_by_tree.get(tree_id, []))[:limit]
 
 
@@ -256,6 +260,71 @@ async def test_cloud_hydration_loads_memtrees_from_tree_store() -> None:
 
 
 @pytest.mark.asyncio
+async def test_cloud_hydration_loads_only_requested_memtrees_without_listing_all() -> None:
+    store = FakeTreeStore(
+        {
+            "tree-1": [
+                _node("root", child_ids=("leaf",), tree_id="tree-1"),
+                _node("leaf", parent_id="root", level="L0", child_ids=("fact-1",), fact_ids=("fact-1",), tree_id="tree-1"),
+            ],
+            "tree-2": [
+                _node("root-2", child_ids=("leaf-2",), tree_id="tree-2"),
+                _node("leaf-2", parent_id="root-2", level="L0", child_ids=("fact-2",), fact_ids=("fact-2",), tree_id="tree-2"),
+            ],
+        }
+    )
+
+    trees = await load_memtrees_from_tree_store(store, tree_ids=["tree-2"])
+
+    assert [tree.tree_id for tree in trees] == ["tree-2"]
+    assert store.list_tree_ids_calls == 0
+    assert store.requested_tree_ids == ["tree-2"]
+
+
+@pytest.mark.asyncio
+async def test_cloud_hydration_explicit_tree_ids_are_deduped_and_sorted() -> None:
+    store = FakeTreeStore(
+        {
+            "tree-1": [
+                _node("root", child_ids=("leaf",), tree_id="tree-1"),
+                _node("leaf", parent_id="root", level="L0", child_ids=("fact-1",), fact_ids=("fact-1",), tree_id="tree-1"),
+            ],
+            "tree-2": [
+                _node("root-2", child_ids=("leaf-2",), tree_id="tree-2"),
+                _node("leaf-2", parent_id="root-2", level="L0", child_ids=("fact-2",), fact_ids=("fact-2",), tree_id="tree-2"),
+            ],
+        }
+    )
+
+    trees = await load_memtrees_from_tree_store(store, tree_ids=["tree-2", "tree-2", "tree-1"])
+
+    assert [tree.tree_id for tree in trees] == ["tree-1", "tree-2"]
+    assert store.requested_tree_ids == ["tree-1", "tree-2"]
+
+
+@pytest.mark.asyncio
+async def test_cloud_hydration_empty_explicit_tree_ids_loads_no_trees() -> None:
+    store = FakeTreeStore({"tree-1": [_node("root", tree_id="tree-1")]})
+
+    trees = await load_memtrees_from_tree_store(store, tree_ids=[])
+
+    assert trees == []
+    assert store.list_tree_ids_calls == 0
+    assert store.requested_tree_ids == []
+
+
+@pytest.mark.asyncio
+async def test_cloud_hydration_missing_explicit_tree_id_is_skipped() -> None:
+    store = FakeTreeStore({"tree-1": [_node("root", tree_id="tree-1")]})
+
+    trees = await load_memtrees_from_tree_store(store, tree_ids=["missing-tree"])
+
+    assert trees == []
+    assert store.list_tree_ids_calls == 0
+    assert store.requested_tree_ids == ["missing-tree"]
+
+
+@pytest.mark.asyncio
 async def test_cloud_hydration_uses_leaf_fact_ids_when_child_ids_absent() -> None:
     store = FakeTreeStore(
         {
@@ -439,6 +508,44 @@ async def test_cloud_hydration_loads_user_forest_state_with_browse_embeddings() 
     assert set(state.node_embeddings) == {"root"}
     assert state.missing_fact_ids == ()
     assert state.missing_node_embedding_ids == ()
+
+
+@pytest.mark.asyncio
+async def test_cloud_hydration_state_loads_facts_and_embeddings_for_requested_trees_only() -> None:
+    store = FakeTreeStore(
+        {
+            "tree-1": [
+                _node("root", child_ids=("leaf",), tree_id="tree-1"),
+                _node("leaf", parent_id="root", level="L0", child_ids=("fact_1",), tree_id="tree-1"),
+            ],
+            "tree-2": [
+                _node("root-2", child_ids=("leaf-2",), tree_id="tree-2"),
+                _node("leaf-2", parent_id="root-2", level="L0", child_ids=("fact_2",), tree_id="tree-2"),
+            ],
+        }
+    )
+    dim = 4
+    fact_store = FakeFactStore(
+        {
+            "fact_1": _fact_for_cell("fact_1", dim, session_id="s1", cell_id="s1#cell-1"),
+            "fact_2": _fact_for_cell("fact_2", dim, session_id="s2", cell_id="s2#cell-1"),
+        }
+    )
+    browse_store = FakeBrowseEmbeddingStore({"root-2": _embedding(dim)})
+
+    state = await load_cloud_user_forest_state(
+        tree_store=store,
+        fact_store=fact_store,
+        browse_embedding_store=browse_store,
+        tree_ids=["tree-2"],
+    )
+
+    assert [tree.tree_id for tree in state.trees] == ["tree-2"]
+    assert [fact.fact_id for fact in state.facts] == ["fact_2"]
+    assert fact_store.requested == [["fact_2"]]
+    assert browse_store.requested == [["root-2"]]
+    assert store.list_tree_ids_calls == 0
+    assert store.requested_tree_ids == ["tree-2"]
 
 
 @pytest.mark.asyncio
