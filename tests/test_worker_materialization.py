@@ -666,6 +666,8 @@ def _snapshot_with_route_index_manifest():
             "scene_records": [],
             "cluster_merge_possible": True,
             "suppression_flip_possible": True,
+            "cluster_merge_currently_possible": False,
+            "suppression_currently_possible": False,
         },
     )
 
