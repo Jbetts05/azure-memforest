@@ -11,7 +11,7 @@ import inspect
 import logging
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Mapping, Protocol
 
 from src.cloud.async_batch import run_bounded
@@ -28,12 +28,16 @@ from src.cloud.projection_plan import (
     PartialHydrationPlan,
     ProjectionRecordRef,
     ProjectionSkipPlan,
+    analyze_batch_route_risks,
+    build_fact_route_hints,
     browse_embedding_content_hash,
     filter_projection_refs_to_tree_scope,
     plan_affected_trees,
     plan_partial_hydration,
+    plan_pre_ingest_tree_scope,
     plan_projection_skip,
     plan_projection_tree_scope,
+    route_index_manifest_from_dict,
     tree_node_body_content_id,
 )
 from src.cloud.schema import SCHEMA_VERSION
@@ -310,6 +314,13 @@ class MemForestMaterializationHandler:
                 partial_hydration_shadow=partial_hydration_shadow,
                 partial_hydration_equivalence_shadow=partial_hydration_equivalence_shadow,
             )
+            pre_ingest_scope_prediction = _pre_ingest_scope_prediction_summary(
+                latest=latest,
+                projection=projection,
+                snapshot=snapshot,
+                session_id=envelope.session_id,
+                embedding_model_version=self._config.embedding_model_version,
+            )
             await self._update_job_stage(envelope, fencing_token=fencing_token, stage="write_projection", detail="Writing facts, trees, embeddings, recall documents, and snapshot.", telemetry=telemetry)
             write_projection_started = time.perf_counter()
             projection_metadata = await self._write_projection(
@@ -327,6 +338,7 @@ class MemForestMaterializationHandler:
             projection_metadata["partial_hydration_shadow"] = partial_hydration_shadow
             projection_metadata["partial_hydration_equivalence_shadow"] = partial_hydration_equivalence_shadow
             projection_metadata["partial_hydration_eligibility"] = partial_hydration_eligibility
+            projection_metadata["pre_ingest_scope_prediction"] = pre_ingest_scope_prediction
             projection_metadata["pre_ingest_hydration_strategy"] = pre_ingest_hydration_strategy
             try:
                 await self._stores.lease_store.assert_current(lease)
@@ -2190,6 +2202,86 @@ def _partial_hydration_eligibility_summary(
             "eligible": False,
             "reason": f"exception:{type(exc).__name__}",
         }
+
+
+def _pre_ingest_scope_prediction_summary(
+    *,
+    latest: Any | None,
+    projection: MaterializationProjection,
+    snapshot: ForestMaterializationSnapshot,
+    session_id: str,
+    embedding_model_version: str,
+) -> dict[str, Any]:
+    try:
+        if latest is None:
+            return {"schema_version": 1, "mode": "shadow_compare", "supported": False, "reason": "no_committed_manifest"}
+        route_index_raw = dict((getattr(latest, "metadata", {}) or {}).get("route_index_manifest") or {})
+        if not route_index_raw:
+            return {"schema_version": 1, "mode": "shadow_compare", "supported": False, "reason": "route_index_manifest_missing"}
+        route_index = route_index_manifest_from_dict(route_index_raw)
+        touched_facts = _facts_touched_by_session(snapshot, session_id=session_id)
+        hints = build_fact_route_hints(route_index=route_index, facts=touched_facts)
+        risks = analyze_batch_route_risks(route_index=route_index, new_fact_route_hints=hints)
+        planned_route_index = replace(
+            route_index,
+            cluster_merge_possible=risks.cluster_merge_possible,
+            suppression_flip_possible=risks.suppression_flip_possible,
+        )
+        scope = plan_pre_ingest_tree_scope(
+            route_index=planned_route_index,
+            new_fact_route_hints=hints,
+            embedding_model_version=embedding_model_version,
+            deleted_tree_ids=projection.deleted_tree_ids,
+        )
+        if projection.changed_tree_ids is None:
+            actual_tree_ids: set[str] | None = None
+            missing_tree_ids: set[str] = set()
+        else:
+            actual_tree_ids = set(projection.changed_tree_ids) | set(projection.deleted_tree_ids)
+            missing_tree_ids = actual_tree_ids - set(scope.tree_ids_to_load)
+        return {
+            "schema_version": 1,
+            "mode": "shadow_compare",
+            "input_basis": "post_ingest_canonical_facts",
+            "switch_readiness": "not_authoritative",
+            "supported": True,
+            "full_hydration_required": scope.full_hydration_required,
+            "covers_oracle_canonical_input": actual_tree_ids is not None and not missing_tree_ids,
+            "under_selected_without_escalation": actual_tree_ids is not None and not scope.full_hydration_required and bool(missing_tree_ids),
+            "reason": "eligible" if actual_tree_ids is not None and not missing_tree_ids else "under_selected_or_unknown_delta",
+            "touched_fact_count": len(touched_facts),
+            "hint_count": len(hints),
+            "planned_tree_load_count": len(scope.tree_ids_to_load),
+            "planned_tree_ids": list(scope.tree_ids_to_load[:100]),
+            "actual_tree_count": None if actual_tree_ids is None else len(actual_tree_ids),
+            "actual_tree_ids": None if actual_tree_ids is None else sorted(actual_tree_ids)[:100],
+            "missing_tree_count": len(missing_tree_ids),
+            "missing_tree_ids": sorted(missing_tree_ids)[:100],
+            "escalation_reasons": list(scope.escalation_reasons),
+            "cluster_merge_possible": risks.cluster_merge_possible,
+            "suppression_flip_possible": risks.suppression_flip_possible,
+            "id_arrays_truncated": (
+                len(scope.tree_ids_to_load) > 100
+                or (actual_tree_ids is not None and len(actual_tree_ids) > 100)
+                or len(missing_tree_ids) > 100
+            ),
+        }
+    except Exception as exc:
+        return {
+            "schema_version": 1,
+            "mode": "shadow_compare",
+            "supported": False,
+            "reason": f"exception:{type(exc).__name__}",
+        }
+
+
+def _facts_touched_by_session(snapshot: ForestMaterializationSnapshot, *, session_id: str) -> list[Any]:
+    touched = []
+    for fact in snapshot.facts:
+        occurrences = getattr(fact, "occurrences", ()) or ()
+        if any(str(getattr(occ, "session_id", "") or "") == str(session_id) for occ in occurrences):
+            touched.append(fact)
+    return touched
 
 
 def _partial_hydration_check_summary(partial_hydration_shadow: Mapping[str, Any]) -> dict[str, Any] | None:

@@ -16,6 +16,7 @@ from src.evaluation.incremental_cloud_validation import ProjectionWriteCounts, c
 from src.forest.user_forest import ForestMaterializationSnapshot
 from src.service.auth import ActorContext, TenantContext
 from src.service.jobs import build_write_job_envelope
+from src.utils.types import FactOccurrence, ManagedFact
 from src.worker.consumer import TransientHandlerError
 from src.observability.model_telemetry import record_model_call
 from src.worker.progress import JobProgressBudget
@@ -668,6 +669,100 @@ def _snapshot_with_route_index_manifest():
             "suppression_flip_possible": True,
             "cluster_merge_currently_possible": False,
             "suppression_currently_possible": False,
+        },
+    )
+
+
+def _managed_fact_for_session(fact_id: str, *, session_id: str = "session-1") -> ManagedFact:
+    return ManagedFact(
+        fact_id=fact_id,
+        fact_text=f"{fact_id} text",
+        embedding_id=f"emb-{fact_id}",
+        origin="user",
+        semantic_role="preference",
+        entities=["Alice"],
+        topics=["topic"],
+        attribute_keys=[],
+        domain_keys=["travel"],
+        collection_keys=[],
+        detail_level="atomic",
+        confidence=1.0,
+        first_session_id=session_id,
+        first_cell_id=f"{session_id}#cell_0000",
+        occurrences=[
+            FactOccurrence(
+                session_id=session_id,
+                cell_id=f"{session_id}#cell_0000",
+                item_id=f"item-{fact_id}",
+                source_turn_ids=[f"{session_id}:0"],
+                source_spans=[],
+                participants=["user"],
+                time_text="",
+                time_start=1.0,
+                time_end=1.0,
+            )
+        ],
+        metadata={"embedding": [1.0, 0.0]},
+        time_start=1.0,
+        time_end=1.0,
+    )
+
+
+def _two_tree_incremental_snapshot_with_fact_and_route_manifest():
+    snapshot = _two_tree_incremental_snapshot()
+    return replace(
+        snapshot,
+        facts=[_managed_fact_for_session("fact-1")],
+        route_index_manifest={
+            "schema_version": 1,
+            "embedding_model_version": "embed-v1",
+            "entity_active_min_facts": 3,
+            "entity_active_min_sessions": 2,
+            "entity_suppress_below_facts": 2,
+            "scene_assign_threshold": 0.7,
+            "scene_secondary_threshold": 0.55,
+            "scene_spawn_threshold": 0.45,
+            "scene_max_cluster_size": 60,
+            "scene_merge_threshold": 0.88,
+            "scene_max_time_gap_days": 45.0,
+            "scene_bootstrap_initialized": True,
+            "scene_scores_include_time_bonus": True,
+            "cluster_merge_possible": False,
+            "suppression_flip_possible": False,
+            "cluster_merge_currently_possible": False,
+            "suppression_currently_possible": False,
+            "cluster_merge_pair_count": 0,
+            "suppression_candidate_count": 0,
+            "entity_records": [
+                {
+                    "entity_key": "user",
+                    "tree_id": "entity:user",
+                    "state": "active",
+                    "distinct_fact_count": 0,
+                    "distinct_session_count": 0,
+                    "fact_ids": [],
+                },
+                {
+                    "entity_key": "alice",
+                    "tree_id": "entity:alice",
+                    "state": "active",
+                    "distinct_fact_count": 3,
+                    "distinct_session_count": 2,
+                    "fact_ids": ["fact-old-a", "fact-old-b", "fact-old-c"],
+                },
+            ],
+            "scene_records": [
+                {
+                    "cluster_id": "scene:travel",
+                    "tree_id": "tree:scene:travel",
+                    "scope_key": "travel",
+                    "fact_count": 5,
+                    "centroid_hash": "centroid-a",
+                    "centroid": [1.0, 0.0],
+                    "latest_fact_time": 1.0,
+                    "fact_ids": ["fact-old"],
+                }
+            ],
         },
     )
 
@@ -1753,6 +1848,76 @@ async def test_materialization_handler_partial_hydration_eligibility_requires_co
     assert eligibility["eligible"] is False
     assert eligibility["reason"] == "missing_referenced_facts"
     assert eligibility["check"]["missing_fact_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_records_pre_ingest_scope_prediction_when_route_metadata_exists() -> None:
+    snapshot = _two_tree_incremental_snapshot_with_fact_and_route_manifest()
+    manifest_store = FakeManifestStore()
+    manifest_store.latest = ForestManifest(
+        manifest_id="manifest-v1",
+        tenant_id="tenant-1",
+        user_id="user-1",
+        forest_version="v1",
+        generation=1,
+        status="committed",
+        created_at_unix=1.0,
+        metadata={
+            "job_id": "previous",
+            "job_type": "ingest_session",
+            "embedding_model_version": "embed-v1",
+            "route_index_manifest": snapshot.route_index_manifest,
+        },
+    )
+    handler = _handler(
+        manifest_store=manifest_store,
+        core=FakeIngestCore(snapshot),
+        baseline_provider=MatchingProjectionBaselineProvider(),
+    )
+
+    await handler.handle(_envelope(), {"fencing_token": 1})
+
+    prediction = manifest_store.latest.metadata["pre_ingest_scope_prediction"]
+    assert prediction["supported"] is True
+    assert prediction["input_basis"] == "post_ingest_canonical_facts"
+    assert prediction["switch_readiness"] == "not_authoritative"
+    assert prediction["covers_oracle_canonical_input"] is True
+    assert prediction["under_selected_without_escalation"] is False
+    assert prediction["touched_fact_count"] == 1
+    assert prediction["hint_count"] == 1
+    assert prediction["actual_tree_ids"] == ["entity:alice"]
+    assert prediction["missing_tree_count"] == 0
+    assert set(prediction["planned_tree_ids"]) >= {"entity:alice", "entity:user", "tree:scene:travel"}
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_pre_ingest_scope_prediction_requires_committed_route_metadata() -> None:
+    manifest_store = FakeManifestStore()
+    manifest_store.latest = ForestManifest(
+        manifest_id="manifest-v1",
+        tenant_id="tenant-1",
+        user_id="user-1",
+        forest_version="v1",
+        generation=1,
+        status="committed",
+        created_at_unix=1.0,
+        metadata={"job_id": "previous", "job_type": "ingest_session", "embedding_model_version": "embed-v1"},
+    )
+    handler = _handler(
+        manifest_store=manifest_store,
+        core=FakeIngestCore(_two_tree_incremental_snapshot()),
+        baseline_provider=MatchingProjectionBaselineProvider(),
+    )
+
+    await handler.handle(_envelope(), {"fencing_token": 1})
+
+    prediction = manifest_store.latest.metadata["pre_ingest_scope_prediction"]
+    assert prediction == {
+        "schema_version": 1,
+        "mode": "shadow_compare",
+        "supported": False,
+        "reason": "route_index_manifest_missing",
+    }
 
 
 @pytest.mark.asyncio
