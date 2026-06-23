@@ -410,7 +410,7 @@ class MemForestMaterializationHandler:
                 "schema_version": 1,
                 "enabled": True,
                 "supported": False,
-                "reason": f"partial_hydration_check_failed:{type(exc).__name__}",
+                "reason": f"partial_hydration_check_failed:{type(exc).__name__}:{exc}",
                 "plan": plan_summary,
             }
         return {
@@ -485,7 +485,7 @@ class MemForestMaterializationHandler:
                 "schema_version": 1,
                 "enabled": True,
                 "supported": False,
-                "reason": f"partial_hydration_equivalence_check_failed:{type(exc).__name__}",
+                "reason": f"partial_hydration_equivalence_check_failed:{type(exc).__name__}:{exc}",
                 "plan": plan_summary,
             }
         return {
@@ -2128,7 +2128,10 @@ def _partial_hydration_eligibility_summary(
             summary["reason"] = "whole_forest_delta"
             return summary
         if not bool(partial_hydration_shadow.get("supported")):
-            summary["reason"] = _partial_hydration_reason(str(partial_hydration_shadow.get("reason") or "unsupported"))
+            check_reason = ""
+            if isinstance(check, Mapping):
+                check_reason = str(check.get("reason") or "")
+            summary["reason"] = _partial_hydration_reason(str(partial_hydration_shadow.get("reason") or check_reason or "unsupported"))
             return summary
         if not bool(partial_hydration_shadow.get("complete")):
             summary["reason"] = _partial_hydration_incomplete_reason(partial_hydration_shadow)
@@ -2159,6 +2162,7 @@ def _partial_hydration_check_summary(partial_hydration_shadow: Mapping[str, Any]
     return {
         "supported": bool(partial_hydration_shadow.get("supported")),
         "complete": bool(partial_hydration_shadow.get("complete")),
+        "reason": check.get("reason"),
         "tree_count": _optional_int(check.get("tree_count")),
         "loaded_fact_count": _optional_int(check.get("fact_count")),
         "missing_fact_count": _optional_int(check.get("missing_fact_count")),
@@ -2187,15 +2191,24 @@ def _loaded_subset_contains_changed(changed_tree_ids: Any, plan_summary: Mapping
 
 
 def _partial_hydration_reason(reason: str) -> str:
-    if "missing" in reason:
-        return "missing_stores"
-    if reason.startswith("partial_hydration_check_failed:"):
-        return f"exception:{reason.removeprefix('partial_hydration_check_failed:')}"
-    if reason.startswith("partial_hydration_equivalence_check_failed:"):
-        return f"exception:{reason.removeprefix('partial_hydration_equivalence_check_failed:')}"
-    if "list_facts" in reason or "canonical fact list exceeds" in reason:
+    reason_text = str(reason or "")
+    reason_lower = reason_text.lower()
+    if reason_text.startswith("partial_hydration_check_failed:"):
+        return _partial_hydration_exception_reason(reason_text.removeprefix("partial_hydration_check_failed:"))
+    if reason_text.startswith("partial_hydration_equivalence_check_failed:"):
+        return _partial_hydration_exception_reason(reason_text.removeprefix("partial_hydration_equivalence_check_failed:"))
+    if "canonical fact list exceeds" in reason_lower:
         return "list_facts_cap"
-    return reason or "unsupported"
+    if reason_text.endswith("_store_missing"):
+        return "missing_stores"
+    return reason_text or "unsupported"
+
+
+def _partial_hydration_exception_reason(payload: str) -> str:
+    if "canonical fact list exceeds" in str(payload or "").lower():
+        return "list_facts_cap"
+    error_type = str(payload or "").split(":", 1)[0]
+    return f"exception:{error_type or 'Exception'}"
 
 
 def _partial_hydration_incomplete_reason(partial_hydration_shadow: Mapping[str, Any]) -> str:

@@ -524,6 +524,8 @@ class FakeIngestCore:
         self.partial_hydration_checks = []
         self.partial_hydration_equivalence_checks = []
         self.partial_hydration_equivalence_snapshot = snapshot
+        self.partial_hydration_check_exception = None
+        self.partial_hydration_equivalence_exception = None
         self.partial_hydration_check_result = {
             "supported": True,
             "complete": True,
@@ -576,10 +578,14 @@ class FakeIngestCore:
             )()
 
     def check_partial_hydration_from_manifest(self, manifest, *, tree_ids):
+        if self.partial_hydration_check_exception is not None:
+            raise self.partial_hydration_check_exception
         self.partial_hydration_checks.append({"manifest": manifest, "tree_ids": tuple(tree_ids)})
         return dict(self.partial_hydration_check_result)
 
     def partial_hydration_shadow_snapshot_from_manifest(self, manifest, *, tree_ids, session_id, turns, metadata):
+        if self.partial_hydration_equivalence_exception is not None:
+            raise self.partial_hydration_equivalence_exception
         self.partial_hydration_equivalence_checks.append(
             {
                 "manifest": manifest,
@@ -1655,6 +1661,181 @@ async def test_materialization_handler_partial_hydration_eligibility_requires_co
     assert eligibility["eligible"] is False
     assert eligibility["reason"] == "missing_referenced_facts"
     assert eligibility["check"]["missing_fact_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_partial_hydration_eligibility_covers_deleted_tree_scope() -> None:
+    manifest_store = FakeManifestStore()
+    manifest_store.latest = ForestManifest(
+        manifest_id="manifest-v1",
+        tenant_id="tenant-1",
+        user_id="user-1",
+        forest_version="v1",
+        generation=1,
+        status="committed",
+        created_at_unix=1.0,
+        metadata={"job_id": "previous", "job_type": "ingest_session", "embedding_model_version": "embed-v1"},
+    )
+    snapshot = _two_tree_incremental_snapshot_with_deleted_tree()
+    core = FakeIngestCore(snapshot)
+    core.partial_hydration_equivalence_snapshot = replace(snapshot, baseline_forest_version=None)
+    handler = _handler(
+        manifest_store=manifest_store,
+        core=core,
+        baseline_provider=MatchingProjectionBaselineProvider(),
+        config=MaterializationHandlerConfig(
+            owner_id="worker-1",
+            embedding_model_version="embed-v1",
+            code_version="test-sha",
+            prompt_config_hash="prompt-hash",
+            lease_renewal_seconds=9999,
+            enable_partial_hydration_shadow=True,
+            enable_partial_hydration_equivalence_shadow=True,
+        ),
+    )
+
+    await handler.handle(_envelope(), {"fencing_token": 1})
+
+    eligibility = manifest_store.latest.metadata["partial_hydration_eligibility"]
+    assert eligibility["eligible"] is True
+    assert eligibility["reason"] == "eligible"
+    assert eligibility["plan"]["planned_tree_ids"] == ["entity:alice", "entity:old"]
+    assert eligibility["plan"]["deleted_tree_ids"] == ["entity:old"]
+    assert core.partial_hydration_checks[0]["tree_ids"] == ("entity:alice", "entity:old")
+    assert core.partial_hydration_equivalence_checks[0]["tree_ids"] == ("entity:alice", "entity:old")
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_partial_hydration_eligibility_rejects_whole_forest_delta() -> None:
+    manifest_store = FakeManifestStore()
+    manifest_store.latest = ForestManifest(
+        manifest_id="manifest-v1",
+        tenant_id="tenant-1",
+        user_id="user-1",
+        forest_version="v1",
+        generation=1,
+        status="committed",
+        created_at_unix=1.0,
+        metadata={"job_id": "previous", "job_type": "ingest_session", "embedding_model_version": "embed-v1"},
+    )
+    snapshot = _many_changed_tree_snapshot(2)
+    core = FakeIngestCore(snapshot)
+    core.partial_hydration_equivalence_snapshot = replace(snapshot, baseline_forest_version=None)
+    handler = _handler(
+        manifest_store=manifest_store,
+        core=core,
+        baseline_provider=MatchingProjectionBaselineProvider(),
+        config=MaterializationHandlerConfig(
+            owner_id="worker-1",
+            embedding_model_version="embed-v1",
+            code_version="test-sha",
+            prompt_config_hash="prompt-hash",
+            lease_renewal_seconds=9999,
+            enable_partial_hydration_shadow=True,
+            enable_partial_hydration_equivalence_shadow=True,
+        ),
+    )
+
+    await handler.handle(_envelope(), {"fencing_token": 1})
+
+    eligibility = manifest_store.latest.metadata["partial_hydration_eligibility"]
+    assert eligibility["eligible"] is False
+    assert eligibility["reason"] == "whole_forest_delta"
+    assert eligibility["plan"]["planned_tree_load_count"] == 2
+    assert eligibility["plan"]["omitted_tree_count"] == 0
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_partial_hydration_eligibility_records_unsupported_and_cap_reasons() -> None:
+    for reason, expected in [("tree_store_missing", "missing_stores")]:
+        manifest_store = FakeManifestStore()
+        manifest_store.latest = ForestManifest(
+            manifest_id="manifest-v1",
+            tenant_id="tenant-1",
+            user_id="user-1",
+            forest_version="v1",
+            generation=1,
+            status="committed",
+            created_at_unix=1.0,
+            metadata={"job_id": "previous", "job_type": "ingest_session", "embedding_model_version": "embed-v1"},
+        )
+        core = FakeIngestCore(_two_tree_incremental_snapshot())
+        core.partial_hydration_equivalence_snapshot = replace(
+            _two_tree_incremental_snapshot(),
+            baseline_forest_version=None,
+        )
+        core.partial_hydration_check_result = {
+            **core.partial_hydration_check_result,
+            "supported": False,
+            "reason": reason,
+        }
+        handler = _handler(
+            manifest_store=manifest_store,
+            core=core,
+            baseline_provider=MatchingProjectionBaselineProvider(),
+            config=MaterializationHandlerConfig(
+                owner_id="worker-1",
+                embedding_model_version="embed-v1",
+                code_version="test-sha",
+                prompt_config_hash="prompt-hash",
+                lease_renewal_seconds=9999,
+                enable_partial_hydration_shadow=True,
+                enable_partial_hydration_equivalence_shadow=True,
+            ),
+        )
+
+        await handler.handle(_envelope(), {"fencing_token": 1})
+
+        eligibility = manifest_store.latest.metadata["partial_hydration_eligibility"]
+        assert eligibility["eligible"] is False
+        assert eligibility["reason"] == expected
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_partial_hydration_eligibility_records_check_and_equivalence_exceptions() -> None:
+    for check_exception, equivalence_exception, expected in [
+        (ValueError("bad check"), None, "exception:ValueError"),
+        (ValueError("canonical fact list exceeds limit 100000"), None, "list_facts_cap"),
+        (None, RuntimeError("bad equivalence"), "exception:RuntimeError"),
+    ]:
+        manifest_store = FakeManifestStore()
+        manifest_store.latest = ForestManifest(
+            manifest_id="manifest-v1",
+            tenant_id="tenant-1",
+            user_id="user-1",
+            forest_version="v1",
+            generation=1,
+            status="committed",
+            created_at_unix=1.0,
+            metadata={"job_id": "previous", "job_type": "ingest_session", "embedding_model_version": "embed-v1"},
+        )
+        core = FakeIngestCore(_two_tree_incremental_snapshot())
+        core.partial_hydration_equivalence_snapshot = replace(
+            _two_tree_incremental_snapshot(),
+            baseline_forest_version=None,
+        )
+        core.partial_hydration_check_exception = check_exception
+        core.partial_hydration_equivalence_exception = equivalence_exception
+        handler = _handler(
+            manifest_store=manifest_store,
+            core=core,
+            baseline_provider=MatchingProjectionBaselineProvider(),
+            config=MaterializationHandlerConfig(
+                owner_id="worker-1",
+                embedding_model_version="embed-v1",
+                code_version="test-sha",
+                prompt_config_hash="prompt-hash",
+                lease_renewal_seconds=9999,
+                enable_partial_hydration_shadow=True,
+                enable_partial_hydration_equivalence_shadow=True,
+            ),
+        )
+
+        await handler.handle(_envelope(), {"fencing_token": 1})
+
+        eligibility = manifest_store.latest.metadata["partial_hydration_eligibility"]
+        assert eligibility["eligible"] is False
+        assert eligibility["reason"] == expected
 
 
 @pytest.mark.asyncio
