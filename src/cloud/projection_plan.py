@@ -147,6 +147,10 @@ class RouteIndexManifest:
     scene_records: tuple[SceneRouteRecord, ...] = ()
     cluster_merge_possible: bool = False
     suppression_flip_possible: bool = False
+    cluster_merge_currently_possible: bool = False
+    suppression_currently_possible: bool = False
+    cluster_merge_pair_count: int = 0
+    suppression_candidate_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,6 +185,16 @@ class PreIngestTreeScope:
         predicted = set(self.predicted_entity_tree_ids) | set(self.predicted_scene_tree_ids) | set(self.deleted_tree_ids)
         if not predicted.issubset(set(self.tree_ids_to_load)):
             raise ValueError("tree_ids_to_load must include predicted entity, scene, and deleted trees")
+
+
+@dataclass(frozen=True, slots=True)
+class RouteRiskFlags:
+    """Current router risk diagnostics; not sufficient to authorize hydration."""
+
+    cluster_merge_possible: bool
+    suppression_flip_possible: bool
+    merge_pair_count: int = 0
+    suppression_candidate_count: int = 0
 
 
 def plan_projection_skip(
@@ -432,13 +446,17 @@ def build_route_index_manifest(
     scene_router: Any,
     tree_config: Any,
     embedding_model_version: str,
-    cluster_merge_possible: bool = True,
-    suppression_flip_possible: bool = True,
+    risk_flags: RouteRiskFlags | None = None,
 ) -> RouteIndexManifest:
     """Project live router state into durable pre-ingest planning metadata."""
 
     entity_cfg = tree_config.entity
     scene_cfg = tree_config.scene
+    risks = risk_flags or compute_route_risk_flags(
+        entity_router=entity_router,
+        scene_router=scene_router,
+        tree_config=tree_config,
+    )
     entity_records = tuple(
         sorted(
             (
@@ -482,8 +500,48 @@ def build_route_index_manifest(
         scene_scores_include_time_bonus=True,
         entity_records=tuple(entity_records),
         scene_records=tuple(scene_records),
-        cluster_merge_possible=bool(cluster_merge_possible),
-        suppression_flip_possible=bool(suppression_flip_possible),
+        # Forward-looking batch risk is not proven by current router state, so
+        # planner-facing risk flags remain fail-closed until a batch analyzer
+        # computes them explicitly.
+        cluster_merge_possible=True,
+        suppression_flip_possible=True,
+        cluster_merge_currently_possible=bool(risks.cluster_merge_possible),
+        suppression_currently_possible=bool(risks.suppression_flip_possible),
+        cluster_merge_pair_count=int(risks.merge_pair_count),
+        suppression_candidate_count=int(risks.suppression_candidate_count),
+    )
+
+
+def compute_route_risk_flags(
+    *,
+    entity_router: Any,
+    scene_router: Any,
+    tree_config: Any,
+) -> RouteRiskFlags:
+    """Compute current router risk diagnostics; future batch risk still fails closed."""
+
+    merge_pairs = list(scene_router.merge_check())
+    scene_fact_sets = []
+    for cluster_id in scene_router.all_cluster_ids():
+        cluster = scene_router.get_cluster(cluster_id)
+        if cluster is not None and getattr(cluster, "fact_ids", None):
+            scene_fact_sets.append(set(cluster.fact_ids))
+    suppression_candidates = []
+    for candidate in entity_router.iter_candidates():
+        if getattr(candidate, "state", "") != "active":
+            continue
+        if getattr(candidate, "entity_key", "") == "user":
+            continue
+        if int(getattr(candidate, "distinct_fact_count", 0)) > int(tree_config.entity.suppress_below_facts):
+            continue
+        fact_ids = set(getattr(candidate, "fact_ids", ()) or ())
+        if any(fact_ids and fact_ids.issubset(scene_fact_ids) for scene_fact_ids in scene_fact_sets):
+            suppression_candidates.append(getattr(candidate, "entity_key", ""))
+    return RouteRiskFlags(
+        cluster_merge_possible=bool(merge_pairs),
+        suppression_flip_possible=bool(suppression_candidates),
+        merge_pair_count=len(merge_pairs),
+        suppression_candidate_count=len(suppression_candidates),
     )
 
 
@@ -524,6 +582,10 @@ def route_index_manifest_from_dict(value: Mapping[str, Any]) -> RouteIndexManife
         ),
         cluster_merge_possible=_fail_closed_bool(value, "cluster_merge_possible"),
         suppression_flip_possible=_fail_closed_bool(value, "suppression_flip_possible"),
+        cluster_merge_currently_possible=bool(value.get("cluster_merge_currently_possible")),
+        suppression_currently_possible=bool(value.get("suppression_currently_possible")),
+        cluster_merge_pair_count=int(value.get("cluster_merge_pair_count") or 0),
+        suppression_candidate_count=int(value.get("suppression_candidate_count") or 0),
     )
 
 
@@ -545,6 +607,10 @@ def route_index_manifest_to_dict(manifest: RouteIndexManifest) -> dict[str, Any]
         "scene_scores_include_time_bonus": manifest.scene_scores_include_time_bonus,
         "cluster_merge_possible": manifest.cluster_merge_possible,
         "suppression_flip_possible": manifest.suppression_flip_possible,
+        "cluster_merge_currently_possible": manifest.cluster_merge_currently_possible,
+        "suppression_currently_possible": manifest.suppression_currently_possible,
+        "cluster_merge_pair_count": manifest.cluster_merge_pair_count,
+        "suppression_candidate_count": manifest.suppression_candidate_count,
         "entity_records": [
             {
                 "entity_key": record.entity_key,
@@ -583,8 +649,6 @@ def route_index_manifest_matches_router_state(
         scene_router=scene_router,
         tree_config=tree_config,
         embedding_model_version=embedding_model_version,
-        cluster_merge_possible=manifest.cluster_merge_possible,
-        suppression_flip_possible=manifest.suppression_flip_possible,
     )
     return current == manifest
 

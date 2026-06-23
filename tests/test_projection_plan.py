@@ -11,6 +11,8 @@ from src.cloud.projection_plan import (
     ProjectionRecordRef,
     ProjectionSkipPlan,
     RouteIndexManifest,
+    RouteRiskFlags,
+    compute_route_risk_flags,
     route_index_manifest_from_dict,
     route_index_manifest_matches_router_state,
     route_index_manifest_to_dict,
@@ -24,6 +26,7 @@ from src.cloud.projection_plan import (
     tree_node_body_content_id,
 )
 from src.config.config import load_default_config
+from src.build.tree_types import EntityCandidate, SceneCluster
 from src.utils.types import FactOccurrence, ManagedFact
 
 
@@ -308,8 +311,7 @@ def test_build_route_index_manifest_projects_live_router_state() -> None:
         scene_router=scene_router,
         tree_config=config.tree,
         embedding_model_version="embed-v1",
-        cluster_merge_possible=False,
-        suppression_flip_possible=False,
+        risk_flags=RouteRiskFlags(cluster_merge_possible=False, suppression_flip_possible=False),
     )
 
     assert manifest.embedding_model_version == "embed-v1"
@@ -320,6 +322,10 @@ def test_build_route_index_manifest_projects_live_router_state() -> None:
     assert manifest.scene_max_cluster_size == config.tree.scene.max_cluster_size
     assert manifest.scene_max_time_gap_days == config.tree.scene.max_time_gap_days
     assert manifest.scene_scores_include_time_bonus is True
+    assert manifest.cluster_merge_possible is True
+    assert manifest.suppression_flip_possible is True
+    assert manifest.cluster_merge_currently_possible is False
+    assert manifest.suppression_currently_possible is False
     alice = next(record for record in manifest.entity_records if record.entity_key == "alice")
     assert alice.tree_id == "entity:alice"
     assert alice.state == "active"
@@ -351,6 +357,80 @@ def test_route_index_manifest_from_dict_defaults_missing_risk_flags_to_fail_clos
 
     assert restored.cluster_merge_possible is True
     assert restored.suppression_flip_possible is True
+
+
+def test_compute_route_risk_flags_detects_scene_merge_and_suppression_risks() -> None:
+    from src.build.entity_router import EntityRouter
+    from src.build.scene_router import SceneRouter
+
+    config = load_default_config()
+    entity_router = EntityRouter(config=config.tree.entity)
+    entity_router._candidates = {
+        "alice": EntityCandidate(
+            entity_key="alice",
+            display_label="Alice",
+            support_count=2,
+            distinct_fact_count=2,
+            distinct_session_count=2,
+            first_seen_at=1.0,
+            last_seen_at=2.0,
+            fact_ids=["fact-1", "fact-2"],
+            session_ids=["s1", "s2"],
+            state="active",
+        )
+    }
+    scene_router = SceneRouter(embedding_client=FakeEmbeddingClient(), config=config.tree.scene)
+    scene_router.add_cluster(
+        SceneCluster(
+            cluster_id="scene:a",
+            label="A",
+            scope_key="travel",
+            centroid=[1.0, 0.0],
+            fact_count=2,
+            fact_ids=["fact-1", "fact-2"],
+            created_at=1.0,
+            updated_at=1.0,
+            latest_fact_time=1.0,
+            parent_cluster_id=None,
+        )
+    )
+    scene_router.add_cluster(
+        SceneCluster(
+            cluster_id="scene:b",
+            label="B",
+            scope_key="travel",
+            centroid=[1.0, 0.0],
+            fact_count=1,
+            fact_ids=["fact-3"],
+            created_at=1.0,
+            updated_at=1.0,
+            latest_fact_time=1.0,
+            parent_cluster_id=None,
+        )
+    )
+
+    risks = compute_route_risk_flags(
+        entity_router=entity_router,
+        scene_router=scene_router,
+        tree_config=config.tree,
+    )
+
+    assert risks.cluster_merge_possible is True
+    assert risks.merge_pair_count == 1
+    assert risks.suppression_flip_possible is True
+    assert risks.suppression_candidate_count == 1
+    manifest = build_route_index_manifest(
+        entity_router=entity_router,
+        scene_router=scene_router,
+        tree_config=config.tree,
+        embedding_model_version="embed-v1",
+    )
+    assert manifest.cluster_merge_possible is True
+    assert manifest.suppression_flip_possible is True
+    assert manifest.cluster_merge_currently_possible is True
+    assert manifest.suppression_currently_possible is True
+    assert manifest.cluster_merge_pair_count == 1
+    assert manifest.suppression_candidate_count == 1
 
 
 def test_filter_projection_refs_to_tree_scope_keeps_only_tree_scoped_records() -> None:
@@ -431,6 +511,12 @@ def _route_index(**overrides) -> RouteIndexManifest:
         "scene_max_time_gap_days": 45.0,
         "scene_bootstrap_initialized": True,
         "scene_scores_include_time_bonus": True,
+        "cluster_merge_possible": False,
+        "suppression_flip_possible": False,
+        "cluster_merge_currently_possible": False,
+        "suppression_currently_possible": False,
+        "cluster_merge_pair_count": 0,
+        "suppression_candidate_count": 0,
         "entity_records": (
             EntityRouteRecord("alice", "entity:alice", "active", 3, 2),
             EntityRouteRecord("bob", "entity:bob", "lazy", 2, 1),

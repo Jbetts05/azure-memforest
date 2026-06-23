@@ -252,6 +252,8 @@ def test_user_forest_materialization_snapshot_includes_route_index_manifest(tmp_
     assert route_index["scene_scores_include_time_bonus"] is True
     assert route_index["cluster_merge_possible"] is True
     assert route_index["suppression_flip_possible"] is True
+    assert route_index["cluster_merge_currently_possible"] is False
+    assert route_index["suppression_currently_possible"] is False
     assert route_index["entity_records"] == []
     assert route_index["scene_records"] == []
 
