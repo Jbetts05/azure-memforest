@@ -110,6 +110,78 @@ class PartialHydrationPlan:
     unknown_changed_tree_ids: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class EntityRouteRecord:
+    entity_key: str
+    tree_id: str
+    state: str
+    distinct_fact_count: int
+    distinct_session_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class SceneRouteRecord:
+    cluster_id: str
+    tree_id: str
+    scope_key: str
+    fact_count: int
+    centroid_hash: str
+
+
+@dataclass(frozen=True, slots=True)
+class RouteIndexManifest:
+    """Durable router metadata needed before authoritative partial hydration."""
+
+    embedding_model_version: str
+    entity_active_min_facts: int
+    entity_active_min_sessions: int
+    scene_assign_threshold: float
+    scene_secondary_threshold: float
+    scene_spawn_threshold: float
+    scene_max_cluster_size: int
+    scene_merge_threshold: float
+    scene_bootstrap_initialized: bool
+    scene_scores_include_time_bonus: bool
+    entity_records: tuple[EntityRouteRecord, ...] = ()
+    scene_records: tuple[SceneRouteRecord, ...] = ()
+    cluster_merge_possible: bool = False
+    suppression_flip_possible: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class FactRouteHint:
+    """Pre-ingest routing hints for one newly extracted/canonicalized fact."""
+
+    fact_id: str
+    entity_keys: tuple[str, ...] = ()
+    scene_similarities: Mapping[str, float] = field(default_factory=dict)
+    scene_scope_key: str = ""
+    new_session_id: str = ""
+    cluster_merge_possible: bool = False
+    suppression_flip_possible: bool = False
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "entity_keys", tuple(sorted({str(key) for key in self.entity_keys if str(key)})))
+        object.__setattr__(self, "scene_similarities", MappingProxyType({str(k): float(v) for k, v in dict(self.scene_similarities).items()}))
+
+
+@dataclass(frozen=True, slots=True)
+class PreIngestTreeScope:
+    full_hydration_required: bool
+    tree_ids_to_load: tuple[str, ...]
+    escalation_reasons: tuple[str, ...]
+    predicted_entity_tree_ids: tuple[str, ...]
+    predicted_scene_tree_ids: tuple[str, ...]
+    deleted_tree_ids: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.full_hydration_required and not self.escalation_reasons:
+            raise ValueError("full_hydration_required requires at least one escalation reason")
+        predicted = set(self.predicted_entity_tree_ids) | set(self.predicted_scene_tree_ids) | set(self.deleted_tree_ids)
+        if not predicted.issubset(set(self.tree_ids_to_load)):
+            raise ValueError("tree_ids_to_load must include predicted entity, scene, and deleted trees")
+
+
 def plan_projection_skip(
     projected_records: Iterable[ProjectionRecordRef],
     retained_committed_records: Iterable[ProjectionRecordRef],
@@ -228,6 +300,143 @@ def plan_partial_hydration(
         deleted_tree_ids=deleted,
         omitted_tree_ids=() if unknown_changed else omitted,
         unknown_changed_tree_ids=unknown_changed,
+    )
+
+
+def plan_pre_ingest_tree_scope(
+    *,
+    route_index: RouteIndexManifest,
+    new_fact_route_hints: Iterable[FactRouteHint],
+    embedding_model_version: str,
+    deleted_tree_ids: Iterable[str] = (),
+) -> PreIngestTreeScope:
+    """Plan a conservative pre-ingest tree subset, or fail closed to full.
+
+    The planner is intentionally strict. If router metadata cannot prove that no
+    entity activation, scene bootstrap, scene merge, or suppression transition can
+    affect an unloaded tree, it requires full hydration. ``route_index`` and
+    ``new_fact_route_hints`` must be derived from one consistent router snapshot;
+    stale or mixed snapshots must fail closed before calling this function.
+    """
+
+    deleted = tuple(sorted({str(tree_id) for tree_id in deleted_tree_ids if str(tree_id)}))
+    entity_by_key = {record.entity_key: record for record in route_index.entity_records}
+    scene_by_cluster = {record.cluster_id: record for record in route_index.scene_records}
+    scene_by_scope: dict[str, list[SceneRouteRecord]] = {}
+    for record in route_index.scene_records:
+        scene_by_scope.setdefault(record.scope_key, []).append(record)
+    reasons: set[str] = set()
+    predicted_entities: set[str] = set()
+    predicted_scenes: set[str] = set()
+    hints = tuple(new_fact_route_hints)
+    entity_fact_ids: dict[str, set[str]] = {}
+    entity_session_ids: dict[str, set[str]] = {}
+    for hint in hints:
+        for entity_key in hint.entity_keys:
+            entity_fact_ids.setdefault(entity_key, set()).add(str(hint.fact_id))
+            if hint.new_session_id:
+                entity_session_ids.setdefault(entity_key, set()).add(str(hint.new_session_id))
+
+    if str(route_index.embedding_model_version or "") != str(embedding_model_version or ""):
+        reasons.add("embedding_version_mismatch")
+    if route_index.cluster_merge_possible:
+        reasons.add("cluster_merge_possible")
+    if route_index.suppression_flip_possible:
+        reasons.add("suppression_flip_possible")
+    if hints and not route_index.scene_bootstrap_initialized:
+        reasons.add("bootstrap_uninitialized")
+
+    for hint in hints:
+        if hint.cluster_merge_possible:
+            reasons.add("cluster_merge_possible")
+        if hint.suppression_flip_possible:
+            reasons.add("suppression_flip_possible")
+    for entity_key, fact_ids in entity_fact_ids.items():
+        record = entity_by_key.get(entity_key)
+        if record is None:
+            reasons.add("new_entity_key")
+            continue
+        if record.state == "active":
+            predicted_entities.add(record.tree_id)
+        elif _candidate_can_activate(record, route_index, new_fact_count=len(fact_ids), new_session_count=len(entity_session_ids.get(entity_key, set()))):
+            reasons.add("candidate_near_activation")
+
+    for hint in hints:
+        if hint.scene_similarities:
+            if not hint.scene_scope_key:
+                reasons.add("missing_scene_scope_key")
+                continue
+            if not route_index.scene_scores_include_time_bonus:
+                reasons.add("scene_scores_missing_time_bonus")
+                continue
+            if hint.scene_scope_key and not scene_by_scope.get(hint.scene_scope_key):
+                reasons.add("no_domain_cluster")
+                continue
+            known_scores = [
+                (cluster_id, float(similarity))
+                for cluster_id, similarity in hint.scene_similarities.items()
+                if cluster_id in scene_by_cluster
+                and (not hint.scene_scope_key or scene_by_cluster[cluster_id].scope_key == hint.scene_scope_key)
+            ]
+            unknown_high = [
+                cluster_id
+                for cluster_id, similarity in hint.scene_similarities.items()
+                if cluster_id not in scene_by_cluster and float(similarity) >= route_index.scene_secondary_threshold
+            ]
+            if unknown_high:
+                reasons.add("unknown_scene_cluster")
+            if not known_scores:
+                reasons.add("below_assign_threshold")
+                continue
+            best_id, best_score = max(known_scores, key=lambda item: item[1])
+            best_record = scene_by_cluster[best_id]
+            if best_score < route_index.scene_spawn_threshold:
+                reasons.add("below_assign_threshold")
+                continue
+            if best_record.fact_count >= route_index.scene_max_cluster_size:
+                reasons.add("cluster_capacity_full")
+                continue
+            if (
+                best_score < route_index.scene_assign_threshold
+                and best_record.fact_count >= route_index.scene_max_cluster_size // 2
+            ):
+                reasons.add("weak_match_near_capacity")
+                continue
+            predicted_scenes.add(best_record.tree_id)
+            for cluster_id, similarity in known_scores:
+                if cluster_id == best_id or similarity < route_index.scene_secondary_threshold:
+                    continue
+                record = scene_by_cluster[cluster_id]
+                if record.fact_count >= route_index.scene_max_cluster_size:
+                    reasons.add("cluster_capacity_full")
+                else:
+                    predicted_scenes.add(record.tree_id)
+        elif route_index.scene_records:
+            reasons.add("missing_scene_similarity")
+
+    tree_ids = tuple(sorted(predicted_entities | predicted_scenes | set(deleted)))
+    return PreIngestTreeScope(
+        full_hydration_required=bool(reasons),
+        tree_ids_to_load=tree_ids,
+        escalation_reasons=tuple(sorted(reasons)),
+        predicted_entity_tree_ids=tuple(sorted(predicted_entities)),
+        predicted_scene_tree_ids=tuple(sorted(predicted_scenes)),
+        deleted_tree_ids=deleted,
+    )
+
+
+def _candidate_can_activate(
+    record: EntityRouteRecord,
+    route_index: RouteIndexManifest,
+    *,
+    new_fact_count: int,
+    new_session_count: int,
+) -> bool:
+    next_fact_count = int(record.distinct_fact_count) + max(0, int(new_fact_count))
+    next_session_count = int(record.distinct_session_count) + max(0, int(new_session_count))
+    return (
+        next_fact_count >= int(route_index.entity_active_min_facts)
+        and next_session_count >= int(route_index.entity_active_min_sessions)
     )
 
 

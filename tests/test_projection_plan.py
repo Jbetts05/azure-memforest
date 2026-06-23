@@ -2,7 +2,23 @@ from __future__ import annotations
 
 import pytest
 
-from src.cloud.projection_plan import ProjectionRecordKey, ProjectionRecordRef, ProjectionSkipPlan, filter_projection_refs_to_tree_scope, plan_affected_trees, plan_partial_hydration, plan_projection_skip, plan_projection_tree_scope, tree_node_body_content_id
+from src.cloud.projection_plan import (
+    EntityRouteRecord,
+    FactRouteHint,
+    PreIngestTreeScope,
+    ProjectionRecordKey,
+    ProjectionRecordRef,
+    ProjectionSkipPlan,
+    RouteIndexManifest,
+    SceneRouteRecord,
+    filter_projection_refs_to_tree_scope,
+    plan_affected_trees,
+    plan_partial_hydration,
+    plan_pre_ingest_tree_scope,
+    plan_projection_skip,
+    plan_projection_tree_scope,
+    tree_node_body_content_id,
+)
 
 
 def test_projection_skip_plan_splits_unchanged_upsert_and_delete_by_content_hash() -> None:
@@ -288,3 +304,146 @@ def test_plan_partial_hydration_distinguishes_empty_known_delta_from_unknown() -
     assert plan.tree_ids_to_load == ("entity:old",)
     assert plan.deleted_tree_ids == ("entity:old",)
     assert plan.omitted_tree_ids == ("entity:a", "entity:b")
+
+
+def _route_index(**overrides) -> RouteIndexManifest:
+    values = {
+        "embedding_model_version": "embed-v1",
+        "entity_active_min_facts": 3,
+        "entity_active_min_sessions": 2,
+        "scene_assign_threshold": 0.7,
+        "scene_secondary_threshold": 0.55,
+        "scene_spawn_threshold": 0.45,
+        "scene_max_cluster_size": 60,
+        "scene_merge_threshold": 0.88,
+        "scene_bootstrap_initialized": True,
+        "scene_scores_include_time_bonus": True,
+        "entity_records": (
+            EntityRouteRecord("alice", "entity:alice", "active", 3, 2),
+            EntityRouteRecord("bob", "entity:bob", "lazy", 2, 1),
+        ),
+        "scene_records": (
+            SceneRouteRecord("scene:travel", "tree:scene:travel", "travel", 5, "centroid-a"),
+            SceneRouteRecord("scene:work", "tree:scene:work", "travel", 7, "centroid-b"),
+        ),
+    }
+    values.update(overrides)
+    return RouteIndexManifest(**values)
+
+
+def test_plan_pre_ingest_tree_scope_returns_safe_subset_for_active_entity_and_assigned_scene() -> None:
+    scope = plan_pre_ingest_tree_scope(
+        route_index=_route_index(),
+        embedding_model_version="embed-v1",
+        new_fact_route_hints=[
+            FactRouteHint(
+                fact_id="fact-1",
+                entity_keys=("alice",),
+                scene_similarities={"scene:travel": 0.8, "scene:work": 0.2},
+                scene_scope_key="travel",
+                new_session_id="session-1",
+            )
+        ],
+        deleted_tree_ids=["entity:old"],
+    )
+
+    assert scope.full_hydration_required is False
+    assert scope.escalation_reasons == ()
+    assert scope.predicted_entity_tree_ids == ("entity:alice",)
+    assert scope.predicted_scene_tree_ids == ("tree:scene:travel",)
+    assert scope.deleted_tree_ids == ("entity:old",)
+    assert scope.tree_ids_to_load == ("entity:alice", "entity:old", "tree:scene:travel")
+
+
+@pytest.mark.parametrize(
+    ("route_index", "hint", "expected_reason"),
+    [
+        (_route_index(embedding_model_version="embed-old"), FactRouteHint("fact-1"), "embedding_version_mismatch"),
+        (_route_index(scene_bootstrap_initialized=False), FactRouteHint("fact-1", scene_similarities={"scene:travel": 0.8}), "bootstrap_uninitialized"),
+        (_route_index(), FactRouteHint("fact-1", scene_similarities={"scene:travel": 0.1}, scene_scope_key="travel"), "below_assign_threshold"),
+        (_route_index(cluster_merge_possible=True), FactRouteHint("fact-1"), "cluster_merge_possible"),
+        (_route_index(suppression_flip_possible=True), FactRouteHint("fact-1"), "suppression_flip_possible"),
+        (_route_index(), FactRouteHint("fact-1", entity_keys=("new_person",)), "new_entity_key"),
+        (_route_index(), FactRouteHint("fact-1", entity_keys=("bob",), new_session_id="session-2"), "candidate_near_activation"),
+        (_route_index(), FactRouteHint("fact-1", scene_similarities={"scene:missing": 0.9}, scene_scope_key="travel"), "unknown_scene_cluster"),
+        (_route_index(), FactRouteHint("fact-1", scene_similarities={"scene:travel": 0.9}, scene_scope_key="new_domain"), "no_domain_cluster"),
+        (_route_index(), FactRouteHint("fact-1", scene_similarities={"scene:travel": 0.9}), "missing_scene_scope_key"),
+        (_route_index(scene_scores_include_time_bonus=False), FactRouteHint("fact-1", scene_similarities={"scene:travel": 0.9}, scene_scope_key="travel"), "scene_scores_missing_time_bonus"),
+        (_route_index(scene_records=(SceneRouteRecord("scene:travel", "tree:scene:travel", "travel", 60, "centroid-a"),)), FactRouteHint("fact-1", scene_similarities={"scene:travel": 0.9}, scene_scope_key="travel"), "cluster_capacity_full"),
+        (_route_index(scene_records=(SceneRouteRecord("scene:travel", "tree:scene:travel", "travel", 30, "centroid-a"),)), FactRouteHint("fact-1", scene_similarities={"scene:travel": 0.5}, scene_scope_key="travel"), "weak_match_near_capacity"),
+        (_route_index(), FactRouteHint("fact-1"), "missing_scene_similarity"),
+    ],
+)
+def test_plan_pre_ingest_tree_scope_escalates_when_conservative_superset_cannot_be_proven(route_index, hint, expected_reason) -> None:
+    scope = plan_pre_ingest_tree_scope(
+        route_index=route_index,
+        embedding_model_version="embed-v1",
+        new_fact_route_hints=[hint],
+    )
+
+    assert scope.full_hydration_required is True
+    assert expected_reason in scope.escalation_reasons
+
+
+def test_plan_pre_ingest_tree_scope_aggregates_batch_entity_activation_risk() -> None:
+    index = _route_index(entity_records=(EntityRouteRecord("bob", "entity:bob", "lazy", 1, 1),))
+
+    scope = plan_pre_ingest_tree_scope(
+        route_index=index,
+        embedding_model_version="embed-v1",
+        new_fact_route_hints=[
+            FactRouteHint("fact-1", entity_keys=("bob",), new_session_id="session-2"),
+            FactRouteHint("fact-2", entity_keys=("bob",), new_session_id="session-2"),
+        ],
+    )
+
+    assert scope.full_hydration_required is True
+    assert "candidate_near_activation" in scope.escalation_reasons
+
+
+def test_plan_pre_ingest_tree_scope_includes_secondary_scene_assignment() -> None:
+    scope = plan_pre_ingest_tree_scope(
+        route_index=_route_index(),
+        embedding_model_version="embed-v1",
+        new_fact_route_hints=[
+            FactRouteHint(
+                "fact-1",
+                scene_similarities={"scene:travel": 0.8, "scene:work": 0.6},
+                scene_scope_key="travel",
+            )
+        ],
+    )
+
+    assert scope.full_hydration_required is False
+    assert scope.predicted_scene_tree_ids == ("tree:scene:travel", "tree:scene:work")
+
+
+def test_plan_pre_ingest_tree_scope_allows_empty_noop_scope() -> None:
+    scope = plan_pre_ingest_tree_scope(
+        route_index=_route_index(),
+        embedding_model_version="embed-v1",
+        new_fact_route_hints=[],
+    )
+
+    assert scope.full_hydration_required is False
+    assert scope.tree_ids_to_load == ()
+    assert scope.escalation_reasons == ()
+
+
+def test_pre_ingest_tree_scope_rejects_full_without_reason_and_missing_predicted_trees() -> None:
+    with pytest.raises(ValueError, match="requires at least one escalation reason"):
+        PreIngestTreeScope(
+            full_hydration_required=True,
+            tree_ids_to_load=(),
+            escalation_reasons=(),
+            predicted_entity_tree_ids=(),
+            predicted_scene_tree_ids=(),
+        )
+    with pytest.raises(ValueError, match="tree_ids_to_load must include"):
+        PreIngestTreeScope(
+            full_hydration_required=False,
+            tree_ids_to_load=(),
+            escalation_reasons=(),
+            predicted_entity_tree_ids=("entity:alice",),
+            predicted_scene_tree_ids=(),
+        )
