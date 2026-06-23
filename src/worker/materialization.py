@@ -301,6 +301,13 @@ class MemForestMaterializationHandler:
                 forest_version=forest_version,
                 generation=generation,
             )
+            partial_hydration_eligibility = _partial_hydration_eligibility_summary(
+                latest=latest,
+                projection=projection,
+                snapshot=snapshot,
+                partial_hydration_shadow=partial_hydration_shadow,
+                partial_hydration_equivalence_shadow=partial_hydration_equivalence_shadow,
+            )
             await self._update_job_stage(envelope, fencing_token=fencing_token, stage="write_projection", detail="Writing facts, trees, embeddings, recall documents, and snapshot.", telemetry=telemetry)
             write_projection_started = time.perf_counter()
             projection_metadata = await self._write_projection(
@@ -317,6 +324,7 @@ class MemForestMaterializationHandler:
             projection_metadata["hydration_summary"] = hydration_summary
             projection_metadata["partial_hydration_shadow"] = partial_hydration_shadow
             projection_metadata["partial_hydration_equivalence_shadow"] = partial_hydration_equivalence_shadow
+            projection_metadata["partial_hydration_eligibility"] = partial_hydration_eligibility
             try:
                 await self._stores.lease_store.assert_current(lease)
             except LeaseConflict as exc:
@@ -2070,6 +2078,140 @@ def _partial_hydration_plan_and_summary(
 def _partial_hydration_plan_summary(projection: MaterializationProjection, *, snapshot: ForestMaterializationSnapshot) -> dict[str, Any]:
     _, summary = _partial_hydration_plan_and_summary(projection, snapshot=snapshot)
     return summary
+
+
+def _partial_hydration_eligibility_summary(
+    *,
+    latest: Any | None,
+    projection: MaterializationProjection,
+    snapshot: ForestMaterializationSnapshot,
+    partial_hydration_shadow: Mapping[str, Any],
+    partial_hydration_equivalence_shadow: Mapping[str, Any],
+) -> dict[str, Any]:
+    try:
+        _, plan_summary = _partial_hydration_plan_and_summary(projection, snapshot=snapshot)
+        summary: dict[str, Any] = {
+            "schema_version": 1,
+            "mode": "metadata_only",
+            "enabled": bool(
+                partial_hydration_shadow.get("enabled")
+                and partial_hydration_equivalence_shadow.get("enabled")
+            ),
+            "eligible": False,
+            "reason": "disabled",
+            "plan": plan_summary,
+            "global_fact_scope": "all",
+            "loaded_subset_contains_changed": _loaded_subset_contains_changed(projection.changed_tree_ids, plan_summary),
+        }
+        check = _partial_hydration_check_summary(partial_hydration_shadow)
+        equivalence = _partial_hydration_equivalence_gate_summary(partial_hydration_equivalence_shadow)
+        if check is not None:
+            summary["check"] = check
+            if isinstance(check.get("loaded_fact_count"), int):
+                summary["loaded_fact_count"] = check["loaded_fact_count"]
+        if equivalence is not None:
+            summary["equivalence"] = equivalence
+        if not summary["enabled"]:
+            return summary
+        if latest is None:
+            summary["reason"] = "no_committed_manifest"
+            return summary
+        if projection.changed_tree_ids is None:
+            summary["reason"] = "unknown_delta"
+            return summary
+        if plan_summary.get("full_hydration_required"):
+            summary["reason"] = "full_hydration_required"
+            if int(plan_summary.get("unknown_changed_tree_count") or 0) > 0:
+                summary["reason"] = "unknown_changed_tree_ids"
+            return summary
+        if int(plan_summary.get("projected_surface_tree_count") or 0) > 0 and int(plan_summary.get("omitted_tree_count") or 0) == 0:
+            summary["reason"] = "whole_forest_delta"
+            return summary
+        if not bool(partial_hydration_shadow.get("supported")):
+            summary["reason"] = _partial_hydration_reason(str(partial_hydration_shadow.get("reason") or "unsupported"))
+            return summary
+        if not bool(partial_hydration_shadow.get("complete")):
+            summary["reason"] = _partial_hydration_incomplete_reason(partial_hydration_shadow)
+            return summary
+        if not bool(partial_hydration_equivalence_shadow.get("supported")):
+            summary["reason"] = _partial_hydration_reason(str(partial_hydration_equivalence_shadow.get("reason") or "unsupported"))
+            return summary
+        if not bool(partial_hydration_equivalence_shadow.get("equivalent")):
+            summary["reason"] = "not_equivalent"
+            return summary
+        summary["eligible"] = True
+        summary["reason"] = "eligible"
+        return summary
+    except Exception as exc:
+        return {
+            "schema_version": 1,
+            "mode": "metadata_only",
+            "enabled": False,
+            "eligible": False,
+            "reason": f"exception:{type(exc).__name__}",
+        }
+
+
+def _partial_hydration_check_summary(partial_hydration_shadow: Mapping[str, Any]) -> dict[str, Any] | None:
+    check = partial_hydration_shadow.get("check")
+    if not isinstance(check, Mapping):
+        return None
+    return {
+        "supported": bool(partial_hydration_shadow.get("supported")),
+        "complete": bool(partial_hydration_shadow.get("complete")),
+        "tree_count": _optional_int(check.get("tree_count")),
+        "loaded_fact_count": _optional_int(check.get("fact_count")),
+        "missing_fact_count": _optional_int(check.get("missing_fact_count")),
+        "missing_summary_cache_count": _optional_int(check.get("missing_summary_cache_count")),
+        "missing_node_embedding_count": _optional_int(check.get("missing_node_embedding_count")),
+    }
+
+
+def _partial_hydration_equivalence_gate_summary(partial_hydration_equivalence_shadow: Mapping[str, Any]) -> dict[str, Any] | None:
+    if not partial_hydration_equivalence_shadow.get("enabled"):
+        return None
+    return {
+        "supported": bool(partial_hydration_equivalence_shadow.get("supported")),
+        "equivalent": bool(partial_hydration_equivalence_shadow.get("equivalent")),
+        "reason": partial_hydration_equivalence_shadow.get("reason"),
+    }
+
+
+def _loaded_subset_contains_changed(changed_tree_ids: Any, plan_summary: Mapping[str, Any]) -> bool | None:
+    if changed_tree_ids is None:
+        return None
+    planned = set(plan_summary.get("planned_tree_ids") or ())
+    if bool(plan_summary.get("id_arrays_truncated")):
+        return None
+    return {str(tree_id) for tree_id in changed_tree_ids if str(tree_id)}.issubset(planned)
+
+
+def _partial_hydration_reason(reason: str) -> str:
+    if "missing" in reason:
+        return "missing_stores"
+    if reason.startswith("partial_hydration_check_failed:"):
+        return f"exception:{reason.removeprefix('partial_hydration_check_failed:')}"
+    if reason.startswith("partial_hydration_equivalence_check_failed:"):
+        return f"exception:{reason.removeprefix('partial_hydration_equivalence_check_failed:')}"
+    if "list_facts" in reason or "canonical fact list exceeds" in reason:
+        return "list_facts_cap"
+    return reason or "unsupported"
+
+
+def _partial_hydration_incomplete_reason(partial_hydration_shadow: Mapping[str, Any]) -> str:
+    check = partial_hydration_shadow.get("check")
+    if isinstance(check, Mapping):
+        if int(check.get("missing_fact_count") or 0) > 0:
+            return "missing_referenced_facts"
+        if int(check.get("missing_node_embedding_count") or 0) > 0:
+            return "missing_node_embeddings"
+    return "incomplete"
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    return int(value)
 
 
 def _projection_equivalence_summary(

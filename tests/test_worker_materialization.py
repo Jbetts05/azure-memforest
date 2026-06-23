@@ -1316,6 +1316,9 @@ async def test_materialization_handler_commits_snapshot_pointer_metadata() -> No
         "supported": False,
         "reason": "disabled",
     }
+    assert metadata["partial_hydration_eligibility"]["enabled"] is False
+    assert metadata["partial_hydration_eligibility"]["eligible"] is False
+    assert metadata["partial_hydration_eligibility"]["reason"] == "disabled"
 
 
 @pytest.mark.asyncio
@@ -1460,6 +1463,7 @@ async def test_materialization_handler_records_partial_hydration_equivalence_sha
             code_version="test-sha",
             prompt_config_hash="prompt-hash",
             lease_renewal_seconds=9999,
+            enable_partial_hydration_shadow=True,
             enable_partial_hydration_equivalence_shadow=True,
         ),
     )
@@ -1476,6 +1480,16 @@ async def test_materialization_handler_records_partial_hydration_equivalence_sha
     assert shadow["comparison"]["shadow_baseline_forest_version"] is None
     assert core.partial_hydration_equivalence_checks[0]["tree_ids"] == ("entity:alice",)
     assert core.partial_hydration_equivalence_checks[0]["session_id"] == "session-1"
+    eligibility = manifest_store.latest.metadata["partial_hydration_eligibility"]
+    assert eligibility["mode"] == "metadata_only"
+    assert eligibility["eligible"] is True
+    assert eligibility["reason"] == "eligible"
+    assert eligibility["global_fact_scope"] == "all"
+    assert eligibility["loaded_fact_count"] == 1
+    assert eligibility["loaded_subset_contains_changed"] is True
+    assert eligibility["check"]["complete"] is True
+    assert eligibility["check"]["loaded_fact_count"] == 1
+    assert eligibility["equivalence"] == {"supported": True, "equivalent": True, "reason": None}
 
 
 @pytest.mark.asyncio
@@ -1503,6 +1517,7 @@ async def test_materialization_handler_partial_hydration_equivalence_shadow_repo
             code_version="test-sha",
             prompt_config_hash="prompt-hash",
             lease_renewal_seconds=9999,
+            enable_partial_hydration_shadow=True,
             enable_partial_hydration_equivalence_shadow=True,
         ),
     )
@@ -1516,6 +1531,9 @@ async def test_materialization_handler_partial_hydration_equivalence_shadow_repo
     assert shadow["comparison"]["projection_refs_equivalent"] is False
     assert shadow["comparison"]["delta_metadata_equivalent"] is False
     assert shadow["comparison"]["by_kind"]["tree_node_membership"]["missing_count"] > 0
+    eligibility = manifest_store.latest.metadata["partial_hydration_eligibility"]
+    assert eligibility["eligible"] is False
+    assert eligibility["reason"] == "not_equivalent"
 
 
 @pytest.mark.asyncio
@@ -1552,6 +1570,91 @@ async def test_materialization_handler_partial_hydration_shadow_fails_closed_on_
     assert shadow["supported"] is False
     assert shadow["reason"] == "full_hydration_required"
     assert core.partial_hydration_checks == []
+    eligibility = manifest_store.latest.metadata["partial_hydration_eligibility"]
+    assert eligibility["eligible"] is False
+    assert eligibility["reason"] == "disabled"
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_partial_hydration_eligibility_reports_unknown_delta() -> None:
+    manifest_store = FakeManifestStore()
+    manifest_store.latest = ForestManifest(
+        manifest_id="manifest-v1",
+        tenant_id="tenant-1",
+        user_id="user-1",
+        forest_version="v1",
+        generation=1,
+        status="committed",
+        created_at_unix=1.0,
+        metadata={"job_id": "previous", "job_type": "ingest_session", "embedding_model_version": "embed-v1"},
+    )
+    handler = _handler(
+        manifest_store=manifest_store,
+        core=FakeIngestCore(_snapshot()),
+        config=MaterializationHandlerConfig(
+            owner_id="worker-1",
+            embedding_model_version="embed-v1",
+            code_version="test-sha",
+            prompt_config_hash="prompt-hash",
+            lease_renewal_seconds=9999,
+            enable_partial_hydration_shadow=True,
+            enable_partial_hydration_equivalence_shadow=True,
+        ),
+    )
+
+    await handler.handle(_envelope(), {"fencing_token": 1})
+
+    eligibility = manifest_store.latest.metadata["partial_hydration_eligibility"]
+    assert eligibility["enabled"] is True
+    assert eligibility["eligible"] is False
+    assert eligibility["reason"] == "unknown_delta"
+    assert eligibility["loaded_subset_contains_changed"] is None
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_partial_hydration_eligibility_requires_complete_check() -> None:
+    manifest_store = FakeManifestStore()
+    manifest_store.latest = ForestManifest(
+        manifest_id="manifest-v1",
+        tenant_id="tenant-1",
+        user_id="user-1",
+        forest_version="v1",
+        generation=1,
+        status="committed",
+        created_at_unix=1.0,
+        metadata={"job_id": "previous", "job_type": "ingest_session", "embedding_model_version": "embed-v1"},
+    )
+    core = FakeIngestCore(_two_tree_incremental_snapshot())
+    core.partial_hydration_equivalence_snapshot = replace(
+        _two_tree_incremental_snapshot(),
+        baseline_forest_version=None,
+    )
+    core.partial_hydration_check_result = {
+        **core.partial_hydration_check_result,
+        "complete": False,
+        "missing_fact_count": 1,
+    }
+    handler = _handler(
+        manifest_store=manifest_store,
+        core=core,
+        baseline_provider=MatchingProjectionBaselineProvider(),
+        config=MaterializationHandlerConfig(
+            owner_id="worker-1",
+            embedding_model_version="embed-v1",
+            code_version="test-sha",
+            prompt_config_hash="prompt-hash",
+            lease_renewal_seconds=9999,
+            enable_partial_hydration_shadow=True,
+            enable_partial_hydration_equivalence_shadow=True,
+        ),
+    )
+
+    await handler.handle(_envelope(), {"fencing_token": 1})
+
+    eligibility = manifest_store.latest.metadata["partial_hydration_eligibility"]
+    assert eligibility["eligible"] is False
+    assert eligibility["reason"] == "missing_referenced_facts"
+    assert eligibility["check"]["missing_fact_count"] == 1
 
 
 @pytest.mark.asyncio
