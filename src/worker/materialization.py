@@ -324,6 +324,17 @@ class MemForestMaterializationHandler:
                 embedding_model_version=self._config.embedding_model_version,
                 pre_ingest_prediction=pre_ingest_prediction,
             )
+            predicted_subset_equivalence_shadow = await self._predicted_subset_equivalence_shadow_summary(
+                latest,
+                projection,
+                snapshot=snapshot,
+                envelope=envelope,
+                turns=turns,
+                metadata=request.metadata,
+                forest_version=forest_version,
+                generation=generation,
+                pre_ingest_prediction=pre_ingest_prediction,
+            )
             await self._update_job_stage(envelope, fencing_token=fencing_token, stage="write_projection", detail="Writing facts, trees, embeddings, recall documents, and snapshot.", telemetry=telemetry)
             write_projection_started = time.perf_counter()
             projection_metadata = await self._write_projection(
@@ -342,6 +353,7 @@ class MemForestMaterializationHandler:
             projection_metadata["partial_hydration_equivalence_shadow"] = partial_hydration_equivalence_shadow
             projection_metadata["partial_hydration_eligibility"] = partial_hydration_eligibility
             projection_metadata["pre_ingest_scope_prediction"] = pre_ingest_scope_prediction
+            projection_metadata["predicted_subset_equivalence_shadow"] = predicted_subset_equivalence_shadow
             projection_metadata["pre_ingest_hydration_strategy"] = pre_ingest_hydration_strategy
             try:
                 await self._stores.lease_store.assert_current(lease)
@@ -512,6 +524,81 @@ class MemForestMaterializationHandler:
             "supported": True,
             "equivalent": bool(comparison.get("equivalent")),
             "plan": plan_summary,
+            "comparison": comparison,
+        }
+
+    async def _predicted_subset_equivalence_shadow_summary(
+        self,
+        latest: Any | None,
+        projection: MaterializationProjection,
+        *,
+        snapshot: ForestMaterializationSnapshot,
+        envelope: WriteJobEnvelope,
+        turns: list[dict[str, Any]],
+        metadata: dict[str, Any],
+        forest_version: str,
+        generation: int,
+        pre_ingest_prediction: Any | None,
+    ) -> dict[str, Any]:
+        if not self._config.enable_partial_hydration_equivalence_shadow:
+            return {"schema_version": 1, "enabled": False, "supported": False, "reason": "disabled"}
+        if pre_ingest_prediction is None:
+            return {"schema_version": 1, "enabled": True, "supported": False, "reason": "pre_ingest_prediction_missing"}
+        if latest is None:
+            return {"schema_version": 1, "enabled": True, "supported": False, "reason": "no_committed_manifest"}
+        checker = getattr(self._ingest_core, "partial_hydration_shadow_snapshot_from_manifest", None)
+        if checker is None or not callable(checker):
+            return {"schema_version": 1, "enabled": True, "supported": False, "reason": "partial_hydration_equivalence_checker_missing"}
+        try:
+            scope = _scope_with_deleted_trees(getattr(pre_ingest_prediction, "pre_ingest_scope", None), projection.deleted_tree_ids)
+            if getattr(scope, "full_hydration_required", True):
+                return {
+                    "schema_version": 1,
+                    "enabled": True,
+                    "supported": False,
+                    "reason": "predicted_scope_requires_full_hydration",
+                    "escalation_reasons": list(getattr(scope, "escalation_reasons", ()) or ()),
+                }
+            tree_ids = tuple(getattr(scope, "tree_ids_to_load", ()) or ())
+            shadow_snapshot = await _maybe_await(
+                checker(
+                    latest,
+                    tree_ids=tree_ids,
+                    session_id=envelope.session_id,
+                    turns=turns,
+                    metadata=metadata,
+                )
+            )
+            shadow_projection = project_forest_snapshot(
+                shadow_snapshot,
+                tenant_id=envelope.tenant_id,
+                user_id=envelope.user_id,
+                forest_version=forest_version,
+                generation=generation,
+                embedding_model_version=self._config.embedding_model_version,
+            )
+            comparison = _projection_equivalence_summary(
+                projection,
+                shadow_projection,
+                embedding_model_version=self._config.embedding_model_version,
+            )
+        except Exception as exc:
+            return {
+                "schema_version": 1,
+                "enabled": True,
+                "supported": False,
+                "reason": f"predicted_subset_equivalence_check_failed:{type(exc).__name__}:{exc}",
+            }
+        return {
+            "schema_version": 1,
+            "enabled": True,
+            "supported": True,
+            "equivalent": bool(comparison.get("equivalent")),
+            "tree_ids": list(tree_ids[:100]),
+            "tree_id_count": len(tree_ids),
+            "deleted_tree_ids_source": "oracle_projection",
+            "oracle_deleted_tree_count": len(tuple(projection.deleted_tree_ids)),
+            "id_arrays_truncated": len(tree_ids) > 100,
             "comparison": comparison,
         }
 

@@ -1923,8 +1923,10 @@ async def test_materialization_handler_records_pre_ingest_scope_prediction_when_
             prompt_config_hash="prompt-hash",
             lease_renewal_seconds=9999,
             enable_pre_ingest_route_prediction_prepass=True,
+            enable_partial_hydration_equivalence_shadow=True,
         ),
     )
+    core.partial_hydration_equivalence_snapshot = replace(snapshot, baseline_forest_version=None)
 
     await handler.handle(_envelope(), {"fencing_token": 1})
 
@@ -1941,6 +1943,18 @@ async def test_materialization_handler_records_pre_ingest_scope_prediction_when_
     assert prediction["actual_tree_ids"] == ["entity:alice"]
     assert prediction["missing_tree_count"] == 0
     assert set(prediction["planned_tree_ids"]) >= {"entity:alice", "entity:user", "tree:scene:travel"}
+    predicted_equivalence = manifest_store.latest.metadata["predicted_subset_equivalence_shadow"]
+    assert predicted_equivalence["enabled"] is True
+    assert predicted_equivalence["supported"] is True
+    assert predicted_equivalence["equivalent"] is True
+    assert predicted_equivalence["deleted_tree_ids_source"] == "oracle_projection"
+    assert predicted_equivalence["oracle_deleted_tree_count"] == 0
+    assert set(predicted_equivalence["tree_ids"]) == {"entity:alice", "entity:user", "tree:scene:travel"}
+    assert core.partial_hydration_equivalence_checks[-1]["tree_ids"] == (
+        "entity:alice",
+        "entity:user",
+        "tree:scene:travel",
+    )
 
 
 @pytest.mark.asyncio
@@ -1996,6 +2010,62 @@ async def test_materialization_handler_pre_ingest_prediction_flags_under_selecti
     assert prediction["covers_oracle_canonical_input"] is False
     assert prediction["under_selected_without_escalation"] is True
     assert prediction["missing_tree_ids"] == ["entity:alice"]
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_predicted_subset_equivalence_reports_divergence() -> None:
+    snapshot = _two_tree_incremental_snapshot_with_fact_and_route_manifest()
+    manifest_store = FakeManifestStore()
+    manifest_store.latest = ForestManifest(
+        manifest_id="manifest-v1",
+        tenant_id="tenant-1",
+        user_id="user-1",
+        forest_version="v1",
+        generation=1,
+        status="committed",
+        created_at_unix=1.0,
+        metadata={
+            "job_id": "previous",
+            "job_type": "ingest_session",
+            "embedding_model_version": "embed-v1",
+            "route_index_manifest": snapshot.route_index_manifest,
+        },
+    )
+    core = FakeIngestCore(snapshot)
+    core.pre_ingest_prediction = SimpleNamespace(
+        touched_facts=snapshot.facts,
+        route_hints=(),
+        route_risks=RouteRiskFlags(cluster_merge_possible=False, suppression_flip_possible=False),
+        pre_ingest_scope=PreIngestTreeScope(
+            full_hydration_required=False,
+            tree_ids_to_load=("entity:user",),
+            escalation_reasons=(),
+            predicted_entity_tree_ids=("entity:user",),
+            predicted_scene_tree_ids=(),
+        ),
+    )
+    core.partial_hydration_equivalence_snapshot = replace(_snapshot(), baseline_forest_version=None)
+    handler = _handler(
+        manifest_store=manifest_store,
+        core=core,
+        baseline_provider=MatchingProjectionBaselineProvider(),
+        config=MaterializationHandlerConfig(
+            owner_id="worker-1",
+            embedding_model_version="embed-v1",
+            code_version="test-sha",
+            prompt_config_hash="prompt-hash",
+            lease_renewal_seconds=9999,
+            enable_pre_ingest_route_prediction_prepass=True,
+            enable_partial_hydration_equivalence_shadow=True,
+        ),
+    )
+
+    await handler.handle(_envelope(), {"fencing_token": 1})
+
+    predicted_equivalence = manifest_store.latest.metadata["predicted_subset_equivalence_shadow"]
+    assert predicted_equivalence["supported"] is True
+    assert predicted_equivalence["equivalent"] is False
+    assert predicted_equivalence["tree_ids"] == ["entity:user"]
 
 
 @pytest.mark.asyncio
