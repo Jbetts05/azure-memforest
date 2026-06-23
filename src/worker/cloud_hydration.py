@@ -157,6 +157,7 @@ class CloudStateHydratingUserForestCore:
             tree_store=tree_store,
             browse_embedding_store=browse_embedding_store,
             tree_ids=requested_tree_ids,
+            fact_scope="all",
         )
         if _cloud_state_missing_prerequisites(state):
             raise CloudStateHydrationIncomplete("partial cloud state hydration is incomplete")
@@ -190,6 +191,7 @@ class CloudStateHydratingUserForestCore:
             tree_store=tree_store,
             browse_embedding_store=browse_embedding_store,
             tree_ids=requested_tree_ids,
+            fact_scope="all",
         )
         return {
             "supported": True,
@@ -267,6 +269,7 @@ class CloudStateHydratingUserForestCore:
         tree_store: Any,
         browse_embedding_store: Any | None,
         tree_ids: list[str] | tuple[str, ...] | set[str] | None = None,
+        fact_scope: str = "tree_refs",
     ) -> CloudUserForestState:
         last_error: Exception | None = None
         for _attempt in range(self.cloud_state_read_attempts):
@@ -277,6 +280,7 @@ class CloudStateHydratingUserForestCore:
                     summary_cache=self.summary_cache,
                     browse_embedding_store=browse_embedding_store,
                     tree_ids=tree_ids,
+                    fact_scope=fact_scope,
                 )
             except Exception as exc:
                 last_error = exc
@@ -452,6 +456,16 @@ async def load_facts_by_id(fact_store: Any, fact_ids: list[str]) -> tuple[list[A
     return ordered_facts, missing
 
 
+async def load_all_facts(fact_store: Any) -> list[Any]:
+    """Load all non-tombstoned canonical facts for the tenant/user."""
+
+    if hasattr(fact_store, "list_facts"):
+        return list(await _maybe_await(fact_store.list_facts()))
+    if hasattr(fact_store, "iter_facts"):
+        return list(await _maybe_await(fact_store.iter_facts()))
+    raise TypeError("fact_store must provide list_facts() or iter_facts() for global canonical fact hydration")
+
+
 async def load_summary_cache_for_memtrees(summary_cache: Any, trees: list[MemTree]) -> tuple[dict[str, str], tuple[str, ...]]:
     """Load content-hash summaries needed by hydrated trees.
 
@@ -487,6 +501,7 @@ async def load_cloud_hydration_prerequisites(
     fact_store: Any | None = None,
     summary_cache: Any | None = None,
     tree_ids: list[str] | tuple[str, ...] | set[str] | None = None,
+    fact_scope: str = "tree_refs",
 ) -> CloudHydrationPrerequisites:
     """Load cloud hydration prerequisite state without changing hot-path behavior."""
 
@@ -494,8 +509,16 @@ async def load_cloud_hydration_prerequisites(
     facts: list[Any] = []
     missing_fact_ids: tuple[str, ...] = ()
     if fact_store is not None:
-        fact_ids = _ordered_unique_payload_ids(trees)
-        facts, missing_fact_ids = await load_facts_by_id(fact_store, fact_ids)
+        if fact_scope == "all":
+            facts = await load_all_facts(fact_store)
+            referenced_fact_ids = _ordered_unique_payload_ids(trees)
+            loaded_fact_ids = {_fact_id(fact) for fact in facts if _fact_id(fact)}
+            missing_fact_ids = tuple(fact_id for fact_id in referenced_fact_ids if fact_id not in loaded_fact_ids)
+        elif fact_scope == "tree_refs":
+            fact_ids = _ordered_unique_payload_ids(trees)
+            facts, missing_fact_ids = await load_facts_by_id(fact_store, fact_ids)
+        else:
+            raise ValueError(f"unsupported fact_scope {fact_scope!r}")
     else:
         missing_fact_ids = tuple(_ordered_unique_payload_ids(trees))
 
@@ -522,6 +545,7 @@ async def load_cloud_user_forest_state(
     summary_cache: Any | None = None,
     browse_embedding_store: Any | None = None,
     tree_ids: list[str] | tuple[str, ...] | set[str] | None = None,
+    fact_scope: str = "tree_refs",
 ) -> CloudUserForestState:
     """Load cloud state that can be applied to a local ``UserForest`` instance."""
 
@@ -530,6 +554,7 @@ async def load_cloud_user_forest_state(
         fact_store=fact_store,
         summary_cache=summary_cache,
         tree_ids=tree_ids,
+        fact_scope=fact_scope,
     )
     node_ids = _node_ids_requiring_embeddings(prerequisites.trees)
     node_embeddings: dict[str, list[float]] = {}

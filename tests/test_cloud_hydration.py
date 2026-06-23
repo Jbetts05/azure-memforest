@@ -49,10 +49,15 @@ class FakeFactStore:
     def __init__(self, facts_by_id):
         self.facts_by_id = facts_by_id
         self.requested = []
+        self.list_calls = 0
 
     async def get_facts(self, fact_ids):
         self.requested.append(list(fact_ids))
         return [self.facts_by_id[fact_id] for fact_id in reversed(fact_ids) if fact_id in self.facts_by_id]
+
+    async def list_facts(self):
+        self.list_calls += 1
+        return [self.facts_by_id[fact_id] for fact_id in sorted(self.facts_by_id)]
 
 
 class FakeSummaryCache:
@@ -1346,6 +1351,95 @@ async def test_cloud_state_core_merge_from_manifest_merges_explicit_subset(tmp_p
     assert snapshot.changed_tree_ids is None
     assert tree_store.list_tree_ids_calls == 0
     assert tree_store.requested_tree_ids == ["tree-2"]
+
+
+@pytest.mark.asyncio
+async def test_cloud_state_core_partial_merge_loads_global_canonical_facts(tmp_path) -> None:
+    dim = 4
+    target = _user_forest(tmp_path / "target-root", dim)
+    initial_state = await load_cloud_user_forest_state(
+        tree_store=FakeTreeStore(
+            {
+                "tree-1": [
+                    _node("root", child_ids=("leaf",), tree_id="tree-1"),
+                    _node("leaf", parent_id="root", level="L0", child_ids=("fact_1",), tree_id="tree-1"),
+                ]
+            }
+        ),
+        fact_store=FakeFactStore({"fact_1": _fact("fact_1", dim)}),
+        browse_embedding_store=FakeBrowseEmbeddingStore({"root": _embedding(dim)}),
+    )
+    apply_cloud_state_to_user_forest(target, initial_state)
+    fact_store = FakeFactStore(
+        {
+            "fact_1": _fact("fact_1", dim),
+            "fact_2": _fact("fact_2", dim),
+            "global_unreferenced": _fact("global_unreferenced", dim),
+        }
+    )
+    tree_store = FakeTreeStore(
+        {
+            "tree-2": [
+                _node("root-2", child_ids=("leaf-2",), tree_id="tree-2"),
+                _node("leaf-2", parent_id="root-2", level="L0", child_ids=("fact_2",), tree_id="tree-2"),
+            ],
+        }
+    )
+    core = CloudStateHydratingUserForestCore(
+        user_forest=target,
+        tree_store=tree_store,
+        fact_store=fact_store,
+        browse_embedding_store=FakeBrowseEmbeddingStore({"root-2": _embedding(dim)}),
+        snapshot_store=None,
+        enable_cloud_state_hydration=True,
+    )
+
+    await core.merge_from_manifest(
+        FakeManifest({"forest_version": "v7", "embedding_model_version": "embed-v1"}),
+        tree_ids=["tree-2"],
+    )
+
+    assert fact_store.list_calls == 1
+    assert fact_store.requested == []
+    assert core.last_hydration_result is not None
+    assert core.last_hydration_result.fact_count == 3
+    assert target._fact_manager.get_fact("global_unreferenced") is not None
+    assert set(target._tree_builder.trees) == {"tree-1", "tree-2"}
+
+
+@pytest.mark.asyncio
+async def test_cloud_state_core_partial_merge_detects_missing_referenced_fact_with_global_facts(tmp_path) -> None:
+    target = _user_forest(tmp_path / "target-root", 4)
+    core = CloudStateHydratingUserForestCore(
+        user_forest=target,
+        tree_store=FakeTreeStore(
+            {
+                "tree-1": [
+                    _node("root", child_ids=("leaf",), tree_id="tree-1"),
+                    _node("leaf", parent_id="root", level="L0", child_ids=("missing-fact",), tree_id="tree-1"),
+                ]
+            }
+        ),
+        fact_store=FakeFactStore({"other-fact": _fact("other-fact", 4)}),
+        browse_embedding_store=FakeBrowseEmbeddingStore({"root": _embedding(4)}),
+        snapshot_store=None,
+        enable_cloud_state_hydration=True,
+    )
+
+    check = await core.check_partial_hydration_from_manifest(
+        FakeManifest({"forest_version": "v7", "embedding_model_version": "embed-v1"}),
+        tree_ids=["tree-1"],
+    )
+
+    assert check["supported"] is True
+    assert check["complete"] is False
+    assert check["fact_count"] == 1
+    assert check["missing_fact_count"] == 1
+    with pytest.raises(CloudStateHydrationIncomplete, match="partial cloud state hydration is incomplete"):
+        await core.merge_from_manifest(
+            FakeManifest({"forest_version": "v7", "embedding_model_version": "embed-v1"}),
+            tree_ids=["tree-1"],
+        )
 
 
 @pytest.mark.asyncio

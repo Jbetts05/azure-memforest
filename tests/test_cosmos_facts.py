@@ -210,6 +210,18 @@ async def test_cosmos_fact_store_get_facts_batches_and_preserves_order() -> None
 
 
 @pytest.mark.asyncio
+async def test_cosmos_fact_store_lists_active_facts_and_fails_closed_on_limit() -> None:
+    store = CosmosFactStore(FakeContainer(), tenant_id="tenant-1", user_id="user-1")
+    await store.upsert_facts([_fact("fact-1"), _fact("fact-2")])
+
+    facts = await store.list_facts()
+
+    assert [fact.fact_id for fact in facts] == ["fact-1", "fact-2"]
+    with pytest.raises(ValueError, match="canonical fact list exceeds limit 1"):
+        await store.list_facts(limit=1)
+
+
+@pytest.mark.asyncio
 async def test_cosmos_fact_store_upserts_with_bounded_overlap() -> None:
     container = AsyncTrackingContainer()
     store = CosmosFactStore(container, tenant_id="tenant-1", user_id="user-1")

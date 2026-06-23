@@ -77,6 +77,25 @@ class CosmosFactStore:
                     docs_by_fact_id[fact.fact_id] = fact
         return [docs_by_fact_id[fact_id] for fact_id in fact_ids if fact_id in docs_by_fact_id]
 
+    async def list_facts(self, *, limit: int = 100000) -> list[ManagedFact]:
+        """Return all active canonical facts for this tenant/user."""
+
+        if limit <= 0:
+            return []
+        query = (
+            "SELECT * FROM c WHERE c.tenant_user_key=@pk "
+            "AND (NOT IS_DEFINED(c.tombstoned) OR c.tombstoned=false)"
+        )
+        params = [{"name": "@pk", "value": self.tenant_user_key}]
+        facts = []
+        async for item in _aiter(self.container.query_items(query=query, parameters=params, partition_key=self.tenant_user_key)):
+            if item.get("tenant_id") == self.tenant_id and item.get("user_id") == self.user_id:
+                facts.append(_fact_from_doc(item))
+        if len(facts) > limit:
+            raise ValueError(f"canonical fact list exceeds limit {limit}; refusing partial global fact hydration")
+        facts.sort(key=_managed_fact_time)
+        return facts
+
     async def search_facts_text(self, query_text: str, *, limit: int = 20) -> list[ManagedFact]:
         tokens = _lexical_tokens(query_text)[:MAX_LEXICAL_FACT_TOKENS]
         if not tokens or limit <= 0:
