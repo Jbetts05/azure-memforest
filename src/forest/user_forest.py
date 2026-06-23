@@ -72,6 +72,7 @@ class ForestMaterializationSnapshot:
     changed_tree_ids: frozenset[str] | None = None
     deleted_tree_ids: frozenset[str] = frozenset()
     baseline_forest_version: str | None = None
+    route_index_manifest: dict | None = None
 
 
 # ── serialization helpers ─────────────────────────────────────────────────────
@@ -354,7 +355,21 @@ class UserForest:
                 changed_tree_ids=self._last_changed_tree_ids,
                 deleted_tree_ids=self._last_deleted_tree_ids,
                 baseline_forest_version=self._last_baseline_forest_version,
+                route_index_manifest=self._route_index_manifest_for_materialization(),
             )
+
+    def _route_index_manifest_for_materialization(self) -> dict | None:
+        from src.cloud.projection_plan import build_route_index_manifest, route_index_manifest_to_dict
+
+        # Worker materialization restamps this with the authoritative deployment
+        # embedding version before writing durable manifest/fingerprint metadata.
+        manifest = build_route_index_manifest(
+            entity_router=self._tree_builder.entity_router,
+            scene_router=self._tree_builder.scene_router,
+            tree_config=self._config.tree,
+            embedding_model_version=self._config.api.embedding.model_name,
+        )
+        return route_index_manifest_to_dict(manifest)
 
     @property
     def snapshot_dir(self) -> Path:

@@ -1841,6 +1841,10 @@ def _materialization_fingerprint_metadata(
     code_version: str,
     prompt_config_hash: str,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
+    route_index_manifest = _route_index_manifest_for_metadata(
+        snapshot,
+        embedding_model_version=embedding_model_version,
+    )
     inputs = {
         "schema_version": SCHEMA_VERSION,
         "generation": generation,
@@ -1928,6 +1932,7 @@ def _materialization_fingerprint_metadata(
         "dirty_path_plan": _dirty_path_plan_summary(projection),
         "projection_tree_scope_plan": _projection_tree_scope_plan_summary(projection),
         "partial_hydration_plan": _partial_hydration_plan_summary(projection, snapshot=snapshot),
+        "route_index_manifest": route_index_manifest,
         "projection_tree_scope_shadow": _projection_tree_scope_shadow_summary(
             projection,
             embedding_model_version=embedding_model_version,
@@ -1953,6 +1958,7 @@ def _materialization_fingerprint_metadata(
         "dirty_path_plan": inputs["dirty_path_plan"],
         "projection_tree_scope_plan": inputs["projection_tree_scope_plan"],
         "partial_hydration_plan": inputs["partial_hydration_plan"],
+        "route_index_manifest": inputs["route_index_manifest"],
         "projection_tree_scope_shadow": inputs["projection_tree_scope_shadow"],
         "projection_plan_live_skipped_browse_embedding_count": len(projection.projection_skip_plans.get("browse_embedding", ProjectionSkipPlan((), (), ())).unchanged),
         "projection_plan_live_skipped_summary_cache_count": len(projection.projection_skip_plans.get("summary_cache", ProjectionSkipPlan((), (), ())).unchanged),
@@ -1963,6 +1969,19 @@ def _hash_json(value: Any) -> str:
     return hashlib.sha256(
         json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
+
+
+def _route_index_manifest_for_metadata(
+    snapshot: ForestMaterializationSnapshot,
+    *,
+    embedding_model_version: str,
+) -> dict[str, Any] | None:
+    route_index = getattr(snapshot, "route_index_manifest", None)
+    if route_index is None:
+        return None
+    metadata = dict(route_index)
+    metadata["embedding_model_version"] = str(embedding_model_version or "")
+    return metadata
 
 
 def _dirty_path_plan_summary(projection: MaterializationProjection) -> dict[str, Any]:

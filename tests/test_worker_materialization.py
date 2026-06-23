@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 import asyncio
+import json
 import time
 from dataclasses import replace
 
@@ -653,6 +654,20 @@ def _snapshot():
         updated_at=2.0,
     )
     return ForestMaterializationSnapshot(facts=[], trees=[tree], node_embeddings={"root": [1.0, 0.0]}, summary_cache={"k": "summary"})
+
+
+def _snapshot_with_route_index_manifest():
+    return replace(
+        _snapshot(),
+        route_index_manifest={
+            "schema_version": 1,
+            "embedding_model_version": "embed-local-name",
+            "entity_records": [],
+            "scene_records": [],
+            "cluster_merge_possible": True,
+            "suppression_flip_possible": True,
+        },
+    )
 
 
 def _factless_snapshot():
@@ -1332,6 +1347,27 @@ async def test_materialization_handler_commits_snapshot_pointer_metadata() -> No
         "partial_applied": False,
         "reason": "no_committed_manifest",
     }
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_persists_route_index_manifest_metadata() -> None:
+    manifest_store = FakeManifestStore()
+    handler = _handler(
+        manifest_store=manifest_store,
+        core=FakeIngestCore(_snapshot_with_route_index_manifest()),
+    )
+
+    await handler.handle(_envelope(), {"fencing_token": 1})
+
+    route_index = manifest_store.latest.metadata["route_index_manifest"]
+    assert route_index["embedding_model_version"] == "embed-v1"
+    assert route_index["cluster_merge_possible"] is True
+    snapshot_id, payload, metadata = next(
+        item for item in handler._stores.snapshot_store.items if item[0].endswith(".fingerprint.json")
+    )
+    fingerprint_inputs = json.loads(payload.decode("utf-8"))
+    assert fingerprint_inputs["route_index_manifest"] == route_index
+    assert metadata["artifact_kind"] == "fingerprint_inputs"
 
 
 @pytest.mark.asyncio

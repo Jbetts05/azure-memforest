@@ -241,6 +241,21 @@ def _user_forest_with_client(tmp_path, dim):
     return forest, client
 
 
+def test_user_forest_materialization_snapshot_includes_route_index_manifest(tmp_path) -> None:
+    forest = _user_forest(tmp_path / "target-root", 4)
+
+    snapshot = forest.snapshot_for_materialization()
+
+    route_index = snapshot.route_index_manifest
+    assert route_index is not None
+    assert route_index["embedding_model_version"] == forest._config.api.embedding.model_name
+    assert route_index["scene_scores_include_time_bonus"] is True
+    assert route_index["cluster_merge_possible"] is True
+    assert route_index["suppression_flip_possible"] is True
+    assert route_index["entity_records"] == []
+    assert route_index["scene_records"] == []
+
+
 @pytest.mark.asyncio
 async def test_cloud_hydration_loads_memtrees_from_tree_store() -> None:
     store = FakeTreeStore(
