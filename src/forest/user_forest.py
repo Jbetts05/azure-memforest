@@ -184,6 +184,7 @@ class UserForest:
         self._last_changed_tree_ids: frozenset[str] | None = None
         self._last_deleted_tree_ids: frozenset[str] = frozenset()
         self._last_baseline_forest_version: str | None = None
+        self._partial_resident_tree_ids: frozenset[str] | None = None
 
     # ── ingest ────────────────────────────────────────────────────────────────
 
@@ -323,12 +324,18 @@ class UserForest:
                 self._tree_store.register(tree)
 
         if build_results:
-            self._node_index = self._tree_builder.build_node_index(
-                list(self._tree_builder.trees.values()),
-                index_dir=self._dir / "node_index",
-                vector_dim=self._config.api.embedding.dimension,
-            )
-            self._rewire_query_pipeline()
+            changed_tree_ids = {br.tree_id for br in build_results}
+            if self._partial_resident_tree_ids is None:
+                self._node_index = self._tree_builder.build_node_index(
+                    list(self._tree_builder.trees.values()),
+                    index_dir=self._dir / "node_index",
+                    vector_dim=self._config.api.embedding.dimension,
+                )
+                self._rewire_query_pipeline()
+            else:
+                self._partial_resident_tree_ids = frozenset(set(self._partial_resident_tree_ids) | changed_tree_ids)
+                self._refresh_node_index_for_trees(changed_tree_ids)
+                self._query_pipeline._retriever.invalidate_fact_index()
         self._record_projection_delta(
             changed_tree_ids={br.tree_id for br in build_results},
             deleted_tree_ids=set(),

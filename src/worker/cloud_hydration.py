@@ -852,6 +852,7 @@ def _apply_cloud_state_locked(user_forest: Any, state: CloudUserForestState) -> 
         state.trees,
         state.node_embeddings,
     )
+    user_forest._partial_resident_tree_ids = None
     user_forest._rewire_query_pipeline()
     user_forest._record_projection_delta(changed_tree_ids=set(), deleted_tree_ids=set())
     return CloudHydrationApplyResult(
@@ -879,6 +880,9 @@ def _merge_cloud_state_locked(user_forest: Any, state: CloudUserForestState) -> 
         user_forest._tree_store.register(tree)
         user_forest._node_index.remove_tree(tree.tree_id)
     _add_cloud_embeddings_to_node_index(user_forest, state.trees, state.node_embeddings)
+    loaded_tree_ids = {tree.tree_id for tree in state.trees}
+    previous_partial = set(user_forest._partial_resident_tree_ids or ())
+    user_forest._partial_resident_tree_ids = frozenset(previous_partial | loaded_tree_ids)
 
     _populate_registry_from_loaded_session_trees(user_forest._registry, state.trees)
     _merge_session_alias_map(user_forest, state.trees)

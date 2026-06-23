@@ -7,9 +7,10 @@ import pytest
 from src.cloud.contracts import StoredTreeNode
 from src.cloud.projection_plan import EntityRouteRecord, RouteIndexManifest, route_index_manifest_to_dict
 from src.config.config import load_default_config
+from src.build.tree_types import TreeBuildResult
 from src.forest.memforest import _content_key
 from src.forest.user_forest import UserForest
-from src.utils.types import FactOccurrence, ManagedFact, MemCell, MemoryItem, SessionExtractionResult
+from src.utils.types import FactOccurrence, FactWriteResult, ManagedFact, MemCell, MemoryItem, SessionExtractionResult
 from src.worker.cloud_hydration import (
     CloudStateHydratingUserForestCore,
     CloudStateHydrationIncomplete,
@@ -351,6 +352,44 @@ def test_user_forest_pre_ingest_route_prediction_dedupes_without_building_trees(
     fact = forest._fact_manager.get_fact(prediction.fact_write_result.canonical_fact_ids[0])
     assert fact is not None
     assert len(fact.occurrences) == 1
+
+
+def test_user_forest_partial_resident_finalize_refreshes_changed_tree_index_only(tmp_path) -> None:
+    forest = _user_forest(tmp_path / "target-root", 4)
+    forest._partial_resident_tree_ids = frozenset({"tree-1"})
+    forest._fact_manager._facts["fact_1"] = _fact("fact_1", 4)
+    refreshed = {}
+
+    def fake_ingest_session(*, new_facts, cells, cell_to_facts):
+        return [TreeBuildResult("tree-1", "entity", "Tree 1", 1, 1, 0, 0.0)]
+
+    def fail_build_node_index(*args, **kwargs):
+        raise AssertionError("partial-resident finalize must not rebuild the global NodeIndex")
+
+    def fake_refresh(tree_ids):
+        refreshed["tree_ids"] = set(tree_ids)
+
+    forest._tree_builder.ingest_session = fake_ingest_session
+    forest._tree_builder.build_node_index = fail_build_node_index
+    forest._refresh_node_index_for_trees = fake_refresh
+    forest._query_pipeline._retriever._fact_to_trees = {"stale": {"tree-old"}}
+
+    result = forest._finalize_ingest_from_extraction(
+        session_id="session-1",
+        extraction_result=SessionExtractionResult(session_id="session-1", cells=[], memory_items=[]),
+        fact_write_result=FactWriteResult(
+            input_count=1,
+            inserted_count=0,
+            merged_count=1,
+            skipped_count=0,
+            canonical_fact_ids=["fact_1"],
+        ),
+    )
+
+    assert result.trees_updated == ["tree-1"]
+    assert refreshed["tree_ids"] == {"tree-1"}
+    assert forest._partial_resident_tree_ids == frozenset({"tree-1"})
+    assert forest._query_pipeline._retriever._fact_to_trees is None
 
 
 @pytest.mark.asyncio
@@ -1461,6 +1500,7 @@ async def test_cloud_state_core_merge_from_manifest_merges_explicit_subset(tmp_p
     snapshot = target.snapshot_for_materialization()
     assert snapshot.baseline_forest_version is None
     assert snapshot.changed_tree_ids is None
+    assert target._partial_resident_tree_ids == frozenset({"tree-2"})
     assert tree_store.list_tree_ids_calls == 0
     assert tree_store.requested_tree_ids == ["tree-2"]
 
