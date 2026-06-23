@@ -1423,6 +1423,53 @@ async def test_cloud_state_core_partial_hydration_check_is_read_only(tmp_path) -
 
 
 @pytest.mark.asyncio
+async def test_cloud_state_core_partial_hydration_shadow_snapshot_uses_isolated_forest(tmp_path) -> None:
+    dim = 4
+    target = _user_forest(tmp_path / "target-root", dim)
+    initial_state = await load_cloud_user_forest_state(
+        tree_store=FakeTreeStore(
+            {
+                "tree-1": [
+                    _node("root", child_ids=("leaf",), tree_id="tree-1"),
+                    _node("leaf", parent_id="root", level="L0", child_ids=("fact_1",), tree_id="tree-1"),
+                ]
+            }
+        ),
+        fact_store=FakeFactStore({"fact_1": _fact("fact_1", dim)}),
+        browse_embedding_store=FakeBrowseEmbeddingStore({"root": _embedding(dim)}),
+    )
+    apply_cloud_state_to_user_forest(target, initial_state)
+    before_trees = set(target._tree_builder.trees)
+    core = CloudStateHydratingUserForestCore(
+        user_forest=target,
+        tree_store=FakeTreeStore(
+            {
+                "tree-2": [
+                    _node("root-2", child_ids=("leaf-2",), tree_id="tree-2"),
+                    _node("leaf-2", parent_id="root-2", level="L0", child_ids=("fact_2",), tree_id="tree-2"),
+                ]
+            }
+        ),
+        fact_store=FakeFactStore({"fact_2": _fact("fact_2", dim)}),
+        browse_embedding_store=FakeBrowseEmbeddingStore({"root-2": _embedding(dim)}),
+        snapshot_store=None,
+        enable_cloud_state_hydration=True,
+    )
+
+    shadow_snapshot = await core.partial_hydration_shadow_snapshot_from_manifest(
+        FakeManifest({"forest_version": "v7", "embedding_model_version": "embed-v1"}),
+        tree_ids=["tree-2"],
+        session_id="empty-session",
+        turns=[],
+        metadata={},
+    )
+
+    assert {tree.tree_id for tree in shadow_snapshot.trees} == {"tree-2"}
+    assert set(target._tree_builder.trees) == before_trees
+    assert core.last_hydration_result is None
+
+
+@pytest.mark.asyncio
 async def test_cloud_state_core_merge_from_manifest_rejects_empty_tree_ids(tmp_path) -> None:
     target = _user_forest(tmp_path / "target-root", 4)
     core = CloudStateHydratingUserForestCore(

@@ -522,6 +522,8 @@ class FakeIngestCore:
         self.model_calls = model_calls
         self.last_hydration_result = None
         self.partial_hydration_checks = []
+        self.partial_hydration_equivalence_checks = []
+        self.partial_hydration_equivalence_snapshot = snapshot
         self.partial_hydration_check_result = {
             "supported": True,
             "complete": True,
@@ -576,6 +578,18 @@ class FakeIngestCore:
     def check_partial_hydration_from_manifest(self, manifest, *, tree_ids):
         self.partial_hydration_checks.append({"manifest": manifest, "tree_ids": tuple(tree_ids)})
         return dict(self.partial_hydration_check_result)
+
+    def partial_hydration_shadow_snapshot_from_manifest(self, manifest, *, tree_ids, session_id, turns, metadata):
+        self.partial_hydration_equivalence_checks.append(
+            {
+                "manifest": manifest,
+                "tree_ids": tuple(tree_ids),
+                "session_id": session_id,
+                "turns": list(turns),
+                "metadata": dict(metadata),
+            }
+        )
+        return self.partial_hydration_equivalence_snapshot
 
 
 class FakeDeletionLog:
@@ -1296,6 +1310,12 @@ async def test_materialization_handler_commits_snapshot_pointer_metadata() -> No
         "supported": False,
         "reason": "disabled",
     }
+    assert metadata["partial_hydration_equivalence_shadow"] == {
+        "schema_version": 1,
+        "enabled": False,
+        "supported": False,
+        "reason": "disabled",
+    }
 
 
 @pytest.mark.asyncio
@@ -1410,6 +1430,92 @@ async def test_materialization_handler_partial_hydration_shadow_checks_full_plan
     assert shadow["plan"]["id_arrays_truncated"] is True
     assert len(core.partial_hydration_checks[0]["tree_ids"]) == 101
     assert "entity:tree-100" in core.partial_hydration_checks[0]["tree_ids"]
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_records_partial_hydration_equivalence_shadow_when_enabled() -> None:
+    manifest_store = FakeManifestStore()
+    manifest_store.latest = ForestManifest(
+        manifest_id="manifest-v1",
+        tenant_id="tenant-1",
+        user_id="user-1",
+        forest_version="v1",
+        generation=1,
+        status="committed",
+        created_at_unix=1.0,
+        metadata={"job_id": "previous", "job_type": "ingest_session", "embedding_model_version": "embed-v1"},
+    )
+    core = FakeIngestCore(_two_tree_incremental_snapshot())
+    core.partial_hydration_equivalence_snapshot = replace(
+        _two_tree_incremental_snapshot(),
+        baseline_forest_version=None,
+    )
+    handler = _handler(
+        manifest_store=manifest_store,
+        core=core,
+        baseline_provider=MatchingProjectionBaselineProvider(),
+        config=MaterializationHandlerConfig(
+            owner_id="worker-1",
+            embedding_model_version="embed-v1",
+            code_version="test-sha",
+            prompt_config_hash="prompt-hash",
+            lease_renewal_seconds=9999,
+            enable_partial_hydration_equivalence_shadow=True,
+        ),
+    )
+
+    await handler.handle(_envelope(), {"fencing_token": 1})
+
+    shadow = manifest_store.latest.metadata["partial_hydration_equivalence_shadow"]
+    assert shadow["enabled"] is True
+    assert shadow["supported"] is True
+    assert shadow["equivalent"] is True
+    assert shadow["comparison"]["projection_refs_equivalent"] is True
+    assert shadow["comparison"]["delta_metadata_equivalent"] is True
+    assert shadow["comparison"]["same_baseline_forest_version"] is False
+    assert shadow["comparison"]["shadow_baseline_forest_version"] is None
+    assert core.partial_hydration_equivalence_checks[0]["tree_ids"] == ("entity:alice",)
+    assert core.partial_hydration_equivalence_checks[0]["session_id"] == "session-1"
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_partial_hydration_equivalence_shadow_reports_divergence() -> None:
+    manifest_store = FakeManifestStore()
+    manifest_store.latest = ForestManifest(
+        manifest_id="manifest-v1",
+        tenant_id="tenant-1",
+        user_id="user-1",
+        forest_version="v1",
+        generation=1,
+        status="committed",
+        created_at_unix=1.0,
+        metadata={"job_id": "previous", "job_type": "ingest_session", "embedding_model_version": "embed-v1"},
+    )
+    core = FakeIngestCore(_two_tree_incremental_snapshot())
+    core.partial_hydration_equivalence_snapshot = _snapshot()
+    handler = _handler(
+        manifest_store=manifest_store,
+        core=core,
+        baseline_provider=MatchingProjectionBaselineProvider(),
+        config=MaterializationHandlerConfig(
+            owner_id="worker-1",
+            embedding_model_version="embed-v1",
+            code_version="test-sha",
+            prompt_config_hash="prompt-hash",
+            lease_renewal_seconds=9999,
+            enable_partial_hydration_equivalence_shadow=True,
+        ),
+    )
+
+    await handler.handle(_envelope(), {"fencing_token": 1})
+
+    shadow = manifest_store.latest.metadata["partial_hydration_equivalence_shadow"]
+    assert shadow["enabled"] is True
+    assert shadow["supported"] is True
+    assert shadow["equivalent"] is False
+    assert shadow["comparison"]["projection_refs_equivalent"] is False
+    assert shadow["comparison"]["delta_metadata_equivalent"] is False
+    assert shadow["comparison"]["by_kind"]["tree_node_membership"]["missing_count"] > 0
 
 
 @pytest.mark.asyncio

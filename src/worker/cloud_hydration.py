@@ -9,8 +9,10 @@ snapshots from every ingest.
 from __future__ import annotations
 
 import inspect
+import tempfile
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import faiss
@@ -200,6 +202,48 @@ class CloudStateHydratingUserForestCore:
             "missing_summary_cache_count": len(state.missing_summary_cache_keys),
             "missing_node_embedding_count": len(state.missing_node_embedding_ids),
         }
+
+    async def partial_hydration_shadow_snapshot_from_manifest(
+        self,
+        manifest: Any,
+        *,
+        tree_ids: list[str] | tuple[str, ...] | set[str],
+        session_id: str,
+        turns: list[dict[str, Any]],
+        metadata: dict[str, Any],
+    ) -> Any:
+        """Run partial hydrate plus ingest in an isolated forest and return its snapshot."""
+
+        if not self.enable_cloud_state_hydration:
+            raise CloudStateHydrationIncomplete("cloud state hydration is disabled")
+        requested_tree_ids = tuple(str(tree_id) for tree_id in tree_ids if str(tree_id))
+        if not requested_tree_ids:
+            raise ValueError("tree_ids must contain at least one tree id for partial hydration shadow")
+        from src.forest.user_forest import UserForest
+
+        with tempfile.TemporaryDirectory(prefix="azure-memforest-partial-shadow-") as tmp_dir:
+            shadow_forest = UserForest(
+                self.user_forest.user_id,
+                Path(tmp_dir) / self.user_forest.user_id,
+                self.user_forest._config,
+                chat_client=self.user_forest._chat_client,
+                embedding_client=self.user_forest._embedding_client,
+            )
+            shadow_core = CloudStateHydratingUserForestCore(
+                user_forest=shadow_forest,
+                tree_store=self.tree_store,
+                tree_store_factory=self.tree_store_factory,
+                fact_store=self.fact_store,
+                summary_cache=self.summary_cache,
+                browse_embedding_store=self.browse_embedding_store,
+                browse_embedding_store_factory=self.browse_embedding_store_factory,
+                snapshot_store=None,
+                enable_cloud_state_hydration=True,
+                fallback_to_snapshot=False,
+                cloud_state_read_attempts=self.cloud_state_read_attempts,
+            )
+            await shadow_core.merge_from_manifest(manifest, tree_ids=requested_tree_ids)
+            return shadow_core.ingest_session(session_id=session_id, turns=turns, metadata=metadata)
 
     def ingest_session(self, *, session_id: str, turns: list[dict[str, Any]], metadata: dict[str, Any]) -> Any:
         self.user_forest.ingest_session(session_id, turns)

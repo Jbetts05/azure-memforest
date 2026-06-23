@@ -131,6 +131,7 @@ class MaterializationHandlerConfig:
     cloud_checkpoint_hydration_supported: bool = False
     enable_tree_scoped_projection_writes: bool = False
     enable_partial_hydration_shadow: bool = False
+    enable_partial_hydration_equivalence_shadow: bool = False
 
     def __post_init__(self) -> None:
         policy = _normalize_snapshot_policy(self.snapshot_policy)
@@ -290,6 +291,16 @@ class MemForestMaterializationHandler:
             projection = await self._apply_committed_projection_baseline(latest, projection)
             stage_timings_ms["baseline"] = _elapsed_ms(baseline_started)
             partial_hydration_shadow = await self._partial_hydration_shadow_summary(latest, projection, snapshot=snapshot)
+            partial_hydration_equivalence_shadow = await self._partial_hydration_equivalence_shadow_summary(
+                latest,
+                projection,
+                snapshot=snapshot,
+                envelope=envelope,
+                turns=turns,
+                metadata=request.metadata,
+                forest_version=forest_version,
+                generation=generation,
+            )
             await self._update_job_stage(envelope, fencing_token=fencing_token, stage="write_projection", detail="Writing facts, trees, embeddings, recall documents, and snapshot.", telemetry=telemetry)
             write_projection_started = time.perf_counter()
             projection_metadata = await self._write_projection(
@@ -305,6 +316,7 @@ class MemForestMaterializationHandler:
             projection_metadata["projection_input_counts"] = _projection_input_counts(projection, snapshot=snapshot)
             projection_metadata["hydration_summary"] = hydration_summary
             projection_metadata["partial_hydration_shadow"] = partial_hydration_shadow
+            projection_metadata["partial_hydration_equivalence_shadow"] = partial_hydration_equivalence_shadow
             try:
                 await self._stores.lease_store.assert_current(lease)
             except LeaseConflict as exc:
@@ -400,6 +412,81 @@ class MemForestMaterializationHandler:
             "complete": bool(check.get("complete")),
             "plan": plan_summary,
             "check": check,
+        }
+
+    async def _partial_hydration_equivalence_shadow_summary(
+        self,
+        latest: Any | None,
+        projection: MaterializationProjection,
+        *,
+        snapshot: ForestMaterializationSnapshot,
+        envelope: WriteJobEnvelope,
+        turns: list[dict[str, Any]],
+        metadata: dict[str, Any],
+        forest_version: str,
+        generation: int,
+    ) -> dict[str, Any]:
+        if not self._config.enable_partial_hydration_equivalence_shadow:
+            return {"schema_version": 1, "enabled": False, "supported": False, "reason": "disabled"}
+        plan_summary: dict[str, Any] | None = None
+        try:
+            if latest is None:
+                return {"schema_version": 1, "enabled": True, "supported": False, "reason": "no_committed_manifest"}
+            plan, plan_summary = _partial_hydration_plan_and_summary(projection, snapshot=snapshot)
+            if plan.full_hydration_required:
+                return {
+                    "schema_version": 1,
+                    "enabled": True,
+                    "supported": False,
+                    "reason": "full_hydration_required",
+                    "plan": plan_summary,
+                }
+            shadow_snapshot_builder = getattr(self._ingest_core, "partial_hydration_shadow_snapshot_from_manifest", None)
+            if shadow_snapshot_builder is None or not callable(shadow_snapshot_builder):
+                return {
+                    "schema_version": 1,
+                    "enabled": True,
+                    "supported": False,
+                    "reason": "partial_hydration_equivalence_checker_missing",
+                    "plan": plan_summary,
+                }
+            shadow_snapshot = await _maybe_await(
+                shadow_snapshot_builder(
+                    latest,
+                    tree_ids=plan.tree_ids_to_load,
+                    session_id=envelope.session_id,
+                    turns=turns,
+                    metadata=metadata,
+                )
+            )
+            shadow_projection = project_forest_snapshot(
+                shadow_snapshot,
+                tenant_id=envelope.tenant_id,
+                user_id=envelope.user_id,
+                forest_version=forest_version,
+                generation=generation,
+                embedding_model_version=self._config.embedding_model_version,
+            )
+            comparison = _projection_equivalence_summary(
+                projection,
+                shadow_projection,
+                embedding_model_version=self._config.embedding_model_version,
+            )
+        except Exception as exc:
+            return {
+                "schema_version": 1,
+                "enabled": True,
+                "supported": False,
+                "reason": f"partial_hydration_equivalence_check_failed:{type(exc).__name__}",
+                "plan": plan_summary,
+            }
+        return {
+            "schema_version": 1,
+            "enabled": True,
+            "supported": True,
+            "equivalent": bool(comparison.get("equivalent")),
+            "plan": plan_summary,
+            "comparison": comparison,
         }
 
     async def _run_ingest_session(
@@ -1983,6 +2070,77 @@ def _partial_hydration_plan_and_summary(
 def _partial_hydration_plan_summary(projection: MaterializationProjection, *, snapshot: ForestMaterializationSnapshot) -> dict[str, Any]:
     _, summary = _partial_hydration_plan_and_summary(projection, snapshot=snapshot)
     return summary
+
+
+def _projection_equivalence_summary(
+    authoritative: MaterializationProjection,
+    shadow: MaterializationProjection,
+    *,
+    embedding_model_version: str,
+) -> dict[str, Any]:
+    authoritative_refs = _projection_refs_by_kind(authoritative, embedding_model_version=embedding_model_version)
+    shadow_refs = _projection_refs_by_kind(shadow, embedding_model_version=embedding_model_version)
+    authoritative_refs["summary_cache"] = _summary_cache_projection_refs(authoritative.summary_cache_entries)
+    shadow_refs["summary_cache"] = _summary_cache_projection_refs(shadow.summary_cache_entries)
+    by_kind: dict[str, Any] = {}
+    projection_refs_equivalent = True
+    for kind in sorted(set(authoritative_refs) | set(shadow_refs)):
+        authoritative_set = {_projection_ref_fingerprint(ref) for ref in authoritative_refs.get(kind, ())}
+        shadow_set = {_projection_ref_fingerprint(ref) for ref in shadow_refs.get(kind, ())}
+        missing = sorted(authoritative_set - shadow_set)
+        extra = sorted(shadow_set - authoritative_set)
+        kind_equivalent = not missing and not extra
+        projection_refs_equivalent = projection_refs_equivalent and kind_equivalent
+        by_kind[kind] = {
+            "equivalent": kind_equivalent,
+            "authoritative_count": len(authoritative_set),
+            "shadow_count": len(shadow_set),
+            "missing_count": len(missing),
+            "extra_count": len(extra),
+            "missing_sample": missing[:20],
+            "extra_sample": extra[:20],
+            "samples_truncated": len(missing) > 20 or len(extra) > 20,
+        }
+    authoritative_changed = _sorted_optional_tree_ids(authoritative.changed_tree_ids)
+    shadow_changed = _sorted_optional_tree_ids(shadow.changed_tree_ids)
+    authoritative_deleted = _sorted_optional_tree_ids(authoritative.deleted_tree_ids)
+    shadow_deleted = _sorted_optional_tree_ids(shadow.deleted_tree_ids)
+    same_changed_tree_ids = authoritative_changed == shadow_changed
+    same_deleted_tree_ids = authoritative_deleted == shadow_deleted
+    same_baseline_forest_version = authoritative.baseline_forest_version == shadow.baseline_forest_version
+    delta_metadata_equivalent = same_changed_tree_ids and same_deleted_tree_ids
+    return {
+        "schema_version": 1,
+        "equivalent": projection_refs_equivalent and delta_metadata_equivalent,
+        "projection_refs_equivalent": projection_refs_equivalent,
+        "delta_metadata_equivalent": delta_metadata_equivalent,
+        "comparison_basis": "projection_record_refs_and_changed_deleted_tree_ids",
+        "caveat": "shadow reruns extraction, summary, and embedding work; model nondeterminism can produce content-hash false negatives",
+        "same_changed_tree_ids": same_changed_tree_ids,
+        "same_deleted_tree_ids": same_deleted_tree_ids,
+        "same_baseline_forest_version": same_baseline_forest_version,
+        "authoritative_changed_tree_ids": authoritative_changed[:100] if authoritative_changed is not None else None,
+        "shadow_changed_tree_ids": shadow_changed[:100] if shadow_changed is not None else None,
+        "authoritative_deleted_tree_ids": authoritative_deleted[:100] if authoritative_deleted is not None else None,
+        "shadow_deleted_tree_ids": shadow_deleted[:100] if shadow_deleted is not None else None,
+        "authoritative_baseline_forest_version": authoritative.baseline_forest_version,
+        "shadow_baseline_forest_version": shadow.baseline_forest_version,
+        "id_arrays_truncated": any(
+            ids is not None and len(ids) > 100
+            for ids in (authoritative_changed, shadow_changed, authoritative_deleted, shadow_deleted)
+        ),
+        "by_kind": by_kind,
+    }
+
+
+def _projection_ref_fingerprint(ref: ProjectionRecordRef) -> str:
+    return "\x1f".join((ref.record_kind, ref.logical_id, ref.content_hash, ref.content_id))
+
+
+def _sorted_optional_tree_ids(tree_ids: Any) -> list[str] | None:
+    if tree_ids is None:
+        return None
+    return sorted(str(tree_id) for tree_id in tree_ids if str(tree_id))
 
 
 def _projection_tree_scope_shadow_summary(projection: MaterializationProjection, *, embedding_model_version: str) -> dict[str, Any]:
