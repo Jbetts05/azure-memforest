@@ -120,6 +120,10 @@ class EntityRouteRecord:
     state: str
     distinct_fact_count: int
     distinct_session_count: int
+    fact_ids: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "fact_ids", tuple(sorted({str(value) for value in self.fact_ids if str(value)})))
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,9 +135,11 @@ class SceneRouteRecord:
     centroid_hash: str
     centroid: tuple[float, ...] = ()
     latest_fact_time: float | None = None
+    fact_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "centroid", tuple(float(value) for value in self.centroid))
+        object.__setattr__(self, "fact_ids", tuple(str(value) for value in self.fact_ids if str(value)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,6 +149,7 @@ class RouteIndexManifest:
     embedding_model_version: str
     entity_active_min_facts: int
     entity_active_min_sessions: int
+    entity_suppress_below_facts: int
     scene_assign_threshold: float
     scene_secondary_threshold: float
     scene_spawn_threshold: float
@@ -170,12 +177,14 @@ class FactRouteHint:
     scene_similarities: Mapping[str, float] = field(default_factory=dict)
     scene_scope_key: str = ""
     new_session_id: str = ""
+    embedding: tuple[float, ...] = ()
     cluster_merge_possible: bool = False
     suppression_flip_possible: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "entity_keys", tuple(sorted({str(key) for key in self.entity_keys if str(key)})))
         object.__setattr__(self, "scene_similarities", MappingProxyType({str(k): float(v) for k, v in dict(self.scene_similarities).items()}))
+        object.__setattr__(self, "embedding", tuple(float(value) for value in self.embedding))
 
 
 @dataclass(frozen=True, slots=True)
@@ -471,8 +480,10 @@ def build_fact_route_hints(
         if embedding is None:
             embedding = _metadata_embedding(fact)
         scene_similarities: dict[str, float] = {}
+        embedding_tuple: tuple[float, ...] = ()
         if embedding is not None:
             query = [float(value) for value in embedding]
+            embedding_tuple = tuple(query)
             for record in route_index.scene_records:
                 if record.scope_key != scene_scope_key or not record.centroid:
                     continue
@@ -490,6 +501,7 @@ def build_fact_route_hints(
                 scene_similarities=scene_similarities,
                 scene_scope_key=scene_scope_key,
                 new_session_id=str(getattr(fact, "first_session_id", "") or ""),
+                embedding=embedding_tuple,
             )
         )
     return tuple(hints)
@@ -521,6 +533,7 @@ def build_route_index_manifest(
                     state="active",
                     distinct_fact_count=0,
                     distinct_session_count=0,
+                    fact_ids=(),
                 ),
                 *(
                 EntityRouteRecord(
@@ -529,6 +542,7 @@ def build_route_index_manifest(
                     state=str(candidate.state),
                     distinct_fact_count=int(candidate.distinct_fact_count),
                     distinct_session_count=int(candidate.distinct_session_count),
+                    fact_ids=tuple(getattr(candidate, "fact_ids", ()) or ()),
                 )
                 for candidate in entity_router.iter_candidates()
                 ),
@@ -550,12 +564,14 @@ def build_route_index_manifest(
                 centroid_hash=_vector_hash(cluster.centroid),
                 centroid=tuple(float(value) for value in cluster.centroid),
                 latest_fact_time=getattr(cluster, "latest_fact_time", None),
+                fact_ids=tuple(getattr(cluster, "fact_ids", ()) or ()),
             )
         )
     return RouteIndexManifest(
         embedding_model_version=str(embedding_model_version or ""),
         entity_active_min_facts=int(entity_cfg.active_min_facts),
         entity_active_min_sessions=int(entity_cfg.active_min_sessions),
+        entity_suppress_below_facts=int(entity_cfg.suppress_below_facts),
         scene_assign_threshold=float(scene_cfg.theta_assign),
         scene_secondary_threshold=float(scene_cfg.theta_second),
         scene_spawn_threshold=float(scene_cfg.theta_spawn),
@@ -611,6 +627,179 @@ def compute_route_risk_flags(
     )
 
 
+def analyze_batch_route_risks(
+    *,
+    route_index: RouteIndexManifest,
+    new_fact_route_hints: Iterable[FactRouteHint],
+) -> RouteRiskFlags:
+    """Analyze whether the incoming batch can trigger merge/suppression risks."""
+
+    hints = tuple(new_fact_route_hints)
+    if hints and not route_index.scene_bootstrap_initialized:
+        return RouteRiskFlags(cluster_merge_possible=True, suppression_flip_possible=True)
+    clusters = {
+        record.cluster_id: {
+            "cluster_id": record.cluster_id,
+            "scope_key": record.scope_key,
+            "centroid": list(record.centroid),
+            "fact_count": int(record.fact_count),
+            "fact_ids": set(record.fact_ids),
+        }
+        for record in route_index.scene_records
+    }
+    fail_closed = False
+    virtual_index = 0
+    for hint in hints:
+        if not hint.scene_similarities:
+            continue
+        if not hint.scene_scope_key or not hint.embedding:
+            fail_closed = True
+            continue
+        assigned = _assigned_scene_cluster_ids(route_index, hint, clusters)
+        if assigned is None:
+            fail_closed = True
+            continue
+        if not assigned:
+            virtual_index += 1
+            cluster_id = f"__new__:{hint.scene_scope_key}:{virtual_index}"
+            clusters[cluster_id] = {
+                "cluster_id": cluster_id,
+                "scope_key": hint.scene_scope_key,
+                "centroid": list(hint.embedding),
+                "fact_count": 1,
+                "fact_ids": {hint.fact_id},
+            }
+            continue
+        for cluster_id in assigned:
+            cluster = clusters.get(cluster_id)
+            if cluster is None:
+                fail_closed = True
+                continue
+            _apply_hint_to_cluster(cluster, hint)
+
+    merge_pairs = _merge_pairs_from_cluster_state(clusters.values(), route_index)
+    suppression_candidates = _suppression_candidates_from_cluster_state(route_index, clusters.values(), hints)
+    return RouteRiskFlags(
+        cluster_merge_possible=fail_closed or bool(merge_pairs),
+        suppression_flip_possible=fail_closed or bool(merge_pairs) or bool(suppression_candidates),
+        merge_pair_count=len(merge_pairs),
+        suppression_candidate_count=len(suppression_candidates),
+    )
+
+
+def _assigned_scene_cluster_ids(
+    route_index: RouteIndexManifest,
+    hint: FactRouteHint,
+    clusters: Mapping[str, Mapping[str, Any]],
+) -> tuple[str, ...] | None:
+    known_scores = [
+        (cluster_id, float(score))
+        for cluster_id, score in hint.scene_similarities.items()
+        if cluster_id in clusters and clusters[cluster_id]["scope_key"] == hint.scene_scope_key
+    ]
+    unknown_high = [
+        cluster_id
+        for cluster_id, score in hint.scene_similarities.items()
+        if cluster_id not in clusters and float(score) >= route_index.scene_secondary_threshold
+    ]
+    if unknown_high:
+        return None
+    if not known_scores:
+        return ()
+    best_id, best_score = max(known_scores, key=lambda item: item[1])
+    best_cluster = clusters[best_id]
+    if best_score < route_index.scene_spawn_threshold:
+        return ()
+    if int(best_cluster["fact_count"]) >= route_index.scene_max_cluster_size:
+        return ()
+    if (
+        best_score < route_index.scene_assign_threshold
+        and int(best_cluster["fact_count"]) >= route_index.scene_max_cluster_size // 2
+    ):
+        return ()
+    assigned = [best_id]
+    secondary = [item for item in sorted(known_scores, key=lambda item: item[1], reverse=True) if item[0] != best_id]
+    if secondary:
+        cluster_id, score = secondary[0]
+        if score >= route_index.scene_secondary_threshold:
+            cluster = clusters[cluster_id]
+            if int(cluster["fact_count"]) < route_index.scene_max_cluster_size:
+                assigned.append(cluster_id)
+    return tuple(sorted(set(assigned)))
+
+
+def _apply_hint_to_cluster(cluster: dict[str, Any], hint: FactRouteHint) -> None:
+    count = int(cluster["fact_count"])
+    centroid = list(cluster["centroid"])
+    if centroid and hint.embedding and len(centroid) == len(hint.embedding):
+        alpha = 1.0 / (1.0 + count)
+        cluster["centroid"] = [c * (1.0 - alpha) + v * alpha for c, v in zip(centroid, hint.embedding)]
+    cluster["fact_count"] = count + 1
+    cluster["fact_ids"].add(hint.fact_id)
+
+
+def _merge_pairs_from_cluster_state(clusters: Iterable[Mapping[str, Any]], route_index: RouteIndexManifest) -> list[tuple[str, str]]:
+    by_scope: dict[str, list[Mapping[str, Any]]] = {}
+    for cluster in clusters:
+        by_scope.setdefault(str(cluster["scope_key"]), []).append(cluster)
+    pairs = []
+    for scoped in by_scope.values():
+        for i in range(len(scoped)):
+            for j in range(i + 1, len(scoped)):
+                left = scoped[i]
+                right = scoped[j]
+                if int(left["fact_count"]) + int(right["fact_count"]) > route_index.scene_max_cluster_size:
+                    continue
+                if _cosine_similarity(left["centroid"], right["centroid"]) >= route_index.scene_merge_threshold:
+                    pairs.append((str(left["cluster_id"]), str(right["cluster_id"])))
+    return pairs
+
+
+def _suppression_candidates_from_cluster_state(
+    route_index: RouteIndexManifest,
+    clusters: Iterable[Mapping[str, Any]],
+    hints: Iterable[FactRouteHint] = (),
+) -> list[str]:
+    scene_fact_sets = [set(cluster["fact_ids"]) for cluster in clusters if cluster.get("fact_ids")]
+    hint_tuple = tuple(hints)
+    entity_fact_ids: dict[str, set[str]] = {
+        record.entity_key: set(record.fact_ids)
+        for record in route_index.entity_records
+    }
+    entity_session_ids: dict[str, set[str]] = {
+        record.entity_key: set()
+        for record in route_index.entity_records
+    }
+    for hint in hint_tuple:
+        for entity_key in hint.entity_keys:
+            entity_fact_ids.setdefault(entity_key, set()).add(hint.fact_id)
+            if hint.new_session_id:
+                entity_session_ids.setdefault(entity_key, set()).add(hint.new_session_id)
+    record_by_entity = {record.entity_key: record for record in route_index.entity_records}
+    candidates = []
+    for entity_key, fact_ids in entity_fact_ids.items():
+        if entity_key == "user":
+            continue
+        record = record_by_entity.get(entity_key)
+        base_fact_count = int(record.distinct_fact_count) if record is not None else 0
+        base_session_count = int(record.distinct_session_count) if record is not None else 0
+        new_fact_count = len(fact_ids - (set(record.fact_ids) if record is not None else set()))
+        new_session_count = len(entity_session_ids.get(entity_key, set()))
+        active = bool(record is not None and record.state == "active")
+        if not active:
+            active = (
+                base_fact_count + new_fact_count >= route_index.entity_active_min_facts
+                and base_session_count + new_session_count >= route_index.entity_active_min_sessions
+            )
+        if not active:
+            continue
+        if len(fact_ids) > route_index.entity_suppress_below_facts:
+            continue
+        if any(fact_ids and fact_ids.issubset(scene_facts) for scene_facts in scene_fact_sets):
+            candidates.append(entity_key)
+    return candidates
+
+
 def route_index_manifest_from_dict(value: Mapping[str, Any]) -> RouteIndexManifest:
     """Rehydrate route metadata from a JSON-compatible durable document."""
 
@@ -618,6 +807,7 @@ def route_index_manifest_from_dict(value: Mapping[str, Any]) -> RouteIndexManife
         embedding_model_version=str(value.get("embedding_model_version") or ""),
         entity_active_min_facts=int(value.get("entity_active_min_facts") or 0),
         entity_active_min_sessions=int(value.get("entity_active_min_sessions") or 0),
+        entity_suppress_below_facts=int(value.get("entity_suppress_below_facts") or 0),
         scene_assign_threshold=float(value.get("scene_assign_threshold") or 0.0),
         scene_secondary_threshold=float(value.get("scene_secondary_threshold") or 0.0),
         scene_spawn_threshold=float(value.get("scene_spawn_threshold") or 0.0),
@@ -633,6 +823,7 @@ def route_index_manifest_from_dict(value: Mapping[str, Any]) -> RouteIndexManife
                 state=str(record.get("state") or ""),
                 distinct_fact_count=int(record.get("distinct_fact_count") or 0),
                 distinct_session_count=int(record.get("distinct_session_count") or 0),
+                fact_ids=tuple(record.get("fact_ids") or ()),
             )
             for record in value.get("entity_records", ())
         ),
@@ -645,6 +836,7 @@ def route_index_manifest_from_dict(value: Mapping[str, Any]) -> RouteIndexManife
                 centroid_hash=str(record.get("centroid_hash") or ""),
                 centroid=tuple(float(value) for value in record.get("centroid", ()) or ()),
                 latest_fact_time=_maybe_float(record.get("latest_fact_time")),
+                fact_ids=tuple(record.get("fact_ids") or ()),
             )
             for record in value.get("scene_records", ())
         ),
@@ -665,6 +857,7 @@ def route_index_manifest_to_dict(manifest: RouteIndexManifest) -> dict[str, Any]
         "embedding_model_version": manifest.embedding_model_version,
         "entity_active_min_facts": manifest.entity_active_min_facts,
         "entity_active_min_sessions": manifest.entity_active_min_sessions,
+        "entity_suppress_below_facts": manifest.entity_suppress_below_facts,
         "scene_assign_threshold": manifest.scene_assign_threshold,
         "scene_secondary_threshold": manifest.scene_secondary_threshold,
         "scene_spawn_threshold": manifest.scene_spawn_threshold,
@@ -686,6 +879,7 @@ def route_index_manifest_to_dict(manifest: RouteIndexManifest) -> dict[str, Any]
                 "state": record.state,
                 "distinct_fact_count": record.distinct_fact_count,
                 "distinct_session_count": record.distinct_session_count,
+                "fact_ids": list(record.fact_ids),
             }
             for record in manifest.entity_records
         ],
@@ -698,6 +892,7 @@ def route_index_manifest_to_dict(manifest: RouteIndexManifest) -> dict[str, Any]
                 "centroid_hash": record.centroid_hash,
                 "centroid": list(record.centroid),
                 "latest_fact_time": record.latest_fact_time,
+                "fact_ids": list(record.fact_ids),
             }
             for record in manifest.scene_records
         ],

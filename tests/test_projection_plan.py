@@ -15,6 +15,7 @@ from src.cloud.projection_plan import (
     ProjectionSkipPlan,
     RouteIndexManifest,
     RouteRiskFlags,
+    analyze_batch_route_risks,
     compute_route_risk_flags,
     route_index_manifest_from_dict,
     route_index_manifest_matches_router_state,
@@ -447,6 +448,7 @@ def test_build_fact_route_hints_scores_domain_clusters_with_time_bonus_and_entit
                 "centroid-a",
                 centroid=(1.0, 0.0),
                 latest_fact_time=1.0,
+                fact_ids=("fact-old",),
             ),
             SceneRouteRecord(
                 "scene:work",
@@ -456,6 +458,7 @@ def test_build_fact_route_hints_scores_domain_clusters_with_time_bonus_and_entit
                 "centroid-b",
                 centroid=(0.0, 1.0),
                 latest_fact_time=1.0,
+                fact_ids=("fact-work",),
             ),
         )
     )
@@ -507,6 +510,125 @@ def test_build_fact_route_hints_uses_metadata_embedding_and_fails_closed_when_mi
 
     assert hints[0].scene_similarities["scene:travel"] == pytest.approx(1.0)
     assert hints[1].scene_similarities == {}
+
+
+def test_analyze_batch_route_risks_proves_safe_when_batch_cannot_merge_or_suppress() -> None:
+    route_index = _route_index(
+        scene_records=(
+            SceneRouteRecord("scene:travel", "tree:scene:travel", "travel", 5, "a", centroid=(1.0, 0.0), fact_ids=("old-a",)),
+            SceneRouteRecord("scene:other", "tree:scene:other", "travel", 5, "b", centroid=(0.0, 1.0), fact_ids=("old-b",)),
+        ),
+        entity_records=(EntityRouteRecord("alice", "entity:alice", "active", 3, 2, fact_ids=("fact-a", "fact-b", "fact-c")),),
+    )
+    hints = (
+        FactRouteHint(
+            "new-fact",
+            scene_similarities={"scene:travel": 0.9, "scene:other": 0.1},
+            scene_scope_key="travel",
+            embedding=(1.0, 0.0),
+        ),
+    )
+
+    risks = analyze_batch_route_risks(route_index=route_index, new_fact_route_hints=hints)
+
+    assert risks.cluster_merge_possible is False
+    assert risks.suppression_flip_possible is False
+
+
+def test_analyze_batch_route_risks_detects_batch_induced_merge() -> None:
+    route_index = _route_index(
+        scene_merge_threshold=0.7,
+        scene_records=(
+            SceneRouteRecord("scene:left", "tree:scene:left", "travel", 1, "left", centroid=(1.0, 0.0), fact_ids=("left-old",)),
+            SceneRouteRecord("scene:right", "tree:scene:right", "travel", 1, "right", centroid=(0.0, 1.0), fact_ids=("right-old",)),
+        ),
+    )
+    hints = (
+        FactRouteHint(
+            "new-fact",
+            scene_similarities={"scene:left": 0.9, "scene:right": 0.1},
+            scene_scope_key="travel",
+            embedding=(0.0, 1.0),
+        ),
+    )
+
+    risks = analyze_batch_route_risks(route_index=route_index, new_fact_route_hints=hints)
+
+    assert risks.cluster_merge_possible is True
+    assert risks.merge_pair_count == 1
+
+
+def test_analyze_batch_route_risks_detects_batch_induced_suppression() -> None:
+    route_index = _route_index(
+        entity_records=(
+            EntityRouteRecord("alice", "entity:alice", "active", 2, 2, fact_ids=("fact-a", "fact-b")),
+        ),
+        scene_records=(
+            SceneRouteRecord("scene:travel", "tree:scene:travel", "travel", 5, "a", centroid=(1.0, 0.0), fact_ids=("fact-a",)),
+        ),
+    )
+    hints = (
+        FactRouteHint(
+            "fact-b",
+            entity_keys=("alice",),
+            scene_similarities={"scene:travel": 0.9},
+            scene_scope_key="travel",
+            embedding=(1.0, 0.0),
+        ),
+    )
+
+    risks = analyze_batch_route_risks(route_index=route_index, new_fact_route_hints=hints)
+
+    assert risks.suppression_flip_possible is True
+    assert risks.suppression_candidate_count == 1
+
+
+def test_analyze_batch_route_risks_fails_closed_before_scene_bootstrap() -> None:
+    route_index = _route_index(scene_bootstrap_initialized=False)
+    hints = (FactRouteHint("fact-1", scene_similarities={"scene:travel": 0.9}, scene_scope_key="travel", embedding=(1.0, 0.0)),)
+
+    risks = analyze_batch_route_risks(route_index=route_index, new_fact_route_hints=hints)
+
+    assert risks.cluster_merge_possible is True
+    assert risks.suppression_flip_possible is True
+
+
+def test_analyze_batch_route_risks_treats_merge_as_suppression_risk() -> None:
+    route_index = _route_index(
+        scene_merge_threshold=0.7,
+        entity_records=(EntityRouteRecord("alice", "entity:alice", "active", 2, 2, fact_ids=("left-old", "right-old")),),
+        scene_records=(
+            SceneRouteRecord("scene:left", "tree:scene:left", "travel", 1, "left", centroid=(1.0, 0.0), fact_ids=("left-old",)),
+            SceneRouteRecord("scene:right", "tree:scene:right", "travel", 1, "right", centroid=(0.0, 1.0), fact_ids=("right-old",)),
+        ),
+    )
+    hints = (
+        FactRouteHint(
+            "new-fact",
+            scene_similarities={"scene:left": 0.9, "scene:right": 0.1},
+            scene_scope_key="travel",
+            embedding=(0.0, 1.0),
+        ),
+    )
+
+    risks = analyze_batch_route_risks(route_index=route_index, new_fact_route_hints=hints)
+
+    assert risks.cluster_merge_possible is True
+    assert risks.suppression_flip_possible is True
+
+
+def test_analyze_batch_route_risks_fails_closed_when_hint_cannot_be_simulated() -> None:
+    route_index = _route_index(
+        scene_records=(
+            SceneRouteRecord("scene:travel", "tree:scene:travel", "travel", 5, "a", centroid=(1.0, 0.0), fact_ids=("old-a",)),
+        )
+    )
+    hints = (FactRouteHint("new-fact", scene_similarities={"scene:travel": 0.9}, scene_scope_key="travel"),)
+
+    risks = analyze_batch_route_risks(route_index=route_index, new_fact_route_hints=hints)
+
+    assert risks.cluster_merge_possible is True
+    assert risks.suppression_flip_possible is True
 
 
 def test_filter_projection_refs_to_tree_scope_keeps_only_tree_scoped_records() -> None:
@@ -579,6 +701,7 @@ def _route_index(**overrides) -> RouteIndexManifest:
         "embedding_model_version": "embed-v1",
         "entity_active_min_facts": 3,
         "entity_active_min_sessions": 2,
+        "entity_suppress_below_facts": 2,
         "scene_assign_threshold": 0.7,
         "scene_secondary_threshold": 0.55,
         "scene_spawn_threshold": 0.45,
@@ -594,8 +717,8 @@ def _route_index(**overrides) -> RouteIndexManifest:
         "cluster_merge_pair_count": 0,
         "suppression_candidate_count": 0,
         "entity_records": (
-            EntityRouteRecord("alice", "entity:alice", "active", 3, 2),
-            EntityRouteRecord("bob", "entity:bob", "lazy", 2, 1),
+            EntityRouteRecord("alice", "entity:alice", "active", 3, 2, fact_ids=("fact-a", "fact-b", "fact-c")),
+            EntityRouteRecord("bob", "entity:bob", "lazy", 2, 1, fact_ids=("fact-bob-1", "fact-bob-2")),
         ),
         "scene_records": (
             SceneRouteRecord("scene:travel", "tree:scene:travel", "travel", 5, "centroid-a"),

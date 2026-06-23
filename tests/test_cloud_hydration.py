@@ -261,6 +261,7 @@ def test_user_forest_materialization_snapshot_includes_route_index_manifest(tmp_
             "state": "active",
             "distinct_fact_count": 0,
             "distinct_session_count": 0,
+            "fact_ids": [],
         }
     ]
     assert route_index["scene_records"] == []
