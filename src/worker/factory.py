@@ -198,6 +198,7 @@ def fixed_materialization_config_factory(
     enable_partial_hydration_shadow: bool = False,
     enable_partial_hydration_equivalence_shadow: bool = False,
     enable_partial_hydration_guarded_switch: bool = False,
+    enable_pre_ingest_route_prediction_prepass: bool = False,
 ) -> Callable[[WriteJobEnvelope], MaterializationHandlerConfig]:
     def build(envelope: WriteJobEnvelope) -> MaterializationHandlerConfig:
         return MaterializationHandlerConfig(
@@ -217,6 +218,7 @@ def fixed_materialization_config_factory(
             enable_partial_hydration_shadow=enable_partial_hydration_shadow,
             enable_partial_hydration_equivalence_shadow=enable_partial_hydration_equivalence_shadow,
             enable_partial_hydration_guarded_switch=enable_partial_hydration_guarded_switch,
+            enable_pre_ingest_route_prediction_prepass=enable_pre_ingest_route_prediction_prepass,
         )
 
     return build
@@ -334,6 +336,7 @@ def build_scoped_materialization_handler_from_env(
             enable_partial_hydration_shadow=_env_flag(values.get("AZURE_MEMFOREST_ENABLE_PARTIAL_HYDRATION_SHADOW", "")),
             enable_partial_hydration_equivalence_shadow=_env_flag(values.get("AZURE_MEMFOREST_ENABLE_PARTIAL_HYDRATION_EQUIVALENCE_SHADOW", "")),
             enable_partial_hydration_guarded_switch=_env_flag(values.get("AZURE_MEMFOREST_ENABLE_PARTIAL_HYDRATION_GUARDED_SWITCH", "")),
+            enable_pre_ingest_route_prediction_prepass=_env_flag(values.get("AZURE_MEMFOREST_ENABLE_PRE_INGEST_ROUTE_PREDICTION_PREPASS", "")),
         ),
     )
     return MaterializationRuntime(

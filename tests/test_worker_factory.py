@@ -98,6 +98,7 @@ def test_fixed_materialization_config_factory_sets_owner_and_embedding_version()
         enable_partial_hydration_shadow=True,
         enable_partial_hydration_equivalence_shadow=True,
         enable_partial_hydration_guarded_switch=True,
+        enable_pre_ingest_route_prediction_prepass=True,
     )(_envelope())
 
     assert config.owner_id == "worker-1"
@@ -107,6 +108,7 @@ def test_fixed_materialization_config_factory_sets_owner_and_embedding_version()
     assert config.enable_partial_hydration_shadow is True
     assert config.enable_partial_hydration_equivalence_shadow is True
     assert config.enable_partial_hydration_guarded_switch is True
+    assert config.enable_pre_ingest_route_prediction_prepass is True
 
 
 def test_fixed_materialization_config_factory_fails_closed_for_checkpoint_policy() -> None:

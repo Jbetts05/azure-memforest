@@ -107,13 +107,13 @@ class SyncIngestCore(Protocol):
     def delete_session(self, *, session_id: str) -> ForestMaterializationSnapshot:
         ...
 
-    def snapshot_for_materialization(self) -> ForestMaterializationSnapshot:
-        ...
-
     def snapshot_payload(self) -> bytes:
         ...
 
     def hydrate_from_manifest(self, manifest: Any) -> None:
+        ...
+
+    def snapshot_for_materialization(self) -> ForestMaterializationSnapshot:
         ...
 
 
@@ -138,6 +138,7 @@ class MaterializationHandlerConfig:
     enable_partial_hydration_equivalence_shadow: bool = False
     # Metadata-only until a trusted pre-ingest tree-scope planner exists.
     enable_partial_hydration_guarded_switch: bool = False
+    enable_pre_ingest_route_prediction_prepass: bool = False
 
     def __post_init__(self) -> None:
         policy = _normalize_snapshot_policy(self.snapshot_policy)
@@ -240,7 +241,7 @@ class MemForestMaterializationHandler:
             try:
                 with collect_model_telemetry() as telemetry:
                     extract_build_started = time.perf_counter()
-                    snapshot = await self._run_ingest_session(
+                    snapshot, pre_ingest_prediction = await self._run_ingest_session(
                         envelope,
                         fencing_token=fencing_token,
                         budget=budget_from_document(claimed_job) or budget_for_envelope(envelope),
@@ -248,6 +249,7 @@ class MemForestMaterializationHandler:
                         metadata=request.metadata,
                         telemetry=telemetry,
                         session_id=envelope.session_id,
+                        route_index_manifest=(getattr(latest, "metadata", {}) or {}).get("route_index_manifest") if latest is not None else None,
                     )
                     stage_timings_ms["extract_build"] = _elapsed_ms(extract_build_started)
             except asyncio.TimeoutError as exc:
@@ -320,6 +322,7 @@ class MemForestMaterializationHandler:
                 snapshot=snapshot,
                 session_id=envelope.session_id,
                 embedding_model_version=self._config.embedding_model_version,
+                pre_ingest_prediction=pre_ingest_prediction,
             )
             await self._update_job_stage(envelope, fencing_token=fencing_token, stage="write_projection", detail="Writing facts, trees, embeddings, recall documents, and snapshot.", telemetry=telemetry)
             write_projection_started = time.perf_counter()
@@ -522,14 +525,16 @@ class MemForestMaterializationHandler:
         turns: list[dict[str, Any]],
         metadata: dict[str, Any],
         telemetry: dict[str, Any],
-    ) -> ForestMaterializationSnapshot:
+        route_index_manifest: dict[str, Any] | None = None,
+    ) -> tuple[ForestMaterializationSnapshot, Any | None]:
         stop_monitor = asyncio.Event()
         ingest_task = asyncio.create_task(
             asyncio.to_thread(
-                self._ingest_core.ingest_session,
+                self._ingest_with_optional_prepass,
                 session_id=session_id,
                 turns=turns,
                 metadata=metadata,
+                route_index_manifest=route_index_manifest,
             )
         )
         monitor_task = asyncio.create_task(
@@ -564,6 +569,41 @@ class MemForestMaterializationHandler:
             monitor_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await monitor_task
+
+    def _ingest_with_optional_prepass(
+        self,
+        *,
+        session_id: str,
+        turns: list[dict[str, Any]],
+        metadata: dict[str, Any],
+        route_index_manifest: dict[str, Any] | None,
+    ) -> tuple[ForestMaterializationSnapshot, Any | None]:
+        prepare = getattr(self._ingest_core, "prepare_pre_ingest_route_prediction", None)
+        finalize = getattr(self._ingest_core, "finalize_pre_ingest_route_prediction", None)
+        if (
+            self._config.enable_pre_ingest_route_prediction_prepass
+            and route_index_manifest
+            and callable(prepare)
+            and callable(finalize)
+        ):
+            # If prepare/finalize fails after mutating in-memory facts, the job
+            # aborts before commit and the next attempt rehydrates from the last
+            # committed manifest at the start of _handle_ingest.
+            # Validate metadata before the mutating prepass; failures fall back
+            # to the legacy single-step ingest without double-applying facts.
+            try:
+                route_index_manifest_from_dict(route_index_manifest)
+            except Exception:
+                return self._ingest_core.ingest_session(session_id=session_id, turns=turns, metadata=metadata), None
+            prediction = prepare(
+                session_id=session_id,
+                turns=turns,
+                route_index_manifest=route_index_manifest,
+                embedding_model_version=self._config.embedding_model_version,
+            )
+            snapshot = finalize(prediction)
+            return snapshot, prediction
+        return self._ingest_core.ingest_session(session_id=session_id, turns=turns, metadata=metadata), None
 
     async def _monitor_extract_build(
         self,
@@ -2211,6 +2251,7 @@ def _pre_ingest_scope_prediction_summary(
     snapshot: ForestMaterializationSnapshot,
     session_id: str,
     embedding_model_version: str,
+    pre_ingest_prediction: Any | None = None,
 ) -> dict[str, Any]:
     try:
         if latest is None:
@@ -2218,21 +2259,31 @@ def _pre_ingest_scope_prediction_summary(
         route_index_raw = dict((getattr(latest, "metadata", {}) or {}).get("route_index_manifest") or {})
         if not route_index_raw:
             return {"schema_version": 1, "mode": "shadow_compare", "supported": False, "reason": "route_index_manifest_missing"}
-        route_index = route_index_manifest_from_dict(route_index_raw)
-        touched_facts = _facts_touched_by_session(snapshot, session_id=session_id)
-        hints = build_fact_route_hints(route_index=route_index, facts=touched_facts)
-        risks = analyze_batch_route_risks(route_index=route_index, new_fact_route_hints=hints)
-        planned_route_index = replace(
-            route_index,
-            cluster_merge_possible=risks.cluster_merge_possible,
-            suppression_flip_possible=risks.suppression_flip_possible,
-        )
-        scope = plan_pre_ingest_tree_scope(
-            route_index=planned_route_index,
-            new_fact_route_hints=hints,
-            embedding_model_version=embedding_model_version,
-            deleted_tree_ids=projection.deleted_tree_ids,
-        )
+        if pre_ingest_prediction is not None:
+            touched_facts = list(getattr(pre_ingest_prediction, "touched_facts", ()) or ())
+            hints = tuple(getattr(pre_ingest_prediction, "route_hints", ()) or ())
+            risks = getattr(pre_ingest_prediction, "route_risks")
+            scope = _scope_with_deleted_trees(getattr(pre_ingest_prediction, "pre_ingest_scope"), projection.deleted_tree_ids)
+            input_basis = "pre_tree_build_canonical_facts"
+            switch_readiness = "candidate_signal"
+        else:
+            route_index = route_index_manifest_from_dict(route_index_raw)
+            touched_facts = _facts_touched_by_session(snapshot, session_id=session_id)
+            hints = build_fact_route_hints(route_index=route_index, facts=touched_facts)
+            risks = analyze_batch_route_risks(route_index=route_index, new_fact_route_hints=hints)
+            planned_route_index = replace(
+                route_index,
+                cluster_merge_possible=risks.cluster_merge_possible,
+                suppression_flip_possible=risks.suppression_flip_possible,
+            )
+            scope = plan_pre_ingest_tree_scope(
+                route_index=planned_route_index,
+                new_fact_route_hints=hints,
+                embedding_model_version=embedding_model_version,
+                deleted_tree_ids=projection.deleted_tree_ids,
+            )
+            input_basis = "post_ingest_canonical_facts"
+            switch_readiness = "not_authoritative"
         if projection.changed_tree_ids is None:
             actual_tree_ids: set[str] | None = None
             missing_tree_ids: set[str] = set()
@@ -2242,8 +2293,8 @@ def _pre_ingest_scope_prediction_summary(
         return {
             "schema_version": 1,
             "mode": "shadow_compare",
-            "input_basis": "post_ingest_canonical_facts",
-            "switch_readiness": "not_authoritative",
+            "input_basis": input_basis,
+            "switch_readiness": switch_readiness,
             "supported": True,
             "full_hydration_required": scope.full_hydration_required,
             "covers_oracle_canonical_input": actual_tree_ids is not None and not missing_tree_ids,
@@ -2273,6 +2324,17 @@ def _pre_ingest_scope_prediction_summary(
             "supported": False,
             "reason": f"exception:{type(exc).__name__}",
         }
+
+
+def _scope_with_deleted_trees(scope: Any, deleted_tree_ids: Any) -> Any:
+    deleted = tuple(sorted({str(tree_id) for tree_id in deleted_tree_ids if str(tree_id)}))
+    if not deleted:
+        return scope
+    return replace(
+        scope,
+        tree_ids_to_load=tuple(sorted(set(getattr(scope, "tree_ids_to_load", ())) | set(deleted))),
+        deleted_tree_ids=deleted,
+    )
 
 
 def _facts_touched_by_session(snapshot: ForestMaterializationSnapshot, *, session_id: str) -> list[Any]:

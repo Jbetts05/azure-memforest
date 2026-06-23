@@ -251,6 +251,18 @@ class CloudStateHydratingUserForestCore:
         self.user_forest.ingest_session(session_id, turns)
         return self.user_forest.snapshot_for_materialization()
 
+    def prepare_pre_ingest_route_prediction(self, *, session_id: str, turns: list[dict[str, Any]], route_index_manifest: dict, embedding_model_version: str) -> Any:
+        return self.user_forest.prepare_pre_ingest_route_prediction(
+            session_id,
+            turns,
+            route_index_manifest=route_index_manifest,
+            embedding_model_version=embedding_model_version,
+        )
+
+    def finalize_pre_ingest_route_prediction(self, prediction: Any) -> Any:
+        self.user_forest.finalize_pre_ingest_route_prediction(prediction)
+        return self.user_forest.snapshot_for_materialization()
+
     def delete_session(self, *, session_id: str) -> Any:
         self.user_forest.delete_session(session_id)
         return self.user_forest.snapshot_for_materialization()

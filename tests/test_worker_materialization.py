@@ -5,13 +5,14 @@ import asyncio
 import json
 import time
 from dataclasses import replace
+from types import SimpleNamespace
 
 from src.build.tree_types import MemTree, MemTreeNode, SessionLeaf
 from src.cloud.cosmos_leases import LeaseConflict
 from src.cloud.contracts import Lease
 from src.cloud.cosmos_manifests import ForestManifest
 from src.cloud.projection_baseline import CommittedProjectionBaseline
-from src.cloud.projection_plan import ProjectionRecordRef, tree_node_body_content_id
+from src.cloud.projection_plan import FactRouteHint, PreIngestTreeScope, ProjectionRecordRef, RouteRiskFlags, tree_node_body_content_id
 from src.evaluation.incremental_cloud_validation import ProjectionWriteCounts, compare_projection_write_reduction
 from src.forest.user_forest import ForestMaterializationSnapshot
 from src.service.auth import ActorContext, TenantContext
@@ -528,6 +529,9 @@ class FakeIngestCore:
         self.partial_hydration_equivalence_snapshot = snapshot
         self.partial_hydration_check_exception = None
         self.partial_hydration_equivalence_exception = None
+        self.pre_ingest_prediction = None
+        self.pre_ingest_prediction_calls = []
+        self.finalized_pre_ingest_predictions = []
         self.partial_hydration_check_result = {
             "supported": True,
             "complete": True,
@@ -560,6 +564,23 @@ class FakeIngestCore:
 
     def snapshot_payload(self):
         return b"full-archive"
+
+    def prepare_pre_ingest_route_prediction(self, *, session_id, turns, route_index_manifest, embedding_model_version):
+        self.pre_ingest_prediction_calls.append(
+            {
+                "session_id": session_id,
+                "turns": list(turns),
+                "route_index_manifest": dict(route_index_manifest),
+                "embedding_model_version": embedding_model_version,
+            }
+        )
+        if self.pre_ingest_prediction is None:
+            raise RuntimeError("pre_ingest_prediction not configured")
+        return self.pre_ingest_prediction
+
+    def finalize_pre_ingest_route_prediction(self, prediction):
+        self.finalized_pre_ingest_predictions.append(prediction)
+        return self.snapshot
 
     def hydrate_from_manifest(self, manifest):
         self.hydrated_from = manifest
@@ -1869,25 +1890,98 @@ async def test_materialization_handler_records_pre_ingest_scope_prediction_when_
             "route_index_manifest": snapshot.route_index_manifest,
         },
     )
+    core = FakeIngestCore(snapshot)
+    core.pre_ingest_prediction = SimpleNamespace(
+        touched_facts=snapshot.facts,
+        route_hints=(
+            FactRouteHint(
+                "fact-1",
+                entity_keys=("alice", "user"),
+                scene_similarities={"scene:travel": 1.0},
+                scene_scope_key="travel",
+                new_session_id="session-1",
+                embedding=(1.0, 0.0),
+            ),
+        ),
+        route_risks=RouteRiskFlags(cluster_merge_possible=False, suppression_flip_possible=False),
+        pre_ingest_scope=PreIngestTreeScope(
+            full_hydration_required=False,
+            tree_ids_to_load=("entity:alice", "entity:user", "tree:scene:travel"),
+            escalation_reasons=(),
+            predicted_entity_tree_ids=("entity:alice", "entity:user"),
+            predicted_scene_tree_ids=("tree:scene:travel",),
+        ),
+    )
     handler = _handler(
         manifest_store=manifest_store,
-        core=FakeIngestCore(snapshot),
+        core=core,
         baseline_provider=MatchingProjectionBaselineProvider(),
+        config=MaterializationHandlerConfig(
+            owner_id="worker-1",
+            embedding_model_version="embed-v1",
+            code_version="test-sha",
+            prompt_config_hash="prompt-hash",
+            lease_renewal_seconds=9999,
+            enable_pre_ingest_route_prediction_prepass=True,
+        ),
     )
 
     await handler.handle(_envelope(), {"fencing_token": 1})
 
     prediction = manifest_store.latest.metadata["pre_ingest_scope_prediction"]
     assert prediction["supported"] is True
-    assert prediction["input_basis"] == "post_ingest_canonical_facts"
-    assert prediction["switch_readiness"] == "not_authoritative"
+    assert prediction["input_basis"] == "pre_tree_build_canonical_facts"
+    assert prediction["switch_readiness"] == "candidate_signal"
     assert prediction["covers_oracle_canonical_input"] is True
     assert prediction["under_selected_without_escalation"] is False
+    assert core.pre_ingest_prediction_calls
+    assert core.finalized_pre_ingest_predictions == [core.pre_ingest_prediction]
     assert prediction["touched_fact_count"] == 1
     assert prediction["hint_count"] == 1
     assert prediction["actual_tree_ids"] == ["entity:alice"]
     assert prediction["missing_tree_count"] == 0
     assert set(prediction["planned_tree_ids"]) >= {"entity:alice", "entity:user", "tree:scene:travel"}
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_pre_ingest_prepass_falls_back_before_mutation_on_bad_route_metadata() -> None:
+    snapshot = _two_tree_incremental_snapshot_with_fact_and_route_manifest()
+    manifest_store = FakeManifestStore()
+    manifest_store.latest = ForestManifest(
+        manifest_id="manifest-v1",
+        tenant_id="tenant-1",
+        user_id="user-1",
+        forest_version="v1",
+        generation=1,
+        status="committed",
+        created_at_unix=1.0,
+        metadata={
+            "job_id": "previous",
+            "job_type": "ingest_session",
+            "embedding_model_version": "embed-v1",
+            "route_index_manifest": {"entity_records": [object()]},
+        },
+    )
+    core = FakeIngestCore(snapshot)
+    core.pre_ingest_prediction = SimpleNamespace()
+    handler = _handler(
+        manifest_store=manifest_store,
+        core=core,
+        baseline_provider=MatchingProjectionBaselineProvider(),
+        config=MaterializationHandlerConfig(
+            owner_id="worker-1",
+            embedding_model_version="embed-v1",
+            code_version="test-sha",
+            prompt_config_hash="prompt-hash",
+            lease_renewal_seconds=9999,
+            enable_pre_ingest_route_prediction_prepass=True,
+        ),
+    )
+
+    await handler.handle(_envelope(), {"fencing_token": 1})
+
+    assert core.pre_ingest_prediction_calls == []
+    assert core.called is True
 
 
 @pytest.mark.asyncio
