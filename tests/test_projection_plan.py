@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from src.cloud.projection_plan import (
     build_route_index_manifest,
+    build_fact_route_hints,
     EntityRouteRecord,
     FactRouteHint,
     PreIngestTreeScope,
@@ -431,6 +434,79 @@ def test_compute_route_risk_flags_detects_scene_merge_and_suppression_risks() ->
     assert manifest.suppression_currently_possible is True
     assert manifest.cluster_merge_pair_count == 1
     assert manifest.suppression_candidate_count == 1
+
+
+def test_build_fact_route_hints_scores_domain_clusters_with_time_bonus_and_entities() -> None:
+    route_index = _route_index(
+        scene_records=(
+            SceneRouteRecord(
+                "scene:travel",
+                "tree:scene:travel",
+                "travel",
+                5,
+                "centroid-a",
+                centroid=(1.0, 0.0),
+                latest_fact_time=1.0,
+            ),
+            SceneRouteRecord(
+                "scene:work",
+                "tree:scene:work",
+                "work",
+                5,
+                "centroid-b",
+                centroid=(0.0, 1.0),
+                latest_fact_time=1.0,
+            ),
+        )
+    )
+    fact = _managed_fact(
+        "fact-1",
+        entities=("Alice Smith", "the user", "assistant"),
+        domain_keys=("travel",),
+        session_id="session-1",
+    )
+
+    hints = build_fact_route_hints(
+        route_index=route_index,
+        facts=[fact],
+        fact_embeddings={"fact-1": [1.0, 0.0]},
+    )
+
+    assert len(hints) == 1
+    hint = hints[0]
+    assert hint.fact_id == "fact-1"
+    assert hint.entity_keys == ("alice_smith", "user")
+    assert hint.scene_scope_key == "travel"
+    assert hint.new_session_id == "session-1"
+    assert set(hint.scene_similarities) == {"scene:travel"}
+    assert hint.scene_similarities["scene:travel"] == pytest.approx(1.08)
+
+
+def test_build_fact_route_hints_uses_metadata_embedding_and_fails_closed_when_missing_embedding() -> None:
+    route_index = _route_index(
+        scene_records=(
+            SceneRouteRecord(
+                "scene:travel",
+                "tree:scene:travel",
+                "travel",
+                5,
+                "centroid-a",
+                centroid=(1.0, 0.0),
+                latest_fact_time=None,
+            ),
+        )
+    )
+    fact_with_metadata = _managed_fact("fact-1", domain_keys=("travel",))
+    fact_without_embedding = _managed_fact("fact-2", domain_keys=("travel",))
+    fact_without_embedding = replace(fact_without_embedding, metadata={})
+
+    hints = build_fact_route_hints(
+        route_index=route_index,
+        facts=[fact_with_metadata, fact_without_embedding],
+    )
+
+    assert hints[0].scene_similarities["scene:travel"] == pytest.approx(1.0)
+    assert hints[1].scene_similarities == {}
 
 
 def test_filter_projection_refs_to_tree_scope_keeps_only_tree_scoped_records() -> None:

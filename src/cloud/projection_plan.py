@@ -7,6 +7,9 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Iterable, Mapping
 
+from src.build.entity_router import _normalise_entity
+from src.build.scene_router import _cosine_similarity, _domain_gate_key, _soft_time_bonus
+
 
 @dataclass(frozen=True, slots=True, order=True)
 class ProjectionRecordKey:
@@ -126,6 +129,11 @@ class SceneRouteRecord:
     scope_key: str
     fact_count: int
     centroid_hash: str
+    centroid: tuple[float, ...] = ()
+    latest_fact_time: float | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "centroid", tuple(float(value) for value in self.centroid))
 
 
 @dataclass(frozen=True, slots=True)
@@ -440,6 +448,53 @@ def plan_pre_ingest_tree_scope(
     )
 
 
+def build_fact_route_hints(
+    *,
+    route_index: RouteIndexManifest,
+    facts: Iterable[Any],
+    fact_embeddings: Mapping[str, Iterable[float]] | None = None,
+) -> tuple[FactRouteHint, ...]:
+    """Build pre-ingest route hints from canonical facts and route metadata.
+
+    Scene scores include the router's soft time bonus, satisfying the
+    ``scene_scores_include_time_bonus`` precondition carried by
+    :class:`RouteIndexManifest`.
+    """
+
+    embeddings = dict(fact_embeddings or {})
+    hints: list[FactRouteHint] = []
+    for fact in facts:
+        fact_id = str(getattr(fact, "fact_id", "") or "")
+        entity_keys = _fact_entity_keys(fact)
+        scene_scope_key = _fact_scope_key(fact)
+        embedding = embeddings.get(fact_id)
+        if embedding is None:
+            embedding = _metadata_embedding(fact)
+        scene_similarities: dict[str, float] = {}
+        if embedding is not None:
+            query = [float(value) for value in embedding]
+            for record in route_index.scene_records:
+                if record.scope_key != scene_scope_key or not record.centroid:
+                    continue
+                score = _cosine_similarity(query, record.centroid)
+                score += _route_time_bonus(
+                    fact_time=_fact_time(fact),
+                    cluster_time=record.latest_fact_time,
+                    max_gap_days=route_index.scene_max_time_gap_days,
+                )
+                scene_similarities[record.cluster_id] = score
+        hints.append(
+            FactRouteHint(
+                fact_id=fact_id,
+                entity_keys=tuple(entity_keys),
+                scene_similarities=scene_similarities,
+                scene_scope_key=scene_scope_key,
+                new_session_id=str(getattr(fact, "first_session_id", "") or ""),
+            )
+        )
+    return tuple(hints)
+
+
 def build_route_index_manifest(
     *,
     entity_router: Any,
@@ -459,7 +514,15 @@ def build_route_index_manifest(
     )
     entity_records = tuple(
         sorted(
-            (
+            [
+                EntityRouteRecord(
+                    entity_key="user",
+                    tree_id="entity:user",
+                    state="active",
+                    distinct_fact_count=0,
+                    distinct_session_count=0,
+                ),
+                *(
                 EntityRouteRecord(
                     entity_key=str(candidate.entity_key),
                     tree_id=f"entity:{candidate.entity_key}",
@@ -468,7 +531,8 @@ def build_route_index_manifest(
                     distinct_session_count=int(candidate.distinct_session_count),
                 )
                 for candidate in entity_router.iter_candidates()
-            ),
+                ),
+            ],
             key=lambda record: record.entity_key,
         )
     )
@@ -484,6 +548,8 @@ def build_route_index_manifest(
                 scope_key=str(cluster.scope_key),
                 fact_count=int(cluster.fact_count),
                 centroid_hash=_vector_hash(cluster.centroid),
+                centroid=tuple(float(value) for value in cluster.centroid),
+                latest_fact_time=getattr(cluster, "latest_fact_time", None),
             )
         )
     return RouteIndexManifest(
@@ -577,6 +643,8 @@ def route_index_manifest_from_dict(value: Mapping[str, Any]) -> RouteIndexManife
                 scope_key=str(record.get("scope_key") or ""),
                 fact_count=int(record.get("fact_count") or 0),
                 centroid_hash=str(record.get("centroid_hash") or ""),
+                centroid=tuple(float(value) for value in record.get("centroid", ()) or ()),
+                latest_fact_time=_maybe_float(record.get("latest_fact_time")),
             )
             for record in value.get("scene_records", ())
         ),
@@ -628,6 +696,8 @@ def route_index_manifest_to_dict(manifest: RouteIndexManifest) -> dict[str, Any]
                 "scope_key": record.scope_key,
                 "fact_count": record.fact_count,
                 "centroid_hash": record.centroid_hash,
+                "centroid": list(record.centroid),
+                "latest_fact_time": record.latest_fact_time,
             }
             for record in manifest.scene_records
         ],
@@ -671,6 +741,51 @@ def _candidate_can_activate(
 def _vector_hash(values: Iterable[float]) -> str:
     text = ",".join(f"{float(value):.8g}" for value in values)
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _fact_entity_keys(fact: Any) -> tuple[str, ...]:
+    keys = []
+    if str(getattr(fact, "origin", "") or "") == "user":
+        keys.append("user")
+    for entity in getattr(fact, "entities", ()) or ():
+        key = _normalise_entity(str(entity))
+        if key:
+            keys.append(key)
+    return tuple(sorted(set(keys)))
+
+
+def _fact_scope_key(fact: Any) -> str:
+    return _domain_gate_key(fact)
+
+
+def _metadata_embedding(fact: Any) -> list[float] | None:
+    metadata = dict(getattr(fact, "metadata", {}) or {})
+    embedding = metadata.get("embedding")
+    if not isinstance(embedding, list) or not embedding:
+        return None
+    return [float(value) for value in embedding]
+
+
+def _fact_time(fact: Any) -> float | None:
+    value = getattr(fact, "time_start", None)
+    if value is None:
+        value = getattr(fact, "time_end", None)
+    return _maybe_float(value)
+
+
+def _route_time_bonus(*, fact_time: float | None, cluster_time: float | None, max_gap_days: float) -> float:
+    cluster = type("_RouteClusterTime", (), {"latest_fact_time": cluster_time})()
+    fact = type("_RouteFactTime", (), {"time_start": fact_time, "time_end": None})()
+    return _soft_time_bonus(fact, cluster, max_gap_days)
+
+
+def _maybe_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _fail_closed_bool(value: Mapping[str, Any], key: str) -> bool:
