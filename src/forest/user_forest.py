@@ -73,6 +73,7 @@ class ForestMaterializationSnapshot:
     deleted_tree_ids: frozenset[str] = frozenset()
     baseline_forest_version: str | None = None
     route_index_manifest: dict | None = None
+    partial_resident_tree_ids: frozenset[str] | None = None
 
 
 @dataclass
@@ -450,6 +451,7 @@ class UserForest:
                 deleted_tree_ids=self._last_deleted_tree_ids,
                 baseline_forest_version=self._last_baseline_forest_version,
                 route_index_manifest=self._route_index_manifest_for_materialization(),
+                partial_resident_tree_ids=self._partial_resident_tree_ids,
             )
 
     def _route_index_manifest_for_materialization(self) -> dict | None:

@@ -1427,6 +1427,14 @@ async def test_materialization_handler_commits_snapshot_pointer_metadata() -> No
     assert metadata["partial_hydration_plan"]["full_hydration_required"] is True
     assert metadata["partial_hydration_plan"]["planned_tree_load_count"] == 1
     assert metadata["partial_hydration_plan"]["current_full_tree_count"] == 1
+    assert metadata["partial_residency_projection_safety"] == {
+        "schema_version": 1,
+        "partial_resident": False,
+        "status": "full_resident",
+        "close_delete_safety": "authoritative",
+        "projected_subset_of_resident": True,
+        "changed_subset_of_resident": True,
+    }
     assert set(metadata["materialization_stage_timings_ms"]) >= {
         "hydrate",
         "source_write",
@@ -1486,6 +1494,27 @@ async def test_materialization_handler_persists_route_index_manifest_metadata() 
     fingerprint_inputs = json.loads(payload.decode("utf-8"))
     assert fingerprint_inputs["route_index_manifest"] == route_index
     assert metadata["artifact_kind"] == "fingerprint_inputs"
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_records_partial_residency_projection_safety() -> None:
+    manifest_store = FakeManifestStore()
+    snapshot = replace(_snapshot(), partial_resident_tree_ids=frozenset({"entity:alice"}))
+    handler = _handler(
+        manifest_store=manifest_store,
+        core=FakeIngestCore(snapshot),
+    )
+
+    await handler.handle(_envelope(), {"fencing_token": 1})
+
+    safety = manifest_store.latest.metadata["partial_residency_projection_safety"]
+    assert safety["partial_resident"] is True
+    assert safety["status"] == "requires_scoped_projection"
+    assert safety["resident_tree_ids"] == ["entity:alice"]
+    assert safety["projected_tree_ids"] == ["entity:alice"]
+    assert safety["projected_subset_of_resident"] is True
+    assert safety["changed_subset_of_resident"] is False
+    assert safety["close_delete_safety"] == "not_authoritative_without_scoped_projection"
 
 
 @pytest.mark.asyncio

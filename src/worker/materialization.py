@@ -2071,6 +2071,7 @@ def _materialization_fingerprint_metadata(
         "dirty_path_plan": _dirty_path_plan_summary(projection),
         "projection_tree_scope_plan": _projection_tree_scope_plan_summary(projection),
         "partial_hydration_plan": _partial_hydration_plan_summary(projection, snapshot=snapshot),
+        "partial_residency_projection_safety": _partial_residency_projection_safety_summary(projection, snapshot=snapshot),
         "route_index_manifest": route_index_manifest,
         "projection_tree_scope_shadow": _projection_tree_scope_shadow_summary(
             projection,
@@ -2097,6 +2098,7 @@ def _materialization_fingerprint_metadata(
         "dirty_path_plan": inputs["dirty_path_plan"],
         "projection_tree_scope_plan": inputs["projection_tree_scope_plan"],
         "partial_hydration_plan": inputs["partial_hydration_plan"],
+        "partial_residency_projection_safety": inputs["partial_residency_projection_safety"],
         "route_index_manifest": inputs["route_index_manifest"],
         "projection_tree_scope_shadow": inputs["projection_tree_scope_shadow"],
         "projection_plan_live_skipped_browse_embedding_count": len(projection.projection_skip_plans.get("browse_embedding", ProjectionSkipPlan((), (), ())).unchanged),
@@ -2121,6 +2123,42 @@ def _route_index_manifest_for_metadata(
     metadata = dict(route_index)
     metadata["embedding_model_version"] = str(embedding_model_version or "")
     return metadata
+
+
+def _partial_residency_projection_safety_summary(
+    projection: MaterializationProjection,
+    *,
+    snapshot: ForestMaterializationSnapshot,
+) -> dict[str, Any]:
+    resident = getattr(snapshot, "partial_resident_tree_ids", None)
+    if resident is None:
+        return {
+            "schema_version": 1,
+            "partial_resident": False,
+            "status": "full_resident",
+            "close_delete_safety": "authoritative",
+            "projected_subset_of_resident": True,
+            "changed_subset_of_resident": True,
+        }
+    resident_ids = tuple(sorted(str(tree_id) for tree_id in resident if str(tree_id)))
+    projected_ids = tuple(sorted({node.tree_id for node in projection.stored_nodes}))
+    changed_ids = tuple(sorted(projection.changed_tree_ids or ()))
+    resident_set = set(resident_ids)
+    return {
+        "schema_version": 1,
+        "partial_resident": True,
+        "status": "requires_scoped_projection",
+        "resident_tree_count": len(resident_ids),
+        "resident_tree_ids": list(resident_ids[:100]),
+        "projected_tree_count": len(projected_ids),
+        "projected_tree_ids": list(projected_ids[:100]),
+        "has_baseline": projection.baseline_forest_version is not None,
+        "changed_tree_ids_known": projection.changed_tree_ids is not None,
+        "projected_subset_of_resident": set(projected_ids).issubset(resident_set),
+        "changed_subset_of_resident": projection.changed_tree_ids is not None and set(changed_ids).issubset(resident_set),
+        "close_delete_safety": "not_authoritative_without_scoped_projection",
+        "id_arrays_truncated": len(resident_ids) > 100 or len(projected_ids) > 100,
+    }
 
 
 def _dirty_path_plan_summary(projection: MaterializationProjection) -> dict[str, Any]:
