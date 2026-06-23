@@ -5,10 +5,11 @@ from dataclasses import replace
 import pytest
 
 from src.cloud.contracts import StoredTreeNode
+from src.cloud.projection_plan import EntityRouteRecord, RouteIndexManifest, route_index_manifest_to_dict
 from src.config.config import load_default_config
 from src.forest.memforest import _content_key
 from src.forest.user_forest import UserForest
-from src.utils.types import FactOccurrence, ManagedFact, MemoryItem
+from src.utils.types import FactOccurrence, ManagedFact, MemCell, MemoryItem, SessionExtractionResult
 from src.worker.cloud_hydration import (
     CloudStateHydratingUserForestCore,
     CloudStateHydrationIncomplete,
@@ -265,6 +266,91 @@ def test_user_forest_materialization_snapshot_includes_route_index_manifest(tmp_
         }
     ]
     assert route_index["scene_records"] == []
+
+
+def test_user_forest_pre_ingest_route_prediction_dedupes_without_building_trees(tmp_path) -> None:
+    forest = _user_forest(tmp_path / "target-root", 4)
+    cell = MemCell(
+        cell_id="session-1#cell_0000",
+        session_id="session-1",
+        cell_index=0,
+        start_turn_index=0,
+        end_turn_index=0,
+        turn_ids=["session-1:0"],
+        content_ids=[],
+        speaker_names=["user"],
+        time_start=1.0,
+        time_end=1.0,
+        text="I like blue kayaks.",
+    )
+    item = MemoryItem(
+        item_id="item-1",
+        session_id="session-1",
+        cell_id=cell.cell_id,
+        fact_text="The user likes blue kayaks.",
+        source_turn_ids=["session-1:0"],
+        source_spans=[],
+        participants=["user"],
+        origin="user",
+        semantic_role="preference",
+        entities=["Alice"],
+        topics=["kayaks"],
+        time_text="",
+        time_start=1.0,
+        time_end=1.0,
+        attribute_keys=[],
+        domain_keys=["travel"],
+        collection_keys=[],
+        detail_level="atomic",
+        confidence=1.0,
+    )
+    forest._extraction_pipeline.extract_session = lambda session_id, turns: SessionExtractionResult(
+        session_id=session_id,
+        cells=[cell],
+        memory_items=[item],
+    )
+    route_index = RouteIndexManifest(
+        embedding_model_version=forest._config.api.embedding.model_name,
+        entity_active_min_facts=3,
+        entity_active_min_sessions=2,
+        entity_suppress_below_facts=2,
+        scene_assign_threshold=0.7,
+        scene_secondary_threshold=0.55,
+        scene_spawn_threshold=0.45,
+        scene_max_cluster_size=60,
+        scene_merge_threshold=0.88,
+        scene_max_time_gap_days=45.0,
+        scene_bootstrap_initialized=True,
+        scene_scores_include_time_bonus=True,
+        entity_records=(EntityRouteRecord("user", "entity:user", "active", 0, 0),),
+        scene_records=(),
+        cluster_merge_possible=False,
+        suppression_flip_possible=False,
+    )
+
+    prediction = forest.prepare_pre_ingest_route_prediction(
+        "session-1",
+        [{"role": "user", "content": "I like blue kayaks.", "timestamp": 1.0}],
+        route_index_manifest=route_index_manifest_to_dict(route_index),
+        embedding_model_version=forest._config.api.embedding.model_name,
+    )
+
+    assert prediction.fact_write_result.canonical_fact_ids
+    assert prediction.touched_facts
+    assert prediction.route_hints
+    assert prediction.route_hints[0].new_session_id == "session-1"
+    assert "entity:user" in prediction.pre_ingest_scope.tree_ids_to_load
+    assert forest.snapshot_for_materialization().trees == []
+
+    result = forest.finalize_pre_ingest_route_prediction(prediction)
+    snapshot = forest.snapshot_for_materialization()
+
+    assert result.facts_inserted == 1
+    assert result.facts_merged == 0
+    assert snapshot.trees
+    fact = forest._fact_manager.get_fact(prediction.fact_write_result.canonical_fact_ids[0])
+    assert fact is not None
+    assert len(fact.occurrences) == 1
 
 
 @pytest.mark.asyncio

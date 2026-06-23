@@ -462,6 +462,7 @@ def build_fact_route_hints(
     route_index: RouteIndexManifest,
     facts: Iterable[Any],
     fact_embeddings: Mapping[str, Iterable[float]] | None = None,
+    current_session_id: str | None = None,
 ) -> tuple[FactRouteHint, ...]:
     """Build pre-ingest route hints from canonical facts and route metadata.
 
@@ -500,7 +501,7 @@ def build_fact_route_hints(
                 entity_keys=tuple(entity_keys),
                 scene_similarities=scene_similarities,
                 scene_scope_key=scene_scope_key,
-                new_session_id=str(getattr(fact, "first_session_id", "") or ""),
+                new_session_id=str(current_session_id or getattr(fact, "first_session_id", "") or ""),
                 embedding=embedding_tuple,
             )
         )

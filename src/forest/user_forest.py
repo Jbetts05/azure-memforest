@@ -75,6 +75,19 @@ class ForestMaterializationSnapshot:
     route_index_manifest: dict | None = None
 
 
+@dataclass
+class PreIngestRoutePrediction:
+    """Fact-only prepass result used before tree-body hydration."""
+
+    session_id: str
+    extraction_result: object
+    fact_write_result: object
+    touched_facts: list["ManagedFact"]
+    route_hints: tuple[object, ...]
+    route_risks: object
+    pre_ingest_scope: object
+
+
 # ── serialization helpers ─────────────────────────────────────────────────────
 
 def _memcell_to_dict(cell: MemCell) -> dict:
@@ -190,79 +203,153 @@ class UserForest:
         """
         with self._lock:
             self._mark_projection_delta_unknown()
-            # 1. Extract cells + memory items
             extraction_result = self._extraction_pipeline.extract_session(
                 session_id, turns
             )
-
-            # 2. Ingest into FactManager
             fact_write_result = self._fact_manager.add_session_result(
                 extraction_result
             )
-
-            # 3. Build cell_to_facts from FactOccurrence data
-            cell_to_facts: dict[str, list[str]] = {}
-            for fact_id in fact_write_result.canonical_fact_ids:
-                fact = self._fact_manager.get_fact(fact_id)
-                if fact is None:
-                    continue
-                for occ in fact.occurrences:
-                    if occ.session_id == session_id:
-                        lst = cell_to_facts.setdefault(occ.cell_id, [])
-                        if fact_id not in lst:
-                            lst.append(fact_id)
-
-            # 4. Incremental tree ingest
-            touched_facts = [
-                f for fid in fact_write_result.canonical_fact_ids
-                if (f := self._fact_manager.get_fact(fid)) is not None
-            ]
-            build_results = []
-            if touched_facts:
-                build_results = self._tree_builder.ingest_session(
-                    new_facts=touched_facts,
-                    cells=extraction_result.cells,
-                    cell_to_facts=cell_to_facts,
-                )
-
-            # 5. Persist updated trees
-            for br in build_results:
-                tree = self._tree_builder.trees.get(br.tree_id)
-                if tree is not None:
-                    self._tree_store.save_tree(tree)
-                    self._tree_store.register(tree)
-
-            # 6. Rebuild NodeIndex only when tree structure changed.
-            if build_results:
-                self._node_index = self._tree_builder.build_node_index(
-                    list(self._tree_builder.trees.values()),
-                    index_dir=self._dir / "node_index",
-                    vector_dim=self._config.api.embedding.dimension,
-                )
-                self._rewire_query_pipeline()
-            self._record_projection_delta(
-                changed_tree_ids={br.tree_id for br in build_results},
-                deleted_tree_ids=set(),
+            return self._finalize_ingest_from_extraction(
+                session_id=session_id,
+                extraction_result=extraction_result,
+                fact_write_result=fact_write_result,
             )
 
-            # 7. Register with SessionRegistry
-            self._registry.register_session(
+    def prepare_pre_ingest_route_prediction(
+        self,
+        session_id: str,
+        turns: list[dict],
+        *,
+        route_index_manifest: dict,
+        embedding_model_version: str,
+    ) -> PreIngestRoutePrediction:
+        """Run extraction+dedupe and predict tree scope without building trees."""
+
+        with self._lock:
+            from src.cloud.projection_plan import (
+                analyze_batch_route_risks,
+                build_fact_route_hints,
+                plan_pre_ingest_tree_scope,
+                route_index_manifest_from_dict,
+            )
+
+            route_index = route_index_manifest_from_dict(route_index_manifest)
+            extraction_result = self._extraction_pipeline.extract_session(session_id, turns)
+            fact_write_result = self._fact_manager.add_session_result(extraction_result)
+            touched_facts = [
+                fact
+                for fact_id in fact_write_result.canonical_fact_ids
+                if (fact := self._fact_manager.get_fact(fact_id)) is not None
+                and any(str(getattr(occ, "session_id", "") or "") == str(session_id) for occ in fact.occurrences)
+            ]
+            route_hints = build_fact_route_hints(
+                route_index=route_index,
+                facts=touched_facts,
+                current_session_id=session_id,
+            )
+            route_risks = analyze_batch_route_risks(
+                route_index=route_index,
+                new_fact_route_hints=route_hints,
+            )
+            scoped_route_index = replace(
+                route_index,
+                cluster_merge_possible=route_risks.cluster_merge_possible,
+                suppression_flip_possible=route_risks.suppression_flip_possible,
+            )
+            scope = plan_pre_ingest_tree_scope(
+                route_index=scoped_route_index,
+                new_fact_route_hints=route_hints,
+                embedding_model_version=embedding_model_version,
+            )
+            return PreIngestRoutePrediction(
                 session_id=session_id,
+                extraction_result=extraction_result,
+                fact_write_result=fact_write_result,
+                touched_facts=touched_facts,
+                route_hints=route_hints,
+                route_risks=route_risks,
+                pre_ingest_scope=scope,
+            )
+
+    def finalize_pre_ingest_route_prediction(self, prediction: PreIngestRoutePrediction) -> IngestResult:
+        """Finish tree/session/index work after a fact-only pre-ingest prepass.
+
+        The prepass mutates FactManager. Callers must finalize on the same
+        ``UserForest`` instance; abort/discard semantics are not implemented.
+        """
+
+        with self._lock:
+            self._mark_projection_delta_unknown()
+            return self._finalize_ingest_from_extraction(
+                session_id=prediction.session_id,
+                extraction_result=prediction.extraction_result,
+                fact_write_result=prediction.fact_write_result,
+            )
+
+    def _finalize_ingest_from_extraction(
+        self,
+        *,
+        session_id: str,
+        extraction_result: object,
+        fact_write_result: object,
+    ) -> IngestResult:
+        cell_to_facts: dict[str, list[str]] = {}
+        for fact_id in fact_write_result.canonical_fact_ids:
+            fact = self._fact_manager.get_fact(fact_id)
+            if fact is None:
+                continue
+            for occ in fact.occurrences:
+                if occ.session_id == session_id:
+                    lst = cell_to_facts.setdefault(occ.cell_id, [])
+                    if fact_id not in lst:
+                        lst.append(fact_id)
+
+        touched_facts = [
+            f for fid in fact_write_result.canonical_fact_ids
+            if (f := self._fact_manager.get_fact(fid)) is not None
+        ]
+        build_results = []
+        if touched_facts:
+            build_results = self._tree_builder.ingest_session(
+                new_facts=touched_facts,
                 cells=extraction_result.cells,
                 cell_to_facts=cell_to_facts,
             )
 
-            # 8. Store cells for future rebuild
-            for cell in extraction_result.cells:
-                self._cell_store[cell.cell_id] = cell
+        for br in build_results:
+            tree = self._tree_builder.trees.get(br.tree_id)
+            if tree is not None:
+                self._tree_store.save_tree(tree)
+                self._tree_store.register(tree)
 
-            return IngestResult(
-                session_id=session_id,
-                cells_extracted=len(extraction_result.cells),
-                facts_inserted=fact_write_result.inserted_count,
-                facts_merged=fact_write_result.merged_count,
-                trees_updated=[br.tree_id for br in build_results],
+        if build_results:
+            self._node_index = self._tree_builder.build_node_index(
+                list(self._tree_builder.trees.values()),
+                index_dir=self._dir / "node_index",
+                vector_dim=self._config.api.embedding.dimension,
             )
+            self._rewire_query_pipeline()
+        self._record_projection_delta(
+            changed_tree_ids={br.tree_id for br in build_results},
+            deleted_tree_ids=set(),
+        )
+
+        self._registry.register_session(
+            session_id=session_id,
+            cells=extraction_result.cells,
+            cell_to_facts=cell_to_facts,
+        )
+
+        for cell in extraction_result.cells:
+            self._cell_store[cell.cell_id] = cell
+
+        return IngestResult(
+            session_id=session_id,
+            cells_extracted=len(extraction_result.cells),
+            facts_inserted=fact_write_result.inserted_count,
+            facts_merged=fact_write_result.merged_count,
+            trees_updated=[br.tree_id for br in build_results],
+        )
 
     # ── deletion ──────────────────────────────────────────────────────────────
 

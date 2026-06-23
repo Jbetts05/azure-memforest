@@ -473,6 +473,7 @@ def test_build_fact_route_hints_scores_domain_clusters_with_time_bonus_and_entit
         route_index=route_index,
         facts=[fact],
         fact_embeddings={"fact-1": [1.0, 0.0]},
+        current_session_id="current-session",
     )
 
     assert len(hints) == 1
@@ -480,7 +481,7 @@ def test_build_fact_route_hints_scores_domain_clusters_with_time_bonus_and_entit
     assert hint.fact_id == "fact-1"
     assert hint.entity_keys == ("alice_smith", "user")
     assert hint.scene_scope_key == "travel"
-    assert hint.new_session_id == "session-1"
+    assert hint.new_session_id == "current-session"
     assert set(hint.scene_similarities) == {"scene:travel"}
     assert hint.scene_similarities["scene:travel"] == pytest.approx(1.08)
 
