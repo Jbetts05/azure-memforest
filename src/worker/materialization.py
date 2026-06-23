@@ -132,6 +132,8 @@ class MaterializationHandlerConfig:
     enable_tree_scoped_projection_writes: bool = False
     enable_partial_hydration_shadow: bool = False
     enable_partial_hydration_equivalence_shadow: bool = False
+    # Metadata-only until a trusted pre-ingest tree-scope planner exists.
+    enable_partial_hydration_guarded_switch: bool = False
 
     def __post_init__(self) -> None:
         policy = _normalize_snapshot_policy(self.snapshot_policy)
@@ -210,7 +212,7 @@ class MemForestMaterializationHandler:
             if await self._latest_committed_matches_job(envelope):
                 return
             latest = await _maybe_await(self._stores.manifest_store.latest_committed())
-            await self._hydrate_core_from_manifest(latest)
+            pre_ingest_hydration_strategy = await self._hydrate_core_from_manifest(latest)
             stage_timings_ms["hydrate"] = _elapsed_ms(hydrate_started)
             hydration_summary = _hydration_summary(self._ingest_core)
             generation = 1 if latest is None else int(latest.generation) + 1
@@ -325,6 +327,7 @@ class MemForestMaterializationHandler:
             projection_metadata["partial_hydration_shadow"] = partial_hydration_shadow
             projection_metadata["partial_hydration_equivalence_shadow"] = partial_hydration_equivalence_shadow
             projection_metadata["partial_hydration_eligibility"] = partial_hydration_eligibility
+            projection_metadata["pre_ingest_hydration_strategy"] = pre_ingest_hydration_strategy
             try:
                 await self._stores.lease_store.assert_current(lease)
             except LeaseConflict as exc:
@@ -1040,18 +1043,33 @@ class MemForestMaterializationHandler:
             return projection.snapshot_payload
         return await asyncio.to_thread(snapshot_payload)
 
-    async def _hydrate_core_from_manifest(self, manifest: Any | None) -> None:
+    async def _hydrate_core_from_manifest(self, manifest: Any | None) -> dict[str, Any]:
+        strategy = {
+            "schema_version": 1,
+            "enabled": bool(self._config.enable_partial_hydration_guarded_switch),
+            "selected": "none",
+            "partial_applied": False,
+            "reason": "no_committed_manifest",
+        }
         if manifest is None:
-            return
+            return strategy
         manifest_embedding_version = str((getattr(manifest, "metadata", {}) or {}).get("embedding_model_version") or "")
         if manifest_embedding_version and manifest_embedding_version != self._config.embedding_model_version:
             raise PermanentHandlerError("latest committed manifest embedding_model_version does not match worker configuration")
+        if self._config.enable_partial_hydration_guarded_switch:
+            strategy["selected"] = "full"
+            strategy["reason"] = "pre_ingest_tree_scope_unavailable"
+            strategy["note"] = "partial hydration requires a trusted pre-ingest tree scope; post-ingest eligibility is metadata-only"
+        else:
+            strategy["selected"] = "full"
+            strategy["reason"] = "disabled"
         hydrate = getattr(self._ingest_core, "hydrate_from_manifest", None)
         if hydrate is not None:
             if inspect.iscoroutinefunction(hydrate):
                 await hydrate(manifest)
             else:
                 await asyncio.to_thread(hydrate, manifest)
+        return strategy
 
     def _tree_node_store(self, forest_version: str) -> Any:
         if self._stores.tree_node_store_factory is not None:

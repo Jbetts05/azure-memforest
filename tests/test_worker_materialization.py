@@ -1325,6 +1325,13 @@ async def test_materialization_handler_commits_snapshot_pointer_metadata() -> No
     assert metadata["partial_hydration_eligibility"]["enabled"] is False
     assert metadata["partial_hydration_eligibility"]["eligible"] is False
     assert metadata["partial_hydration_eligibility"]["reason"] == "disabled"
+    assert metadata["pre_ingest_hydration_strategy"] == {
+        "schema_version": 1,
+        "enabled": False,
+        "selected": "none",
+        "partial_applied": False,
+        "reason": "no_committed_manifest",
+    }
 
 
 @pytest.mark.asyncio
@@ -1359,6 +1366,53 @@ async def test_materialization_handler_records_hydration_summary_when_manifest_e
         "missing_node_embedding_count": 0,
         "used_snapshot_fallback": False,
     }
+    assert manifest_store.latest.metadata["pre_ingest_hydration_strategy"] == {
+        "schema_version": 1,
+        "enabled": False,
+        "selected": "full",
+        "partial_applied": False,
+        "reason": "disabled",
+    }
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_guarded_partial_hydration_switch_falls_back_without_pre_ingest_scope() -> None:
+    manifest_store = FakeManifestStore()
+    manifest_store.latest = ForestManifest(
+        manifest_id="manifest-v1",
+        tenant_id="tenant-1",
+        user_id="user-1",
+        forest_version="v1",
+        generation=1,
+        status="committed",
+        created_at_unix=1.0,
+        metadata={"job_id": "previous", "job_type": "ingest_session", "embedding_model_version": "embed-v1"},
+    )
+    core = FakeIngestCore(_unchanged_incremental_snapshot())
+    handler = _handler(
+        manifest_store=manifest_store,
+        core=core,
+        baseline_provider=MatchingProjectionBaselineProvider(),
+        config=MaterializationHandlerConfig(
+            owner_id="worker-1",
+            embedding_model_version="embed-v1",
+            code_version="test-sha",
+            prompt_config_hash="prompt-hash",
+            lease_renewal_seconds=9999,
+            enable_partial_hydration_guarded_switch=True,
+        ),
+    )
+
+    await handler.handle(_envelope(), {"fencing_token": 1})
+
+    assert core.hydrated_from is not None
+    assert core.hydrated_from.forest_version == "v1"
+    strategy = manifest_store.latest.metadata["pre_ingest_hydration_strategy"]
+    assert strategy["enabled"] is True
+    assert strategy["selected"] == "full"
+    assert strategy["partial_applied"] is False
+    assert strategy["reason"] == "pre_ingest_tree_scope_unavailable"
+    assert "trusted pre-ingest tree scope" in strategy["note"]
 
 
 @pytest.mark.asyncio

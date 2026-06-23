@@ -197,6 +197,7 @@ def fixed_materialization_config_factory(
     enable_tree_scoped_projection_writes: bool = False,
     enable_partial_hydration_shadow: bool = False,
     enable_partial_hydration_equivalence_shadow: bool = False,
+    enable_partial_hydration_guarded_switch: bool = False,
 ) -> Callable[[WriteJobEnvelope], MaterializationHandlerConfig]:
     def build(envelope: WriteJobEnvelope) -> MaterializationHandlerConfig:
         return MaterializationHandlerConfig(
@@ -215,6 +216,7 @@ def fixed_materialization_config_factory(
             enable_tree_scoped_projection_writes=enable_tree_scoped_projection_writes,
             enable_partial_hydration_shadow=enable_partial_hydration_shadow,
             enable_partial_hydration_equivalence_shadow=enable_partial_hydration_equivalence_shadow,
+            enable_partial_hydration_guarded_switch=enable_partial_hydration_guarded_switch,
         )
 
     return build
@@ -331,6 +333,7 @@ def build_scoped_materialization_handler_from_env(
             enable_tree_scoped_projection_writes=_env_flag(values.get("AZURE_MEMFOREST_ENABLE_TREE_SCOPED_PROJECTION_WRITES", "")),
             enable_partial_hydration_shadow=_env_flag(values.get("AZURE_MEMFOREST_ENABLE_PARTIAL_HYDRATION_SHADOW", "")),
             enable_partial_hydration_equivalence_shadow=_env_flag(values.get("AZURE_MEMFOREST_ENABLE_PARTIAL_HYDRATION_EQUIVALENCE_SHADOW", "")),
+            enable_partial_hydration_guarded_switch=_env_flag(values.get("AZURE_MEMFOREST_ENABLE_PARTIAL_HYDRATION_GUARDED_SWITCH", "")),
         ),
     )
     return MaterializationRuntime(
