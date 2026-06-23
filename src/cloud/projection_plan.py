@@ -140,6 +140,7 @@ class RouteIndexManifest:
     scene_spawn_threshold: float
     scene_max_cluster_size: int
     scene_merge_threshold: float
+    scene_max_time_gap_days: float
     scene_bootstrap_initialized: bool
     scene_scores_include_time_bonus: bool
     entity_records: tuple[EntityRouteRecord, ...] = ()
@@ -425,6 +426,169 @@ def plan_pre_ingest_tree_scope(
     )
 
 
+def build_route_index_manifest(
+    *,
+    entity_router: Any,
+    scene_router: Any,
+    tree_config: Any,
+    embedding_model_version: str,
+    cluster_merge_possible: bool = True,
+    suppression_flip_possible: bool = True,
+) -> RouteIndexManifest:
+    """Project live router state into durable pre-ingest planning metadata."""
+
+    entity_cfg = tree_config.entity
+    scene_cfg = tree_config.scene
+    entity_records = tuple(
+        sorted(
+            (
+                EntityRouteRecord(
+                    entity_key=str(candidate.entity_key),
+                    tree_id=f"entity:{candidate.entity_key}",
+                    state=str(candidate.state),
+                    distinct_fact_count=int(candidate.distinct_fact_count),
+                    distinct_session_count=int(candidate.distinct_session_count),
+                )
+                for candidate in entity_router.iter_candidates()
+            ),
+            key=lambda record: record.entity_key,
+        )
+    )
+    scene_records = []
+    for cluster_id in sorted(scene_router.all_cluster_ids()):
+        cluster = scene_router.get_cluster(cluster_id)
+        if cluster is None:
+            continue
+        scene_records.append(
+            SceneRouteRecord(
+                cluster_id=str(cluster.cluster_id),
+                tree_id=f"tree:{cluster.cluster_id}",
+                scope_key=str(cluster.scope_key),
+                fact_count=int(cluster.fact_count),
+                centroid_hash=_vector_hash(cluster.centroid),
+            )
+        )
+    return RouteIndexManifest(
+        embedding_model_version=str(embedding_model_version or ""),
+        entity_active_min_facts=int(entity_cfg.active_min_facts),
+        entity_active_min_sessions=int(entity_cfg.active_min_sessions),
+        scene_assign_threshold=float(scene_cfg.theta_assign),
+        scene_secondary_threshold=float(scene_cfg.theta_second),
+        scene_spawn_threshold=float(scene_cfg.theta_spawn),
+        scene_max_cluster_size=int(scene_cfg.max_cluster_size),
+        scene_merge_threshold=float(scene_cfg.theta_merge),
+        scene_max_time_gap_days=float(scene_cfg.max_time_gap_days),
+        scene_bootstrap_initialized=bool(scene_router.bootstrap_initialized()),
+        scene_scores_include_time_bonus=True,
+        entity_records=tuple(entity_records),
+        scene_records=tuple(scene_records),
+        cluster_merge_possible=bool(cluster_merge_possible),
+        suppression_flip_possible=bool(suppression_flip_possible),
+    )
+
+
+def route_index_manifest_from_dict(value: Mapping[str, Any]) -> RouteIndexManifest:
+    """Rehydrate route metadata from a JSON-compatible durable document."""
+
+    return RouteIndexManifest(
+        embedding_model_version=str(value.get("embedding_model_version") or ""),
+        entity_active_min_facts=int(value.get("entity_active_min_facts") or 0),
+        entity_active_min_sessions=int(value.get("entity_active_min_sessions") or 0),
+        scene_assign_threshold=float(value.get("scene_assign_threshold") or 0.0),
+        scene_secondary_threshold=float(value.get("scene_secondary_threshold") or 0.0),
+        scene_spawn_threshold=float(value.get("scene_spawn_threshold") or 0.0),
+        scene_max_cluster_size=int(value.get("scene_max_cluster_size") or 0),
+        scene_merge_threshold=float(value.get("scene_merge_threshold") or 0.0),
+        scene_max_time_gap_days=float(value.get("scene_max_time_gap_days") or 0.0),
+        scene_bootstrap_initialized=bool(value.get("scene_bootstrap_initialized")),
+        scene_scores_include_time_bonus=bool(value.get("scene_scores_include_time_bonus")),
+        entity_records=tuple(
+            EntityRouteRecord(
+                entity_key=str(record.get("entity_key") or ""),
+                tree_id=str(record.get("tree_id") or ""),
+                state=str(record.get("state") or ""),
+                distinct_fact_count=int(record.get("distinct_fact_count") or 0),
+                distinct_session_count=int(record.get("distinct_session_count") or 0),
+            )
+            for record in value.get("entity_records", ())
+        ),
+        scene_records=tuple(
+            SceneRouteRecord(
+                cluster_id=str(record.get("cluster_id") or ""),
+                tree_id=str(record.get("tree_id") or ""),
+                scope_key=str(record.get("scope_key") or ""),
+                fact_count=int(record.get("fact_count") or 0),
+                centroid_hash=str(record.get("centroid_hash") or ""),
+            )
+            for record in value.get("scene_records", ())
+        ),
+        cluster_merge_possible=_fail_closed_bool(value, "cluster_merge_possible"),
+        suppression_flip_possible=_fail_closed_bool(value, "suppression_flip_possible"),
+    )
+
+
+def route_index_manifest_to_dict(manifest: RouteIndexManifest) -> dict[str, Any]:
+    """Serialize route metadata to a JSON-compatible durable document."""
+
+    return {
+        "schema_version": 1,
+        "embedding_model_version": manifest.embedding_model_version,
+        "entity_active_min_facts": manifest.entity_active_min_facts,
+        "entity_active_min_sessions": manifest.entity_active_min_sessions,
+        "scene_assign_threshold": manifest.scene_assign_threshold,
+        "scene_secondary_threshold": manifest.scene_secondary_threshold,
+        "scene_spawn_threshold": manifest.scene_spawn_threshold,
+        "scene_max_cluster_size": manifest.scene_max_cluster_size,
+        "scene_merge_threshold": manifest.scene_merge_threshold,
+        "scene_max_time_gap_days": manifest.scene_max_time_gap_days,
+        "scene_bootstrap_initialized": manifest.scene_bootstrap_initialized,
+        "scene_scores_include_time_bonus": manifest.scene_scores_include_time_bonus,
+        "cluster_merge_possible": manifest.cluster_merge_possible,
+        "suppression_flip_possible": manifest.suppression_flip_possible,
+        "entity_records": [
+            {
+                "entity_key": record.entity_key,
+                "tree_id": record.tree_id,
+                "state": record.state,
+                "distinct_fact_count": record.distinct_fact_count,
+                "distinct_session_count": record.distinct_session_count,
+            }
+            for record in manifest.entity_records
+        ],
+        "scene_records": [
+            {
+                "cluster_id": record.cluster_id,
+                "tree_id": record.tree_id,
+                "scope_key": record.scope_key,
+                "fact_count": record.fact_count,
+                "centroid_hash": record.centroid_hash,
+            }
+            for record in manifest.scene_records
+        ],
+    }
+
+
+def route_index_manifest_matches_router_state(
+    manifest: RouteIndexManifest,
+    *,
+    entity_router: Any,
+    scene_router: Any,
+    tree_config: Any,
+    embedding_model_version: str,
+) -> bool:
+    """Return whether durable route metadata matches the current live routers."""
+
+    current = build_route_index_manifest(
+        entity_router=entity_router,
+        scene_router=scene_router,
+        tree_config=tree_config,
+        embedding_model_version=embedding_model_version,
+        cluster_merge_possible=manifest.cluster_merge_possible,
+        suppression_flip_possible=manifest.suppression_flip_possible,
+    )
+    return current == manifest
+
+
 def _candidate_can_activate(
     record: EntityRouteRecord,
     route_index: RouteIndexManifest,
@@ -438,6 +602,17 @@ def _candidate_can_activate(
         next_fact_count >= int(route_index.entity_active_min_facts)
         and next_session_count >= int(route_index.entity_active_min_sessions)
     )
+
+
+def _vector_hash(values: Iterable[float]) -> str:
+    text = ",".join(f"{float(value):.8g}" for value in values)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _fail_closed_bool(value: Mapping[str, Any], key: str) -> bool:
+    if key not in value or value.get(key) is None:
+        return True
+    return bool(value.get(key))
 
 
 def filter_projection_refs_to_tree_scope(

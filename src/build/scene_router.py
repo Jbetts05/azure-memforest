@@ -638,6 +638,10 @@ class SceneRouter:
         with self._lock:
             return list(self._clusters.keys())
 
+    def bootstrap_initialized(self) -> bool:
+        with self._lock:
+            return bool(self._bootstrap_state.initialized)
+
     def remove_cluster(self, cluster_id: str) -> None:
         with self._lock:
             self._clusters.pop(cluster_id, None)

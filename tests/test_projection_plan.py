@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from src.cloud.projection_plan import (
+    build_route_index_manifest,
     EntityRouteRecord,
     FactRouteHint,
     PreIngestTreeScope,
@@ -10,6 +11,9 @@ from src.cloud.projection_plan import (
     ProjectionRecordRef,
     ProjectionSkipPlan,
     RouteIndexManifest,
+    route_index_manifest_from_dict,
+    route_index_manifest_matches_router_state,
+    route_index_manifest_to_dict,
     SceneRouteRecord,
     filter_projection_refs_to_tree_scope,
     plan_affected_trees,
@@ -19,6 +23,8 @@ from src.cloud.projection_plan import (
     plan_projection_tree_scope,
     tree_node_body_content_id,
 )
+from src.config.config import load_default_config
+from src.utils.types import FactOccurrence, ManagedFact
 
 
 def test_projection_skip_plan_splits_unchanged_upsert_and_delete_by_content_hash() -> None:
@@ -241,6 +247,112 @@ def test_plan_projection_tree_scope_projects_only_known_changed_trees() -> None:
     assert scope.unknown_changed_tree_ids == ("missing:new",)
 
 
+class FakeEmbeddingClient:
+    def embed_texts(self, texts, *, batch_size=256):
+        return [[1.0, 0.0] for _ in texts]
+
+
+def _managed_fact(fact_id: str, *, entities=("Alice",), domain_keys=("travel",), session_id="session-1") -> ManagedFact:
+    return ManagedFact(
+        fact_id=fact_id,
+        fact_text=f"{fact_id} text",
+        embedding_id=f"emb-{fact_id}",
+        origin="user",
+        semantic_role="preference",
+        entities=list(entities),
+        topics=["topic"],
+        attribute_keys=[],
+        domain_keys=list(domain_keys),
+        collection_keys=[],
+        detail_level="atomic",
+        confidence=1.0,
+        first_session_id=session_id,
+        first_cell_id=f"{session_id}#cell_0000",
+        occurrences=[
+            FactOccurrence(
+                session_id=session_id,
+                cell_id=f"{session_id}#cell_0000",
+                item_id=f"item-{fact_id}",
+                source_turn_ids=[f"{session_id}:0"],
+                source_spans=[],
+                participants=["user"],
+                time_text="",
+                time_start=1.0,
+                time_end=1.0,
+            )
+        ],
+        metadata={"embedding": [1.0, 0.0]},
+        time_start=1.0,
+        time_end=1.0,
+    )
+
+
+def test_build_route_index_manifest_projects_live_router_state() -> None:
+    from src.build.entity_router import EntityRouter
+    from src.build.scene_router import SceneRouter
+
+    config = load_default_config()
+    entity_router = EntityRouter(config=config.tree.entity)
+    scene_router = SceneRouter(embedding_client=FakeEmbeddingClient(), config=config.tree.scene)
+    facts = [
+        _managed_fact("fact-1", entities=("Alice",), session_id="session-1"),
+        _managed_fact("fact-2", entities=("Alice",), session_id="session-2"),
+        _managed_fact("fact-3", entities=("Alice",), session_id="session-3"),
+    ]
+    for fact in facts:
+        entity_router.assign(fact)
+    scene_router.bootstrap(facts)
+
+    manifest = build_route_index_manifest(
+        entity_router=entity_router,
+        scene_router=scene_router,
+        tree_config=config.tree,
+        embedding_model_version="embed-v1",
+        cluster_merge_possible=False,
+        suppression_flip_possible=False,
+    )
+
+    assert manifest.embedding_model_version == "embed-v1"
+    assert manifest.entity_active_min_facts == config.tree.entity.active_min_facts
+    assert manifest.scene_assign_threshold == config.tree.scene.theta_assign
+    assert manifest.scene_secondary_threshold == config.tree.scene.theta_second
+    assert manifest.scene_spawn_threshold == config.tree.scene.theta_spawn
+    assert manifest.scene_max_cluster_size == config.tree.scene.max_cluster_size
+    assert manifest.scene_max_time_gap_days == config.tree.scene.max_time_gap_days
+    assert manifest.scene_scores_include_time_bonus is True
+    alice = next(record for record in manifest.entity_records if record.entity_key == "alice")
+    assert alice.tree_id == "entity:alice"
+    assert alice.state == "active"
+    assert alice.distinct_fact_count == 3
+    assert len(manifest.scene_records) == len(scene_router.all_cluster_ids())
+    assert route_index_manifest_matches_router_state(
+        manifest,
+        entity_router=entity_router,
+        scene_router=scene_router,
+        tree_config=config.tree,
+        embedding_model_version="embed-v1",
+    )
+
+
+def test_route_index_manifest_round_trips_json_shape() -> None:
+    manifest = _route_index(cluster_merge_possible=True, suppression_flip_possible=True)
+
+    restored = route_index_manifest_from_dict(route_index_manifest_to_dict(manifest))
+
+    assert restored == manifest
+
+
+def test_route_index_manifest_from_dict_defaults_missing_risk_flags_to_fail_closed() -> None:
+    raw = route_index_manifest_to_dict(_route_index(cluster_merge_possible=False, suppression_flip_possible=False))
+    raw.pop("cluster_merge_possible")
+    raw["suppression_flip_possible"] = None
+
+    restored = route_index_manifest_from_dict(raw)
+
+    assert restored.cluster_merge_possible is True
+    assert restored.suppression_flip_possible is True
+
+
 def test_filter_projection_refs_to_tree_scope_keeps_only_tree_scoped_records() -> None:
     refs = [
         ProjectionRecordRef("tree_node_membership", "entity:a/root", content_hash="a", metadata={"tree_id": "entity:a", "node_id": "root"}),
@@ -316,6 +428,7 @@ def _route_index(**overrides) -> RouteIndexManifest:
         "scene_spawn_threshold": 0.45,
         "scene_max_cluster_size": 60,
         "scene_merge_threshold": 0.88,
+        "scene_max_time_gap_days": 45.0,
         "scene_bootstrap_initialized": True,
         "scene_scores_include_time_bonus": True,
         "entity_records": (
