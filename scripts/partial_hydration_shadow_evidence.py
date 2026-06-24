@@ -250,6 +250,13 @@ async def build_artifact(*, mode: str = LOCAL_FAKE_STORE_MODE) -> dict[str, Any]
         "schema_version": 1,
         "run_id": f"partial-hydration-shadow-evidence-{int(time.time())}",
         "mode": mode,
+        "provenance": {
+            "producer": "partial_hydration_shadow_evidence.py",
+            "run_channel": "local_fake_store_harness",
+            "live_services_used": False,
+            "fake_stores_used": True,
+            "store_backend": "in_memory_test_fakes",
+        },
         "coverage": {
             "case_count": len(cases),
             "clean_case_actual_tree_count": clean_prediction.get("actual_tree_count") or 0,

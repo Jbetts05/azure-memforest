@@ -22,8 +22,13 @@ REQUIRED_LOCAL_GATES = (
 )
 
 TRUSTED_LIVE_MODES = frozenset({"live_canary", "trusted_live_canary"})
+TRUSTED_LIVE_PRODUCERS = frozenset({"azure-memforest-live-canary", "trusted-ci-canary"})
 MIN_ASSESSED_KINDS = 4
 MIN_COMMIT_STORE_COUNT = 4
+
+
+def _mapping(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
 
 
 def _coverage_int(coverage: dict[str, Any], name: str) -> int | None:
@@ -37,13 +42,14 @@ def _coverage_int(coverage: dict[str, Any], name: str) -> int | None:
 
 
 def evaluate_artifact(artifact: dict[str, Any], *, require_live_canary: bool) -> dict[str, Any]:
-    # The live mode is self-asserted by the artifact. Use the non-local path
-    # only for artifacts produced by a trusted canary/CI channel; do not accept
-    # arbitrary operator-supplied JSON for authoritative promotion.
+    # Provenance fields are still artifact data, not a cryptographic signature.
+    # Use the non-local path only for artifacts from a trusted canary/CI
+    # channel; do not accept arbitrary operator-supplied JSON for promotion.
     if not isinstance(artifact, dict):
         artifact = {}
-    gates = dict(artifact.get("gate") or {})
-    coverage = dict(artifact.get("coverage") or {})
+    gates = _mapping(artifact.get("gate"))
+    coverage = _mapping(artifact.get("coverage"))
+    provenance = _mapping(artifact.get("provenance"))
     missing = [name for name in REQUIRED_LOCAL_GATES if name not in gates]
     failed = [name for name in REQUIRED_LOCAL_GATES if gates.get(name) is not True]
     coverage_failures = []
@@ -61,7 +67,20 @@ def evaluate_artifact(artifact: dict[str, Any], *, require_live_canary: bool) ->
             coverage_failures.append(name)
     mode = str(artifact.get("mode") or "").strip().lower()
     trusted_live = mode in TRUSTED_LIVE_MODES
+    producer = str(provenance.get("producer") or "").strip().lower()
+    run_channel = str(provenance.get("run_channel") or "").strip()
+    live_provenance_failures = []
+    if require_live_canary:
+        if provenance.get("live_services_used") is not True:
+            live_provenance_failures.append("live_services_used")
+        if provenance.get("fake_stores_used") is not False:
+            live_provenance_failures.append("fake_stores_used")
+        if producer not in TRUSTED_LIVE_PRODUCERS:
+            live_provenance_failures.append("producer")
+        if not run_channel:
+            live_provenance_failures.append("run_channel")
     live_required_failed = require_live_canary and not trusted_live
+    live_provenance_failed = bool(live_provenance_failures)
     return {
         "schema_version": 1,
         "artifact_run_id": artifact.get("run_id"),
@@ -72,14 +91,21 @@ def evaluate_artifact(artifact: dict[str, Any], *, require_live_canary: bool) ->
         "failed_gates": failed,
         "coverage_failures": coverage_failures,
         "live_canary_required": require_live_canary,
-        "live_canary_satisfied": not live_required_failed,
+        "live_canary_satisfied": not live_required_failed and not live_provenance_failed,
         "trusted_live_mode": trusted_live,
-        "promotion_allowed": not missing and not failed and not coverage_failures and not live_required_failed,
+        "trusted_live_provenance_satisfied": not live_provenance_failed,
+        "live_provenance_failures": live_provenance_failures,
+        "promotion_allowed": not missing
+        and not failed
+        and not coverage_failures
+        and not live_required_failed
+        and not live_provenance_failed,
         "promotion_blockers": [
             *[f"missing_gate:{name}" for name in missing],
             *[f"failed_gate:{name}" for name in failed],
             *[f"coverage:{name}" for name in coverage_failures],
             *(["live_canary_required"] if live_required_failed else []),
+            *[f"live_provenance:{name}" for name in live_provenance_failures],
         ],
     }
 
