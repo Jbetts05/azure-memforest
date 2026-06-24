@@ -56,6 +56,8 @@ def _live_canary_failures(live_canary: dict[str, Any]) -> list[str]:
         "unassessed_kind_count",
         "partial_resident_commit_count",
         "unparsed_record_count",
+        "missing_model_telemetry_count",
+        "missing_stage_timing_count",
     )
     for name in zero_count_checks:
         value = _coverage_int(live_canary, name)
@@ -69,6 +71,8 @@ def _live_canary_failures(live_canary: dict[str, Any]) -> list[str]:
         "no_unassessed_kinds",
         "full_commit_path_used",
         "no_unparsed_records",
+        "all_model_telemetry_present",
+        "all_stage_timings_present",
     )
     for name in required_checks:
         if checks.get(name) is not True:

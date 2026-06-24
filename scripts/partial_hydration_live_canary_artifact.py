@@ -13,6 +13,8 @@ if str(REPO_ROOT) not in sys.path:
 
 from scripts.partial_hydration_canary_gate import TRUSTED_LIVE_PRODUCERS
 
+REQUIRED_STAGE_TIMINGS = frozenset({"hydrate", "extract_build", "project", "write_projection", "total_before_commit"})
+
 
 def _mapping(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
@@ -81,6 +83,14 @@ def _number(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _is_number(value: Any) -> bool:
+    try:
+        float(value)
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
 def summarize_live_metadata(
     records: list[dict[str, Any]],
     *,
@@ -93,6 +103,8 @@ def summarize_live_metadata(
     scoped_divergence_count = 0
     unassessed_kind_count = 0
     partial_resident_commit_count = 0
+    missing_model_telemetry_count = 0
+    missing_stage_timing_count = 0
     total_model_calls = 0
     total_model_failures = 0
     total_model_started_calls = 0
@@ -119,11 +131,19 @@ def summarize_live_metadata(
         if safety.get("partial_resident") is not False:
             partial_resident_commit_count += 1
         telemetry = _mapping(metadata.get("materialization_model_telemetry"))
+        telemetry_numeric_keys = ("total_calls", "total_failures", "total_started_calls", "total_latency_ms")
+        if telemetry.get("schema_version") != 1 or any(not _is_number(telemetry.get(key)) for key in telemetry_numeric_keys):
+            missing_model_telemetry_count += 1
         total_model_calls += int(_number(telemetry.get("total_calls")))
         total_model_failures += int(_number(telemetry.get("total_failures")))
         total_model_started_calls += int(_number(telemetry.get("total_started_calls")))
         total_model_latency_ms += _number(telemetry.get("total_latency_ms"))
         timings = _mapping(metadata.get("materialization_stage_timings_ms"))
+        if not REQUIRED_STAGE_TIMINGS.issubset(set(timings)) or any(
+            not _is_number(timings.get(stage))
+            for stage in REQUIRED_STAGE_TIMINGS
+        ):
+            missing_stage_timing_count += 1
         for stage, elapsed_ms in timings.items():
             try:
                 stage_timing_totals_ms[str(stage)] = stage_timing_totals_ms.get(str(stage), 0.0) + float(elapsed_ms)
@@ -140,6 +160,8 @@ def summarize_live_metadata(
         "scoped_divergence_count": scoped_divergence_count,
         "unassessed_kind_count": unassessed_kind_count,
         "partial_resident_commit_count": partial_resident_commit_count,
+        "missing_model_telemetry_count": missing_model_telemetry_count,
+        "missing_stage_timing_count": missing_stage_timing_count,
         "model_call_totals": {
             "total_calls": total_model_calls,
             "total_failures": total_model_failures,
@@ -158,6 +180,8 @@ def summarize_live_metadata(
             "no_unassessed_kinds": unassessed_kind_count == 0,
             "full_commit_path_used": partial_resident_commit_count == 0,
             "no_unparsed_records": unparsed_record_count == 0,
+            "all_model_telemetry_present": missing_model_telemetry_count == 0,
+            "all_stage_timings_present": missing_stage_timing_count == 0,
         },
     }
 

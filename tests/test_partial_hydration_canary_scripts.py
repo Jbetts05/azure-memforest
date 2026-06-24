@@ -49,6 +49,7 @@ def _live_metadata(*, under_selected: bool = False) -> dict:
             "partial_resident": False,
         },
         "materialization_model_telemetry": {
+            "schema_version": 1,
             "total_calls": 2,
             "total_failures": 1,
             "total_started_calls": 3,
@@ -58,6 +59,8 @@ def _live_metadata(*, under_selected: bool = False) -> dict:
             "hydrate": 1.0,
             "extract_build": 2.0,
             "project": 3.0,
+            "write_projection": 4.0,
+            "total_before_commit": 10.0,
         },
     }
 
@@ -99,6 +102,44 @@ def test_live_canary_collector_artifact_passes_gate_for_clean_metadata() -> None
         "total_latency_ms": 16.5,
     }
     assert artifact["live_canary"]["stage_timing_totals_ms"]["extract_build"] == 6.0
+
+
+def test_live_canary_collector_blocks_missing_timing_and_telemetry() -> None:
+    bad_metadata = _live_metadata()
+    bad_metadata.pop("materialization_model_telemetry")
+    bad_metadata["materialization_stage_timings_ms"] = {"hydrate": 1.0}
+    artifact = build_live_artifact(
+        local_evidence=_local_evidence(),
+        live_canary=summarize_live_metadata([bad_metadata, _live_metadata(), _live_metadata()]),
+        producer="azure-memforest-live-canary",
+        run_channel="trusted-ci",
+    )
+
+    report = evaluate_artifact(artifact, require_live_canary=True)
+
+    assert report["promotion_allowed"] is False
+    assert "live_canary:missing_model_telemetry_count" in report["promotion_blockers"]
+    assert "live_canary:missing_stage_timing_count" in report["promotion_blockers"]
+    assert "live_canary:all_model_telemetry_present" in report["promotion_blockers"]
+    assert "live_canary:all_stage_timings_present" in report["promotion_blockers"]
+
+
+def test_live_canary_collector_blocks_non_numeric_timing_and_telemetry() -> None:
+    bad_metadata = _live_metadata()
+    bad_metadata["materialization_model_telemetry"]["total_calls"] = "not-a-number"
+    bad_metadata["materialization_stage_timings_ms"]["project"] = None
+    artifact = build_live_artifact(
+        local_evidence=_local_evidence(),
+        live_canary=summarize_live_metadata([bad_metadata, _live_metadata(), _live_metadata()]),
+        producer="azure-memforest-live-canary",
+        run_channel="trusted-ci",
+    )
+
+    report = evaluate_artifact(artifact, require_live_canary=True)
+
+    assert report["promotion_allowed"] is False
+    assert "live_canary:missing_model_telemetry_count" in report["promotion_blockers"]
+    assert "live_canary:missing_stage_timing_count" in report["promotion_blockers"]
 
 
 def test_live_canary_collector_blocks_under_selection() -> None:
