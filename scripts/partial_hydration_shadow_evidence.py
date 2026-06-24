@@ -192,13 +192,17 @@ async def build_artifact() -> dict[str, Any]:
 async def main() -> None:
     parser = argparse.ArgumentParser(description="Run bounded local partial-hydration shadow evidence.")
     parser.add_argument("--output-root", default=str(Path("artifacts") / "incremental-shadow-smoke"))
+    parser.add_argument("--no-fail", action="store_true", help="Write the artifact even if gates fail, but exit 0.")
     args = parser.parse_args()
     artifact = await build_artifact()
     out_dir = Path(args.output_root)
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{artifact['run_id']}.json"
     out_path.write_text(json.dumps(artifact, indent=2, sort_keys=True), encoding="utf-8")
-    print(json.dumps({"artifact": str(out_path), "gate": artifact["gate"]}, indent=2))
+    failed = [name for name, passed in artifact["gate"].items() if passed is not True]
+    print(json.dumps({"artifact": str(out_path), "gate": artifact["gate"], "failed_gates": failed}, indent=2))
+    if failed and not args.no_fail:
+        raise SystemExit(2)
 
 
 if __name__ == "__main__":
