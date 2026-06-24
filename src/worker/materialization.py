@@ -678,6 +678,7 @@ class MemForestMaterializationHandler:
     ) -> tuple[ForestMaterializationSnapshot, Any | None]:
         prepare = getattr(self._ingest_core, "prepare_pre_ingest_route_prediction", None)
         finalize = getattr(self._ingest_core, "finalize_pre_ingest_route_prediction", None)
+        matches_route_index = getattr(self._ingest_core, "route_index_manifest_matches_current", None)
         if (
             self._config.enable_pre_ingest_route_prediction_prepass
             and route_index_manifest
@@ -691,6 +692,16 @@ class MemForestMaterializationHandler:
             # to the legacy single-step ingest without double-applying facts.
             try:
                 route_index_manifest_from_dict(route_index_manifest)
+            except Exception:
+                return self._ingest_core.ingest_session(session_id=session_id, turns=turns, metadata=metadata), None
+            if not callable(matches_route_index):
+                return self._ingest_core.ingest_session(session_id=session_id, turns=turns, metadata=metadata), None
+            try:
+                if not matches_route_index(
+                    route_index_manifest=route_index_manifest,
+                    embedding_model_version=self._config.embedding_model_version,
+                ):
+                    return self._ingest_core.ingest_session(session_id=session_id, turns=turns, metadata=metadata), None
             except Exception:
                 return self._ingest_core.ingest_session(session_id=session_id, turns=turns, metadata=metadata), None
             prediction = prepare(

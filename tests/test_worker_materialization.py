@@ -533,6 +533,8 @@ class FakeIngestCore:
         self.pre_ingest_prediction = None
         self.pre_ingest_prediction_calls = []
         self.finalized_pre_ingest_predictions = []
+        self.route_index_matches_current = True
+        self.route_index_match_checks = []
         self.partial_hydration_check_result = {
             "supported": True,
             "complete": True,
@@ -582,6 +584,15 @@ class FakeIngestCore:
     def finalize_pre_ingest_route_prediction(self, prediction):
         self.finalized_pre_ingest_predictions.append(prediction)
         return self.snapshot
+
+    def route_index_manifest_matches_current(self, *, route_index_manifest, embedding_model_version):
+        self.route_index_match_checks.append(
+            {
+                "route_index_manifest": dict(route_index_manifest),
+                "embedding_model_version": embedding_model_version,
+            }
+        )
+        return bool(self.route_index_matches_current)
 
     def hydrate_from_manifest(self, manifest):
         self.hydrated_from = manifest
@@ -2306,6 +2317,93 @@ async def test_materialization_handler_pre_ingest_prepass_falls_back_before_muta
         },
     )
     core = FakeIngestCore(snapshot)
+    core.pre_ingest_prediction = SimpleNamespace()
+    handler = _handler(
+        manifest_store=manifest_store,
+        core=core,
+        baseline_provider=MatchingProjectionBaselineProvider(),
+        config=MaterializationHandlerConfig(
+            owner_id="worker-1",
+            embedding_model_version="embed-v1",
+            code_version="test-sha",
+            prompt_config_hash="prompt-hash",
+            lease_renewal_seconds=9999,
+            enable_pre_ingest_route_prediction_prepass=True,
+        ),
+    )
+
+    await handler.handle(_envelope(), {"fencing_token": 1})
+
+    assert core.pre_ingest_prediction_calls == []
+    assert core.called is True
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_pre_ingest_prepass_falls_back_on_stale_route_metadata() -> None:
+    snapshot = _two_tree_incremental_snapshot_with_fact_and_route_manifest()
+    manifest_store = FakeManifestStore()
+    manifest_store.latest = ForestManifest(
+        manifest_id="manifest-v1",
+        tenant_id="tenant-1",
+        user_id="user-1",
+        forest_version="v1",
+        generation=1,
+        status="committed",
+        created_at_unix=1.0,
+        metadata={
+            "job_id": "previous",
+            "job_type": "ingest_session",
+            "embedding_model_version": "embed-v1",
+            "route_index_manifest": snapshot.route_index_manifest,
+        },
+    )
+    core = FakeIngestCore(snapshot)
+    core.pre_ingest_prediction = SimpleNamespace()
+    core.route_index_matches_current = False
+    handler = _handler(
+        manifest_store=manifest_store,
+        core=core,
+        baseline_provider=MatchingProjectionBaselineProvider(),
+        config=MaterializationHandlerConfig(
+            owner_id="worker-1",
+            embedding_model_version="embed-v1",
+            code_version="test-sha",
+            prompt_config_hash="prompt-hash",
+            lease_renewal_seconds=9999,
+            enable_pre_ingest_route_prediction_prepass=True,
+        ),
+    )
+
+    await handler.handle(_envelope(), {"fencing_token": 1})
+
+    assert core.route_index_match_checks
+    assert core.pre_ingest_prediction_calls == []
+    assert core.called is True
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_pre_ingest_prepass_falls_back_without_staleness_checker() -> None:
+    class CoreWithoutStalenessCheck(FakeIngestCore):
+        route_index_manifest_matches_current = None
+
+    snapshot = _two_tree_incremental_snapshot_with_fact_and_route_manifest()
+    manifest_store = FakeManifestStore()
+    manifest_store.latest = ForestManifest(
+        manifest_id="manifest-v1",
+        tenant_id="tenant-1",
+        user_id="user-1",
+        forest_version="v1",
+        generation=1,
+        status="committed",
+        created_at_unix=1.0,
+        metadata={
+            "job_id": "previous",
+            "job_type": "ingest_session",
+            "embedding_model_version": "embed-v1",
+            "route_index_manifest": snapshot.route_index_manifest,
+        },
+    )
+    core = CoreWithoutStalenessCheck(snapshot)
     core.pre_ingest_prediction = SimpleNamespace()
     handler = _handler(
         manifest_store=manifest_store,

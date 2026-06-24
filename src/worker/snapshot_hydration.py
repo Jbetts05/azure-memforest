@@ -37,6 +37,12 @@ class ArchiveHydratingUserForestCore:
         self.user_forest.finalize_pre_ingest_route_prediction(prediction)
         return self.user_forest.snapshot_for_materialization()
 
+    def route_index_manifest_matches_current(self, *, route_index_manifest: dict, embedding_model_version: str) -> bool:
+        return self.user_forest.route_index_manifest_matches_current(
+            route_index_manifest,
+            embedding_model_version=embedding_model_version,
+        )
+
     def delete_session(self, *, session_id: str) -> Any:
         self.user_forest.delete_session(session_id)
         return self.user_forest.snapshot_for_materialization()

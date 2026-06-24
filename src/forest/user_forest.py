@@ -273,6 +273,21 @@ class UserForest:
                 pre_ingest_scope=scope,
             )
 
+    def route_index_manifest_matches_current(self, route_index_manifest: dict, *, embedding_model_version: str) -> bool:
+        """Return whether route metadata matches this forest's hydrated routers."""
+
+        with self._lock:
+            from src.cloud.projection_plan import route_index_manifest_from_dict, route_index_manifest_matches_router_state
+
+            manifest = route_index_manifest_from_dict(route_index_manifest)
+            return route_index_manifest_matches_router_state(
+                manifest,
+                entity_router=self._tree_builder.entity_router,
+                scene_router=self._tree_builder.scene_router,
+                tree_config=self._config.tree,
+                embedding_model_version=embedding_model_version,
+            )
+
     def finalize_pre_ingest_route_prediction(self, prediction: PreIngestRoutePrediction) -> IngestResult:
         """Finish tree/session/index work after a fact-only pre-ingest prepass.
 
