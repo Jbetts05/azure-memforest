@@ -221,10 +221,25 @@ async def build_artifact(*, mode: str = "deterministic_local_fake_stores_no_live
     ]
     commit_control = await _run_commit_safety_case(dual=False)
     commit_dual = await _run_commit_safety_case(dual=True)
+    clean_scoped = cases[0]["predicted_subset_equivalence_shadow"]["scoped_comparison"]
+    assessed_kinds = [
+        kind
+        for kind, details in clean_scoped.get("by_kind", {}).items()
+        if details.get("assessed") is True
+    ]
     return {
         "schema_version": 1,
         "run_id": f"partial-hydration-shadow-evidence-{int(time.time())}",
         "mode": mode,
+        "coverage": {
+            "case_count": len(cases),
+            "clean_case_actual_tree_count": cases[0]["pre_ingest_scope_prediction"]["actual_tree_count"],
+            "clean_case_planned_tree_count": cases[0]["pre_ingest_scope_prediction"]["planned_tree_load_count"],
+            "clean_case_assessed_kind_count": len(assessed_kinds),
+            "clean_case_assessed_kinds": assessed_kinds,
+            "negative_case_missing_tree_count": cases[1]["pre_ingest_scope_prediction"]["missing_tree_count"],
+            "commit_safety_store_count": len(commit_dual["stores"]),
+        },
         "gate": {
             "clean_case_no_under_selection": not cases[0]["pre_ingest_scope_prediction"]["under_selected_without_escalation"],
             "clean_case_covers_oracle": cases[0]["pre_ingest_scope_prediction"]["covers_oracle_canonical_input"],

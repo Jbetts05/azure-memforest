@@ -22,6 +22,8 @@ REQUIRED_LOCAL_GATES = (
 )
 
 TRUSTED_LIVE_MODES = frozenset({"live_canary", "trusted_live_canary"})
+MIN_ASSESSED_KINDS = 4
+MIN_COMMIT_STORE_COUNT = 4
 
 
 def evaluate_artifact(artifact: dict[str, Any], *, require_live_canary: bool) -> dict[str, Any]:
@@ -31,8 +33,22 @@ def evaluate_artifact(artifact: dict[str, Any], *, require_live_canary: bool) ->
     if not isinstance(artifact, dict):
         artifact = {}
     gates = dict(artifact.get("gate") or {})
+    coverage = dict(artifact.get("coverage") or {})
     missing = [name for name in REQUIRED_LOCAL_GATES if name not in gates]
     failed = [name for name in REQUIRED_LOCAL_GATES if gates.get(name) is not True]
+    coverage_failures = []
+    if int(coverage.get("case_count") or 0) < 3:
+        coverage_failures.append("case_count")
+    if int(coverage.get("clean_case_actual_tree_count") or 0) <= 0:
+        coverage_failures.append("clean_case_actual_tree_count")
+    if int(coverage.get("clean_case_planned_tree_count") or 0) <= 0:
+        coverage_failures.append("clean_case_planned_tree_count")
+    if int(coverage.get("clean_case_assessed_kind_count") or 0) < MIN_ASSESSED_KINDS:
+        coverage_failures.append("clean_case_assessed_kind_count")
+    if int(coverage.get("negative_case_missing_tree_count") or 0) <= 0:
+        coverage_failures.append("negative_case_missing_tree_count")
+    if int(coverage.get("commit_safety_store_count") or 0) < MIN_COMMIT_STORE_COUNT:
+        coverage_failures.append("commit_safety_store_count")
     mode = str(artifact.get("mode") or "").strip().lower()
     trusted_live = mode in TRUSTED_LIVE_MODES
     live_required_failed = require_live_canary and not trusted_live
@@ -41,15 +57,18 @@ def evaluate_artifact(artifact: dict[str, Any], *, require_live_canary: bool) ->
         "artifact_run_id": artifact.get("run_id"),
         "mode": mode,
         "local_gates_passed": not missing and not failed,
+        "coverage_passed": not coverage_failures,
         "missing_gates": missing,
         "failed_gates": failed,
+        "coverage_failures": coverage_failures,
         "live_canary_required": require_live_canary,
         "live_canary_satisfied": not live_required_failed,
         "trusted_live_mode": trusted_live,
-        "promotion_allowed": not missing and not failed and not live_required_failed,
+        "promotion_allowed": not missing and not failed and not coverage_failures and not live_required_failed,
         "promotion_blockers": [
             *[f"missing_gate:{name}" for name in missing],
             *[f"failed_gate:{name}" for name in failed],
+            *[f"coverage:{name}" for name in coverage_failures],
             *(["live_canary_required"] if live_required_failed else []),
         ],
     }
