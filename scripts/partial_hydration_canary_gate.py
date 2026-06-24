@@ -25,6 +25,7 @@ TRUSTED_LIVE_MODES = frozenset({"live_canary", "trusted_live_canary"})
 TRUSTED_LIVE_PRODUCERS = frozenset({"azure-memforest-live-canary", "trusted-ci-canary"})
 MIN_ASSESSED_KINDS = 4
 MIN_COMMIT_STORE_COUNT = 4
+MIN_LIVE_RECORD_COUNT = 3
 
 
 def _mapping(value: Any) -> dict[str, Any]:
@@ -41,6 +42,40 @@ def _coverage_int(coverage: dict[str, Any], name: str) -> int | None:
         return None
 
 
+def _live_canary_failures(live_canary: dict[str, Any]) -> list[str]:
+    checks = _mapping(live_canary.get("checks"))
+    failures = []
+    metadata_record_count = _coverage_int(live_canary, "metadata_record_count")
+    if metadata_record_count is None or metadata_record_count < MIN_LIVE_RECORD_COUNT:
+        failures.append("metadata_record_count")
+    zero_count_checks = (
+        "under_selection_count",
+        "unsupported_prediction_count",
+        "unsupported_predicted_shadow_count",
+        "scoped_divergence_count",
+        "unassessed_kind_count",
+        "partial_resident_commit_count",
+        "unparsed_record_count",
+    )
+    for name in zero_count_checks:
+        value = _coverage_int(live_canary, name)
+        if value is None or value != 0:
+            failures.append(name)
+    required_checks = (
+        "zero_under_selection",
+        "all_predictions_supported",
+        "all_predicted_shadows_supported",
+        "all_scoped_comparisons_equivalent",
+        "no_unassessed_kinds",
+        "full_commit_path_used",
+        "no_unparsed_records",
+    )
+    for name in required_checks:
+        if checks.get(name) is not True:
+            failures.append(name)
+    return failures
+
+
 def evaluate_artifact(artifact: dict[str, Any], *, require_live_canary: bool) -> dict[str, Any]:
     # Provenance fields are still artifact data, not a cryptographic signature.
     # Use the non-local path only for artifacts from a trusted canary/CI
@@ -50,6 +85,7 @@ def evaluate_artifact(artifact: dict[str, Any], *, require_live_canary: bool) ->
     gates = _mapping(artifact.get("gate"))
     coverage = _mapping(artifact.get("coverage"))
     provenance = _mapping(artifact.get("provenance"))
+    live_canary = _mapping(artifact.get("live_canary"))
     missing = [name for name in REQUIRED_LOCAL_GATES if name not in gates]
     failed = [name for name in REQUIRED_LOCAL_GATES if gates.get(name) is not True]
     coverage_failures = []
@@ -81,6 +117,8 @@ def evaluate_artifact(artifact: dict[str, Any], *, require_live_canary: bool) ->
             live_provenance_failures.append("run_channel")
     live_required_failed = require_live_canary and not trusted_live
     live_provenance_failed = bool(live_provenance_failures)
+    live_canary_failures = _live_canary_failures(live_canary) if require_live_canary else []
+    live_canary_failed = bool(live_canary_failures)
     return {
         "schema_version": 1,
         "artifact_run_id": artifact.get("run_id"),
@@ -91,21 +129,25 @@ def evaluate_artifact(artifact: dict[str, Any], *, require_live_canary: bool) ->
         "failed_gates": failed,
         "coverage_failures": coverage_failures,
         "live_canary_required": require_live_canary,
-        "live_canary_satisfied": not live_required_failed and not live_provenance_failed,
+        "live_canary_satisfied": not live_required_failed and not live_provenance_failed and not live_canary_failed,
         "trusted_live_mode": trusted_live,
         "trusted_live_provenance_satisfied": not live_provenance_failed,
         "live_provenance_failures": live_provenance_failures,
+        "live_canary_checks_satisfied": not live_canary_failed,
+        "live_canary_failures": live_canary_failures,
         "promotion_allowed": not missing
         and not failed
         and not coverage_failures
         and not live_required_failed
-        and not live_provenance_failed,
+        and not live_provenance_failed
+        and not live_canary_failed,
         "promotion_blockers": [
             *[f"missing_gate:{name}" for name in missing],
             *[f"failed_gate:{name}" for name in failed],
             *[f"coverage:{name}" for name in coverage_failures],
             *(["live_canary_required"] if live_required_failed else []),
             *[f"live_provenance:{name}" for name in live_provenance_failures],
+            *[f"live_canary:{name}" for name in live_canary_failures],
         ],
     }
 
