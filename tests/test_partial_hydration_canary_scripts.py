@@ -253,6 +253,27 @@ def test_live_canary_runbook_requires_env_and_emits_commands() -> None:
     assert runbook["code_version"] == "abc123"
     assert runbook["artifacts"]["local_evidence"] == "<path printed by partial_hydration_shadow_evidence.py>"
     assert runbook["artifacts"]["durable_smoke"] == "<path printed by durable_ingest_smoke.py>"
+    assert runbook["command_steps"][0]["argv"] == [
+        "python",
+        "scripts/partial_hydration_shadow_evidence.py",
+        "--output-root",
+        "out",
+    ]
+    assert runbook["command_steps"][0]["produces_artifact"] == "local_evidence"
+    assert runbook["command_steps"][1]["produces_artifact"] == "durable_smoke"
+    assert runbook["command_steps"][1]["requires_substitution"][0] == {
+        "arg": "--function-key",
+        "source": "AZURE_MEMFOREST_DURABLE_FUNCTION_KEY",
+    }
+    assert runbook["command_steps"][2]["argv"][0:3] == [
+        "python",
+        "scripts/partial_hydration_live_canary_artifact.py",
+        "--local-evidence",
+    ]
+    assert runbook["command_steps"][2]["requires_substitution"] == [
+        {"arg": "--local-evidence", "source": "artifact:local_evidence"},
+        {"arg": "--metadata-json", "source": "artifact:durable_smoke"},
+    ]
     assert any("partial_hydration_authority_preflight.py" in command for command in runbook["commands"])
     assert "<path printed by durable_ingest_smoke.py>" in runbook["commands"][2]
     assert "<path printed by partial_hydration_shadow_evidence.py>" in runbook["commands"][2]

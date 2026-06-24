@@ -36,6 +36,10 @@ def _quote(value: str) -> str:
     return shlex.quote(str(value))
 
 
+def _shell_join(argv: list[str]) -> str:
+    return " ".join(_quote(arg) for arg in argv)
+
+
 def _missing_env(values: dict[str, str]) -> list[str]:
     missing = [name for name in REQUIRED_ENV if not str(values.get(name, "")).strip()]
     if str(values.get("AZURE_MEMFOREST_LIVE_DURABLE_SMOKE", "")).strip() != "1":
@@ -75,41 +79,90 @@ def build_runbook(
     live_artifact = f"{output}/live-canary.json"
     gate_report = f"{output}/canary-gate.json"
     authority_report = f"{output}/authority-preflight.json"
-    commands = [
-        f"python scripts/partial_hydration_shadow_evidence.py --output-root {_quote(output)}",
-        (
-            "python scripts/durable_ingest_smoke.py "
-            f"--api-url {_quote(values.get('AZURE_MEMFOREST_API_URL', ''))} "
-            f"--durable-start-url {_quote(values.get('AZURE_MEMFOREST_DURABLE_START_URL', ''))} "
-            f"--tenant-id {_quote(values.get('AZURE_MEMFOREST_TENANT_ID', ''))} "
-            f"--function-key <from AZURE_MEMFOREST_DURABLE_FUNCTION_KEY> "
-            f"--durable-status-key <from AZURE_MEMFOREST_DURABLE_STATUS_KEY or host durable key> "
-            f"--auth-mode {_quote(auth_mode)} --session-count {int(session_count)} "
-            f"--cosmos-endpoint {_quote(values.get('AZURE_MEMFOREST_COSMOS_ENDPOINT', ''))} "
-            f"--cosmos-database {_quote(values.get('AZURE_MEMFOREST_COSMOS_DATABASE', ''))} "
-            f"--azure-client-id {_quote(values.get('AZURE_CLIENT_ID', ''))} "
-            f"--export-manifest-metadata --output-root {_quote(output)}"
-        ),
-        (
-            "python scripts/partial_hydration_live_canary_artifact.py "
-            f"--local-evidence {_quote(local_artifact)} "
-            f"--metadata-json {_quote(smoke_artifact)} "
-            f"--output {_quote(live_artifact)} "
-            f"--run-channel {_quote(run_channel)} "
-            f"--code-version {_quote(git_sha)}"
-        ),
-        f"python scripts/partial_hydration_canary_gate.py {_quote(live_artifact)} --output {_quote(gate_report)}",
-        (
-            "python scripts/partial_hydration_authority_preflight.py "
-            f"{_quote(live_artifact)} "
-            f"--expected-code-version {_quote(git_sha)} "
-            "--confirm-rollback-switch "
-            "--confirm-guarded-switch-config "
-            "--confirm-tree-scoped-projection-writes "
-            "--confirm-live-canary-reviewed "
-            f"--output {_quote(authority_report)}"
-        ),
+    command_steps = [
+        {
+            "name": "local_evidence",
+            "argv": ["python", "scripts/partial_hydration_shadow_evidence.py", "--output-root", output],
+            "produces_artifact": "local_evidence",
+        },
+        {
+            "name": "durable_smoke",
+            "argv": [
+                "python",
+                "scripts/durable_ingest_smoke.py",
+                "--api-url",
+                values.get("AZURE_MEMFOREST_API_URL", ""),
+                "--durable-start-url",
+                values.get("AZURE_MEMFOREST_DURABLE_START_URL", ""),
+                "--tenant-id",
+                values.get("AZURE_MEMFOREST_TENANT_ID", ""),
+                "--function-key",
+                "<from AZURE_MEMFOREST_DURABLE_FUNCTION_KEY>",
+                "--durable-status-key",
+                "<from AZURE_MEMFOREST_DURABLE_STATUS_KEY or host durable key>",
+                "--auth-mode",
+                auth_mode,
+                "--session-count",
+                str(int(session_count)),
+                "--cosmos-endpoint",
+                values.get("AZURE_MEMFOREST_COSMOS_ENDPOINT", ""),
+                "--cosmos-database",
+                values.get("AZURE_MEMFOREST_COSMOS_DATABASE", ""),
+                "--azure-client-id",
+                values.get("AZURE_CLIENT_ID", ""),
+                "--export-manifest-metadata",
+                "--output-root",
+                output,
+            ],
+            "produces_artifact": "durable_smoke",
+            "requires_substitution": [
+                {"arg": "--function-key", "source": "AZURE_MEMFOREST_DURABLE_FUNCTION_KEY"},
+                {"arg": "--durable-status-key", "source": "AZURE_MEMFOREST_DURABLE_STATUS_KEY or host durable key"},
+            ],
+        },
+        {
+            "name": "live_canary_artifact",
+            "argv": [
+                "python",
+                "scripts/partial_hydration_live_canary_artifact.py",
+                "--local-evidence",
+                local_artifact,
+                "--metadata-json",
+                smoke_artifact,
+                "--output",
+                live_artifact,
+                "--run-channel",
+                run_channel,
+                "--code-version",
+                git_sha,
+            ],
+            "requires_substitution": [
+                {"arg": "--local-evidence", "source": "artifact:local_evidence"},
+                {"arg": "--metadata-json", "source": "artifact:durable_smoke"},
+            ],
+        },
+        {
+            "name": "canary_gate",
+            "argv": ["python", "scripts/partial_hydration_canary_gate.py", live_artifact, "--output", gate_report],
+        },
+        {
+            "name": "authority_preflight",
+            "argv": [
+                "python",
+                "scripts/partial_hydration_authority_preflight.py",
+                live_artifact,
+                "--expected-code-version",
+                git_sha,
+                "--confirm-rollback-switch",
+                "--confirm-guarded-switch-config",
+                "--confirm-tree-scoped-projection-writes",
+                "--confirm-live-canary-reviewed",
+                "--output",
+                authority_report,
+            ],
+        },
     ]
+    commands = [_shell_join(step["argv"]) for step in command_steps]
     return {
         "schema_version": 1,
         "ready": not missing and not flag_mismatches,
@@ -126,6 +179,7 @@ def build_runbook(
             "canary_gate": gate_report,
             "authority_preflight": authority_report,
         },
+        "command_steps": command_steps,
         "commands": commands,
         "notes": [
             "Enable diagnostic flags in the deployed worker/API environment before the live run.",
