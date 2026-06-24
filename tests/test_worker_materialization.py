@@ -1761,7 +1761,100 @@ async def test_materialization_handler_guarded_partial_hydration_switch_falls_ba
     assert strategy["selected"] == "full"
     assert strategy["partial_applied"] is False
     assert strategy["reason"] == "authoritative_switch_disabled"
+    assert strategy["runtime_blockers"] == [
+        "authoritative_switch_disabled",
+        "route_index_manifest_missing",
+        "trusted_pre_ingest_tree_scope_unavailable",
+    ]
     assert "trusted pre-ingest tree scope" in strategy["note"]
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_authoritative_switch_still_falls_back_without_scope() -> None:
+    manifest_store = FakeManifestStore()
+    manifest_store.latest = ForestManifest(
+        manifest_id="manifest-v1",
+        tenant_id="tenant-1",
+        user_id="user-1",
+        forest_version="v1",
+        generation=1,
+        status="committed",
+        created_at_unix=1.0,
+        metadata={"job_id": "previous", "job_type": "ingest_session", "embedding_model_version": "embed-v1"},
+    )
+    handler = _handler(
+        manifest_store=manifest_store,
+        core=FakeIngestCore(_unchanged_incremental_snapshot()),
+        baseline_provider=MatchingProjectionBaselineProvider(),
+        config=MaterializationHandlerConfig(
+            owner_id="worker-1",
+            embedding_model_version="embed-v1",
+            code_version="test-sha",
+            prompt_config_hash="prompt-hash",
+            lease_renewal_seconds=9999,
+            enable_tree_scoped_projection_writes=True,
+            enable_partial_hydration_guarded_switch=True,
+            enable_partial_hydration_authoritative_switch=True,
+            partial_hydration_authority_preflight_report_path="approved.json",
+        ),
+    )
+
+    await handler.handle(_envelope(), {"fencing_token": 1})
+
+    strategy = manifest_store.latest.metadata["pre_ingest_hydration_strategy"]
+    assert strategy["enabled"] is True
+    assert strategy["authoritative_enabled"] is True
+    assert strategy["selected"] == "full"
+    assert strategy["partial_applied"] is False
+    assert strategy["reason"] == "route_index_manifest_missing"
+    assert strategy["runtime_blockers"] == [
+        "route_index_manifest_missing",
+        "trusted_pre_ingest_tree_scope_unavailable",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_authoritative_switch_treats_empty_route_metadata_as_missing() -> None:
+    manifest_store = FakeManifestStore()
+    manifest_store.latest = ForestManifest(
+        manifest_id="manifest-v1",
+        tenant_id="tenant-1",
+        user_id="user-1",
+        forest_version="v1",
+        generation=1,
+        status="committed",
+        created_at_unix=1.0,
+        metadata={
+            "job_id": "previous",
+            "job_type": "ingest_session",
+            "embedding_model_version": "embed-v1",
+            "route_index_manifest": {},
+        },
+    )
+    handler = _handler(
+        manifest_store=manifest_store,
+        core=FakeIngestCore(_unchanged_incremental_snapshot()),
+        baseline_provider=MatchingProjectionBaselineProvider(),
+        config=MaterializationHandlerConfig(
+            owner_id="worker-1",
+            embedding_model_version="embed-v1",
+            code_version="test-sha",
+            prompt_config_hash="prompt-hash",
+            lease_renewal_seconds=9999,
+            enable_tree_scoped_projection_writes=True,
+            enable_partial_hydration_guarded_switch=True,
+            enable_partial_hydration_authoritative_switch=True,
+            partial_hydration_authority_preflight_report_path="approved.json",
+        ),
+    )
+
+    await handler.handle(_envelope(), {"fencing_token": 1})
+
+    strategy = manifest_store.latest.metadata["pre_ingest_hydration_strategy"]
+    assert strategy["runtime_blockers"] == [
+        "route_index_manifest_missing",
+        "trusted_pre_ingest_tree_scope_unavailable",
+    ]
 
 
 @pytest.mark.asyncio

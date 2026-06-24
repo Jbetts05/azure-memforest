@@ -163,6 +163,18 @@ class MaterializationHandlerConfig:
             raise ValueError("partial hydration authoritative switch requires authority preflight report")
 
 
+def _authoritative_partial_hydration_blockers(*, manifest: Any, authoritative_enabled: bool) -> list[str]:
+    blockers: list[str] = []
+    metadata = getattr(manifest, "metadata", {}) or {}
+    if not authoritative_enabled:
+        blockers.append("authoritative_switch_disabled")
+    route_index_manifest = metadata.get("route_index_manifest")
+    if not isinstance(route_index_manifest, dict) or not route_index_manifest:
+        blockers.append("route_index_manifest_missing")
+    blockers.append("trusted_pre_ingest_tree_scope_unavailable")
+    return blockers
+
+
 class MemForestMaterializationHandler:
     def __init__(
         self,
@@ -1244,7 +1256,12 @@ class MemForestMaterializationHandler:
             raise PermanentHandlerError("latest committed manifest embedding_model_version does not match worker configuration")
         if self._config.enable_partial_hydration_guarded_switch:
             strategy["selected"] = "full"
-            strategy["reason"] = "authoritative_switch_disabled" if not self._config.enable_partial_hydration_authoritative_switch else "pre_ingest_tree_scope_unavailable"
+            blockers = _authoritative_partial_hydration_blockers(
+                manifest=manifest,
+                authoritative_enabled=self._config.enable_partial_hydration_authoritative_switch,
+            )
+            strategy["reason"] = blockers[0]
+            strategy["runtime_blockers"] = blockers
             strategy["note"] = "partial hydration requires a trusted pre-ingest tree scope; post-ingest eligibility is metadata-only"
         else:
             strategy["selected"] = "full"
