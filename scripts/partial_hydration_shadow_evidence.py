@@ -28,6 +28,7 @@ from tests.test_worker_materialization import (
     _envelope,
     _handler,
     _snapshot,
+    _snapshot_with_scoped_summary_cache,
     _two_tree_incremental_snapshot_with_fact_and_route_manifest,
 )
 
@@ -139,14 +140,18 @@ async def _run_case(
 
 
 async def build_artifact() -> dict[str, Any]:
-    base = _two_tree_incremental_snapshot_with_fact_and_route_manifest()
+    scoped_summary = _snapshot_with_scoped_summary_cache()
+    base = replace(
+        _two_tree_incremental_snapshot_with_fact_and_route_manifest(),
+        summary_cache=dict(scoped_summary.summary_cache),
+    )
     cases = [
         await _run_case(
             "clean_prediction_covers_oracle",
             snapshot=base,
             route_index_manifest=base.route_index_manifest,
             prediction=_prediction(base, tree_ids=("entity:alice",)),
-            shadow_snapshot=replace(_snapshot(), baseline_forest_version=None),
+            shadow_snapshot=replace(_snapshot_with_scoped_summary_cache(), baseline_forest_version=None),
             dual=True,
         ),
         await _run_case(
@@ -175,6 +180,7 @@ async def build_artifact() -> dict[str, Any]:
             "clean_case_covers_oracle": cases[0]["pre_ingest_scope_prediction"]["covers_oracle_canonical_input"],
             "clean_case_predicted_shadow_supported": cases[0]["predicted_subset_equivalence_shadow"]["supported"],
             "clean_case_scoped_equivalent": cases[0]["predicted_subset_equivalence_shadow"]["scoped_comparison"]["equivalent"],
+            "clean_case_no_unassessed_kinds": cases[0]["predicted_subset_equivalence_shadow"]["scoped_comparison"]["unassessed_kinds"] == [],
             "under_selection_detected": cases[1]["pre_ingest_scope_prediction"]["under_selected_without_escalation"],
             "escalation_blocks_predicted_shadow": cases[2]["predicted_subset_equivalence_shadow"]["reason"] == "predicted_scope_requires_full_hydration",
             "full_commit_path_used": all(case["partial_residency_projection_safety"]["partial_resident"] is False for case in cases),
