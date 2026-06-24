@@ -1652,6 +1652,7 @@ async def test_materialization_handler_guarded_partial_hydration_switch_falls_ba
             code_version="test-sha",
             prompt_config_hash="prompt-hash",
             lease_renewal_seconds=9999,
+            enable_tree_scoped_projection_writes=True,
             enable_partial_hydration_guarded_switch=True,
         ),
     )

@@ -201,6 +201,9 @@ def fixed_materialization_config_factory(
     enable_pre_ingest_route_prediction_prepass: bool = False,
     enable_partial_hydration_dual_compute_shadow: bool = False,
 ) -> Callable[[WriteJobEnvelope], MaterializationHandlerConfig]:
+    if enable_partial_hydration_guarded_switch and not enable_tree_scoped_projection_writes:
+        raise ValueError("partial hydration guarded switch requires tree-scoped projection writes")
+
     def build(envelope: WriteJobEnvelope) -> MaterializationHandlerConfig:
         return MaterializationHandlerConfig(
             owner_id=owner_id,

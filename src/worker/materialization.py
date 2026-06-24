@@ -153,6 +153,8 @@ class MaterializationHandlerConfig:
             raise ValueError(
                 f"snapshot_policy {policy!r} requires explicit cloud checkpoint hydration support"
             )
+        if self.enable_partial_hydration_guarded_switch and not self.enable_tree_scoped_projection_writes:
+            raise ValueError("partial hydration guarded switch requires tree-scoped projection writes")
 
 
 class MemForestMaterializationHandler:

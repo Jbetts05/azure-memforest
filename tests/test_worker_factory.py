@@ -7,6 +7,7 @@ import pytest
 from src.service.auth import ActorContext, TenantContext
 from src.service.jobs import build_write_job_envelope
 from src.config.config import load_default_config
+from src.worker.materialization import MaterializationHandlerConfig
 from src.worker.factory import (
     ScopedMaterializationHandler,
     cosmos_materialization_store_factory,
@@ -111,6 +112,24 @@ def test_fixed_materialization_config_factory_sets_owner_and_embedding_version()
     assert config.enable_partial_hydration_guarded_switch is True
     assert config.enable_pre_ingest_route_prediction_prepass is True
     assert config.enable_partial_hydration_dual_compute_shadow is True
+
+
+def test_fixed_materialization_config_factory_requires_scoped_writes_for_guarded_switch() -> None:
+    with pytest.raises(ValueError, match="guarded switch requires tree-scoped projection writes"):
+        fixed_materialization_config_factory(
+            owner_id="worker-1",
+            embedding_model_version="embed-v1",
+            enable_partial_hydration_guarded_switch=True,
+            enable_tree_scoped_projection_writes=False,
+        )
+
+    with pytest.raises(ValueError, match="guarded switch requires tree-scoped projection writes"):
+        MaterializationHandlerConfig(
+            owner_id="worker-1",
+            embedding_model_version="embed-v1",
+            enable_partial_hydration_guarded_switch=True,
+            enable_tree_scoped_projection_writes=False,
+        )
 
 
 def test_fixed_materialization_config_factory_fails_closed_for_checkpoint_policy() -> None:
