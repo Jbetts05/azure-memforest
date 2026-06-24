@@ -227,6 +227,7 @@ def test_authority_preflight_blocks_code_version_mismatch_and_stale_artifact() -
     assert report["authority_allowed"] is False
     assert "code_version:code_version_mismatch" in report["authority_blockers"]
     assert "freshness:artifact_too_old" in report["authority_blockers"]
+    assert report["artifact_created_at_unix"] == 1.0
 
 
 def test_live_canary_runbook_requires_env_and_emits_commands() -> None:

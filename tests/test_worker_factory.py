@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+import sys
+import time
 
 import pytest
 
@@ -229,6 +231,79 @@ def test_materialization_env_requires_approved_authority_preflight_report(tmp_pa
     )
     environ["AZURE_MEMFOREST_PARTIAL_HYDRATION_AUTHORITY_PREFLIGHT_REPORT"] = str(mismatch)
     with pytest.raises(ValueError, match="code version mismatch"):
+        build_scoped_materialization_handler_from_env(environ)
+
+    stale = tmp_path / "stale.json"
+    stale.write_text(
+        '{"authority_allowed": true, "expected_code_version": "test-sha", "artifact_code_version": "test-sha", "artifact_created_at_unix": 1, "max_age_seconds": 3600}',
+        encoding="utf-8",
+    )
+    environ["AZURE_MEMFOREST_PARTIAL_HYDRATION_AUTHORITY_PREFLIGHT_REPORT"] = str(stale)
+    with pytest.raises(ValueError, match="preflight report is stale"):
+        build_scoped_materialization_handler_from_env(environ)
+
+    zero_window = tmp_path / "zero_window.json"
+    zero_window.write_text(
+        '{"authority_allowed": true, "expected_code_version": "test-sha", "artifact_code_version": "test-sha", "artifact_created_at_unix": 1, "max_age_seconds": 0}',
+        encoding="utf-8",
+    )
+    environ["AZURE_MEMFOREST_PARTIAL_HYDRATION_AUTHORITY_PREFLIGHT_REPORT"] = str(zero_window)
+    with pytest.raises(ValueError, match="freshness metadata is invalid"):
+        build_scoped_materialization_handler_from_env(environ)
+
+    env_capped = tmp_path / "env_capped.json"
+    env_capped.write_text(
+        (
+            '{"authority_allowed": true, "expected_code_version": "test-sha", '
+            '"artifact_code_version": "test-sha", '
+            f'"artifact_created_at_unix": {time.time() - 10}, "max_age_seconds": 3600}}'
+        ),
+        encoding="utf-8",
+    )
+    environ["AZURE_MEMFOREST_PARTIAL_HYDRATION_AUTHORITY_PREFLIGHT_REPORT"] = str(env_capped)
+    environ["AZURE_MEMFOREST_PARTIAL_HYDRATION_AUTHORITY_PREFLIGHT_MAX_AGE_SECONDS"] = "1"
+    with pytest.raises(ValueError, match="preflight report is stale"):
+        build_scoped_materialization_handler_from_env(environ)
+
+
+def test_materialization_env_accepts_fresh_authority_preflight_report_then_builds_clients(tmp_path, monkeypatch) -> None:
+    from src.worker.factory import build_scoped_materialization_handler_from_env
+
+    approved = tmp_path / "approved.json"
+    approved.write_text(
+        (
+            '{"authority_allowed": true, "expected_code_version": "test-sha", '
+            '"artifact_code_version": "test-sha", '
+            f'"artifact_created_at_unix": {time.time()}, "max_age_seconds": 3600}}'
+        ),
+        encoding="utf-8",
+    )
+    environ = _required_materialization_env()
+    environ["AZURE_MEMFOREST_ENABLE_TREE_SCOPED_PROJECTION_WRITES"] = "true"
+    environ["AZURE_MEMFOREST_ENABLE_PARTIAL_HYDRATION_GUARDED_SWITCH"] = "true"
+    environ["AZURE_MEMFOREST_ENABLE_PARTIAL_HYDRATION_AUTHORITATIVE_SWITCH"] = "true"
+    environ["AZURE_MEMFOREST_PARTIAL_HYDRATION_AUTHORITY_PREFLIGHT_REPORT"] = str(approved)
+
+    class BoomCosmosClient:
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError("preflight passed and azure construction began")
+
+    monkeypatch.setitem(sys.modules, "azure.cosmos.aio", SimpleNamespace(CosmosClient=BoomCosmosClient))
+    monkeypatch.setitem(
+        sys.modules,
+        "azure.identity",
+        SimpleNamespace(
+            ManagedIdentityCredential=lambda **kwargs: object(),
+            get_bearer_token_provider=lambda *args, **kwargs: "token-provider",
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "azure.identity.aio",
+        SimpleNamespace(ManagedIdentityCredential=lambda **kwargs: object()),
+    )
+
+    with pytest.raises(RuntimeError, match="preflight passed and azure construction began"):
         build_scoped_materialization_handler_from_env(environ)
 
 

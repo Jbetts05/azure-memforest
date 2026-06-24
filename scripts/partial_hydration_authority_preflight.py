@@ -72,6 +72,7 @@ def evaluate_authority_preflight(
     return {
         "schema_version": 1,
         "artifact_run_id": canary_report.get("artifact_run_id"),
+        "artifact_created_at_unix": provenance.get("created_at_unix"),
         "canary_promotion_allowed": canary_report["promotion_allowed"],
         "required_confirmations": list(AUTHORITY_CONFIRMATIONS),
         "missing_confirmations": missing_confirmations,

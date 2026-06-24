@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import hashlib
 import json
+import time
 from pathlib import Path
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -38,6 +39,8 @@ from src.worker.snapshot_hydration import ArchiveHydratingUserForestCore
 
 StoreFactory = Callable[[WriteJobEnvelope], MaterializationStores]
 CoreFactory = Callable[[WriteJobEnvelope], SyncIngestCore]
+AUTHORITY_PREFLIGHT_MAX_FUTURE_SKEW_SECONDS = 300
+DEFAULT_AUTHORITY_PREFLIGHT_MAX_AGE_SECONDS = 86400
 
 REQUIRED_MATERIALIZATION_ENV = (
     "AZURE_CLIENT_ID",
@@ -295,6 +298,20 @@ def _validate_authority_preflight_report_from_env(values: dict[str, str]) -> Non
         raise ValueError("partial hydration authority preflight report code version mismatch")
     if str(report.get("artifact_code_version") or "").strip() != expected_code_version:
         raise ValueError("partial hydration authority preflight artifact code version mismatch")
+    try:
+        created_at = float(report.get("artifact_created_at_unix"))
+        report_max_age_seconds = int(report.get("max_age_seconds", DEFAULT_AUTHORITY_PREFLIGHT_MAX_AGE_SECONDS))
+        env_max_age_seconds = int(values.get("AZURE_MEMFOREST_PARTIAL_HYDRATION_AUTHORITY_PREFLIGHT_MAX_AGE_SECONDS", DEFAULT_AUTHORITY_PREFLIGHT_MAX_AGE_SECONDS))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("partial hydration authority preflight report freshness metadata is invalid") from exc
+    if report_max_age_seconds <= 0 or env_max_age_seconds <= 0:
+        raise ValueError("partial hydration authority preflight report freshness metadata is invalid")
+    max_age_seconds = min(report_max_age_seconds, env_max_age_seconds)
+    now = time.time()
+    if created_at <= 0.0 or now - created_at > max_age_seconds:
+        raise ValueError("partial hydration authority preflight report is stale")
+    if created_at - now > AUTHORITY_PREFLIGHT_MAX_FUTURE_SKEW_SECONDS:
+        raise ValueError("partial hydration authority preflight report is from the future")
 
 
 def build_scoped_materialization_handler_from_env(
