@@ -24,6 +24,7 @@ from tests.test_worker_materialization import (
     MatchingProjectionBaselineProvider,
     MaterializationHandlerConfig,
     PreIngestTreeScope,
+    RecordingStore,
     RouteRiskFlags,
     _envelope,
     _handler,
@@ -139,6 +140,53 @@ async def _run_case(
     }
 
 
+async def _run_commit_safety_case(*, dual: bool) -> dict[str, Any]:
+    base = _two_tree_incremental_snapshot_with_fact_and_route_manifest()
+    calls: list[str] = []
+    manifest_store = _manifest_store(base.route_index_manifest)
+    core = FakeIngestCore(base)
+    core.pre_ingest_prediction = _prediction(base, tree_ids=("entity:alice",))
+    core.partial_hydration_equivalence_snapshot = replace(_snapshot(), baseline_forest_version=None)
+    tree_store = RecordingStore(calls, "tree_nodes")
+    location_store = RecordingStore(calls, "locations")
+    recall_store = RecordingStore(calls, "recall")
+    browse_store = RecordingStore(calls, "browse_embeddings")
+    handler = _handler(
+        manifest_store=manifest_store,
+        calls=calls,
+        core=core,
+        baseline_provider=MatchingProjectionBaselineProvider(),
+        config=_config(dual=dual),
+        node_store=tree_store,
+        location_store=location_store,
+        recall_index=recall_store,
+        browse_store=browse_store,
+    )
+    await handler.handle(_envelope(), {"fencing_token": 1})
+    metadata = dict(manifest_store.latest.metadata)
+    for volatile in (
+        "materialization_fingerprint",
+        "fingerprint_inputs_id",
+        "pre_ingest_scope_prediction",
+        "predicted_subset_equivalence_shadow",
+        "partial_hydration_equivalence_shadow",
+        "materialization_stage_timings_ms",
+    ):
+        metadata.pop(volatile, None)
+    return {
+        "stores": {
+            "tree_nodes": _stable(tree_store.items),
+            "locations": _stable(location_store.items),
+            "recall": _stable(recall_store.items),
+            "browse_embeddings": _stable(browse_store.items),
+        },
+        "metadata_without_shadow": _stable(metadata),
+        "prepass_called": bool(core.pre_ingest_prediction_calls),
+        "oracle_shadow_enabled": manifest_store.latest.metadata.get("partial_hydration_equivalence_shadow", {}).get("enabled"),
+        "predicted_shadow_supported": manifest_store.latest.metadata.get("predicted_subset_equivalence_shadow", {}).get("supported"),
+    }
+
+
 async def build_artifact() -> dict[str, Any]:
     scoped_summary = _snapshot_with_scoped_summary_cache()
     base = replace(
@@ -171,6 +219,8 @@ async def build_artifact() -> dict[str, Any]:
             dual=True,
         ),
     ]
+    commit_control = await _run_commit_safety_case(dual=False)
+    commit_dual = await _run_commit_safety_case(dual=True)
     return {
         "schema_version": 1,
         "run_id": f"partial-hydration-shadow-evidence-{int(time.time())}",
@@ -184,8 +234,16 @@ async def build_artifact() -> dict[str, Any]:
             "under_selection_detected": cases[1]["pre_ingest_scope_prediction"]["under_selected_without_escalation"],
             "escalation_blocks_predicted_shadow": cases[2]["predicted_subset_equivalence_shadow"]["reason"] == "predicted_scope_requires_full_hydration",
             "full_commit_path_used": all(case["partial_residency_projection_safety"]["partial_resident"] is False for case in cases),
+            "dual_commit_store_outputs_equal": commit_control["stores"] == commit_dual["stores"],
+            "dual_commit_metadata_without_shadow_equal": commit_control["metadata_without_shadow"] == commit_dual["metadata_without_shadow"],
+            "dual_commit_oracle_shadow_disabled": commit_control["oracle_shadow_enabled"] is False and commit_dual["oracle_shadow_enabled"] is False,
+            "dual_commit_predicted_shadow_supported": commit_dual["predicted_shadow_supported"] is True,
         },
         "cases": _stable(cases),
+        "commit_safety": {
+            "control": commit_control,
+            "dual": commit_dual,
+        },
     }
 
 
