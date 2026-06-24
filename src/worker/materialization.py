@@ -240,6 +240,7 @@ class MemForestMaterializationHandler:
 
             await self._update_job_stage(envelope, fencing_token=fencing_token, stage="extract_build", detail="Extracting facts, deduping, and rebuilding MemTrees.", telemetry=telemetry)
             try:
+                model_telemetry = {}
                 with collect_model_telemetry() as telemetry:
                     extract_build_started = time.perf_counter()
                     snapshot, pre_ingest_prediction = await self._run_ingest_session(
@@ -253,6 +254,7 @@ class MemForestMaterializationHandler:
                         route_index_manifest=(getattr(latest, "metadata", {}) or {}).get("route_index_manifest") if latest is not None else None,
                     )
                     stage_timings_ms["extract_build"] = _elapsed_ms(extract_build_started)
+                    model_telemetry = _materialization_model_telemetry_summary(telemetry)
             except asyncio.TimeoutError as exc:
                 raise TransientHandlerError(
                     f"ingest_session timed out after {self._config.ingest_timeout_seconds:.0f}s",
@@ -348,6 +350,7 @@ class MemForestMaterializationHandler:
             )
             stage_timings_ms["write_projection"] = _elapsed_ms(write_projection_started)
             projection_metadata["materialization_stage_timings_ms"] = stage_timings_ms
+            projection_metadata["materialization_model_telemetry"] = model_telemetry
             projection_metadata["projection_input_counts"] = _projection_input_counts(projection, snapshot=snapshot)
             projection_metadata["hydration_summary"] = hydration_summary
             projection_metadata["partial_hydration_shadow"] = partial_hydration_shadow
@@ -3133,6 +3136,36 @@ def _record_extract_heartbeat(telemetry: dict[str, Any]) -> dict[str, Any]:
             "extract_build_last_heartbeat_unix": time.time(),
         },
     )
+
+
+def _materialization_model_telemetry_summary(telemetry: dict[str, Any]) -> dict[str, Any]:
+    snapshot = snapshot_model_telemetry(telemetry)
+    calls = snapshot.get("calls") if isinstance(snapshot, dict) else {}
+    call_summaries = {}
+    if isinstance(calls, dict):
+        for key, entry in calls.items():
+            if not isinstance(entry, dict):
+                continue
+            call_summaries[str(key)] = {
+                "operation": entry.get("operation"),
+                "role": entry.get("role"),
+                "deployment": entry.get("deployment"),
+                "count": int(entry.get("count") or 0),
+                "failure_count": int(entry.get("failure_count") or 0),
+                "item_count": int(entry.get("item_count") or 0),
+                "failed_item_count": int(entry.get("failed_item_count") or 0),
+                "total_latency_ms": round(float(entry.get("total_latency_ms") or 0.0), 3),
+                "total_failure_latency_ms": round(float(entry.get("total_failure_latency_ms") or 0.0), 3),
+                "max_latency_ms": round(float(entry.get("max_latency_ms") or 0.0), 3),
+            }
+    return {
+        "schema_version": 1,
+        "total_calls": int(snapshot.get("total_calls") or 0),
+        "total_failures": int(snapshot.get("total_failures") or 0),
+        "total_started_calls": int(snapshot.get("total_started_calls") or 0),
+        "total_latency_ms": round(float(snapshot.get("total_latency_ms") or 0.0), 3),
+        "calls": call_summaries,
+    }
 
 
 def _telemetry_progress_signature(telemetry: dict[str, Any]) -> dict[str, int]:

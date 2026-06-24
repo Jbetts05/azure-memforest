@@ -1462,6 +1462,7 @@ async def test_materialization_handler_commits_snapshot_pointer_metadata() -> No
         "write_projection",
         "total_before_commit",
     }
+    assert metadata["materialization_model_telemetry"]["total_calls"] == 0
     assert metadata["projection_input_counts"]["stored_nodes"] == 2
     assert metadata["projection_input_counts"]["recall_documents"] == 1
     assert metadata["projection_input_counts"]["browse_embedding_records"] == 1
@@ -1511,6 +1512,26 @@ async def test_materialization_handler_persists_route_index_manifest_metadata() 
     fingerprint_inputs = json.loads(payload.decode("utf-8"))
     assert fingerprint_inputs["route_index_manifest"] == route_index
     assert metadata["artifact_kind"] == "fingerprint_inputs"
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_records_model_call_telemetry() -> None:
+    manifest_store = FakeManifestStore()
+    handler = _handler(
+        manifest_store=manifest_store,
+        core=FakeIngestCore(_snapshot(), model_calls=2),
+    )
+
+    await handler.handle(_envelope(), {"fencing_token": 1})
+
+    telemetry = manifest_store.latest.metadata["materialization_model_telemetry"]
+    assert telemetry["schema_version"] == 1
+    assert telemetry["total_calls"] == 2
+    assert telemetry["total_failures"] == 0
+    assert telemetry["total_started_calls"] == 0
+    assert telemetry["total_latency_ms"] == 2.0
+    assert telemetry["calls"]["chat:extraction:test"]["count"] == 2
+    assert "last_started_at_monotonic" not in telemetry["calls"]["chat:extraction:test"]
 
 
 @pytest.mark.asyncio

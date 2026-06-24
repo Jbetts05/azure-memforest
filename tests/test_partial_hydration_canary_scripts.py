@@ -48,6 +48,17 @@ def _live_metadata(*, under_selected: bool = False) -> dict:
         "partial_residency_projection_safety": {
             "partial_resident": False,
         },
+        "materialization_model_telemetry": {
+            "total_calls": 2,
+            "total_failures": 1,
+            "total_started_calls": 3,
+            "total_latency_ms": 5.5,
+        },
+        "materialization_stage_timings_ms": {
+            "hydrate": 1.0,
+            "extract_build": 2.0,
+            "project": 3.0,
+        },
     }
 
 
@@ -81,6 +92,13 @@ def test_live_canary_collector_artifact_passes_gate_for_clean_metadata() -> None
 
     assert report["promotion_allowed"] is True
     assert report["live_canary_checks_satisfied"] is True
+    assert artifact["live_canary"]["model_call_totals"] == {
+        "total_calls": 6,
+        "total_failures": 3,
+        "total_started_calls": 9,
+        "total_latency_ms": 16.5,
+    }
+    assert artifact["live_canary"]["stage_timing_totals_ms"]["extract_build"] == 6.0
 
 
 def test_live_canary_collector_blocks_under_selection() -> None:

@@ -74,6 +74,13 @@ def load_metadata_records(paths: list[Path]) -> list[dict[str, Any]]:
     return list(collect_metadata_records(paths)["records"])
 
 
+def _number(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def summarize_live_metadata(
     records: list[dict[str, Any]],
     *,
@@ -86,6 +93,11 @@ def summarize_live_metadata(
     scoped_divergence_count = 0
     unassessed_kind_count = 0
     partial_resident_commit_count = 0
+    total_model_calls = 0
+    total_model_failures = 0
+    total_model_started_calls = 0
+    total_model_latency_ms = 0.0
+    stage_timing_totals_ms: dict[str, float] = {}
     for metadata in records:
         prediction = _mapping(metadata.get("pre_ingest_scope_prediction"))
         shadow = _mapping(metadata.get("predicted_subset_equivalence_shadow"))
@@ -106,6 +118,17 @@ def summarize_live_metadata(
             unassessed_kind_count += 1
         if safety.get("partial_resident") is not False:
             partial_resident_commit_count += 1
+        telemetry = _mapping(metadata.get("materialization_model_telemetry"))
+        total_model_calls += int(_number(telemetry.get("total_calls")))
+        total_model_failures += int(_number(telemetry.get("total_failures")))
+        total_model_started_calls += int(_number(telemetry.get("total_started_calls")))
+        total_model_latency_ms += _number(telemetry.get("total_latency_ms"))
+        timings = _mapping(metadata.get("materialization_stage_timings_ms"))
+        for stage, elapsed_ms in timings.items():
+            try:
+                stage_timing_totals_ms[str(stage)] = stage_timing_totals_ms.get(str(stage), 0.0) + float(elapsed_ms)
+            except (TypeError, ValueError):
+                continue
     return {
         "schema_version": 1,
         "input_object_count": len(records) if input_object_count is None else input_object_count,
@@ -117,6 +140,16 @@ def summarize_live_metadata(
         "scoped_divergence_count": scoped_divergence_count,
         "unassessed_kind_count": unassessed_kind_count,
         "partial_resident_commit_count": partial_resident_commit_count,
+        "model_call_totals": {
+            "total_calls": total_model_calls,
+            "total_failures": total_model_failures,
+            "total_started_calls": total_model_started_calls,
+            "total_latency_ms": round(total_model_latency_ms, 3),
+        },
+        "stage_timing_totals_ms": {
+            stage: round(elapsed, 3)
+            for stage, elapsed in sorted(stage_timing_totals_ms.items())
+        },
         "checks": {
             "zero_under_selection": under_selection_count == 0,
             "all_predictions_supported": unsupported_prediction_count == 0,
