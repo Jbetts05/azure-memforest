@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from scripts.durable_ingest_smoke import _manifest_metadata_summary
 from scripts.partial_hydration_canary_gate import evaluate_artifact
-from scripts.partial_hydration_live_canary_artifact import build_live_artifact, summarize_live_metadata
+from scripts.partial_hydration_live_canary_artifact import build_live_artifact, collect_metadata_records, summarize_live_metadata
 
 
 def _local_evidence() -> dict:
@@ -126,3 +127,45 @@ def test_gate_handles_malformed_artifact_shapes_as_blockers() -> None:
     assert report["promotion_allowed"] is False
     assert "coverage:case_count" in report["promotion_blockers"]
     assert "live_provenance:producer" in report["promotion_blockers"]
+
+
+def test_collector_parses_durable_smoke_manifest_metadata_wrapper(tmp_path) -> None:
+    artifact_path = tmp_path / "durable_smoke.json"
+    artifact_path.write_text(
+        """
+        {
+          "manifest_metadata": {
+            "records": [
+              {"metadata": {"pre_ingest_scope_prediction": {"supported": true}}},
+              {"unexpected": true}
+            ]
+          }
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    collected = collect_metadata_records([artifact_path])
+
+    assert collected["input_object_count"] == 2
+    assert len(collected["records"]) == 1
+    assert collected["unparsed_record_count"] == 1
+
+
+def test_durable_smoke_manifest_metadata_summary_counts_prediction_support() -> None:
+    summary = _manifest_metadata_summary(
+        {
+            "records": [
+                {"metadata": {"pre_ingest_scope_prediction": {"supported": True}}},
+                {"metadata": {"pre_ingest_scope_prediction": {"supported": False, "reason": "no_committed_manifest"}}},
+                {"metadata": {}},
+            ]
+        }
+    )
+
+    assert summary == {
+        "record_count": 3,
+        "pre_ingest_prediction_supported_count": 1,
+        "pre_ingest_prediction_unsupported_count": 1,
+        "pre_ingest_prediction_missing_count": 1,
+    }

@@ -23,6 +23,8 @@ if str(REPO_ROOT) not in sys.path:
 def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
     if os.getenv("AZURE_MEMFOREST_LIVE_DURABLE_SMOKE") != "1":
         raise RuntimeError("Set AZURE_MEMFOREST_LIVE_DURABLE_SMOKE=1 to run live Durable smoke calls.")
+    if args.session_count < 1 or args.session_count > 50:
+        raise RuntimeError("--session-count must be between 1 and 50.")
     function_key = args.function_key or os.getenv("AZURE_MEMFOREST_DURABLE_FUNCTION_KEY")
     if not function_key:
         raise RuntimeError("Provide --function-key or AZURE_MEMFOREST_DURABLE_FUNCTION_KEY.")
@@ -43,6 +45,10 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
     projection = None
     if args.verify_projection and args.cosmos_endpoint and args.cosmos_database and args.azure_client_id:
         projection = _latest_projection_contains_codes(args, user_id, [session["code"] for session in sessions])
+    manifest_metadata = None
+    if args.export_manifest_metadata:
+        manifest_metadata = _latest_manifest_metadata_records(args, user_id, limit=args.session_count)
+    manifest_metadata_summary = _manifest_metadata_summary(manifest_metadata)
     artifact = {
         "run_id": run_id,
         "started_at_unix": started_at,
@@ -58,6 +64,8 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
         "query": query_results[0]["response"] if len(query_results) == 1 else None,
         "queries": query_results,
         "projection": projection,
+        "manifest_metadata": manifest_metadata,
+        "manifest_metadata_summary": manifest_metadata_summary,
         "assertions": {
             "jobs_succeeded": all(session["job"].get("status") == "succeeded" for session in sessions),
             "durable_instances_completed": all(
@@ -66,6 +74,7 @@ def run_smoke(args: argparse.Namespace) -> dict[str, Any]:
             ),
             "queries_mention_markers": args.skip_query or all(query["mentions_marker"] for query in query_results),
             "latest_projection_contains_all_markers": projection is None or projection["contains_all_codes"],
+            "manifest_metadata_exported": manifest_metadata is None or manifest_metadata_summary["record_count"] >= args.session_count,
         },
     }
     failures = [name for name, passed in artifact["assertions"].items() if not passed]
@@ -272,6 +281,65 @@ def _latest_projection_contains_codes(args: argparse.Namespace, user_id: str, co
         _close_cosmos_client(credential, client)
 
 
+def _latest_manifest_metadata_records(args: argparse.Namespace, user_id: str, *, limit: int) -> dict[str, Any]:
+    credential, client = _cosmos_client(args)
+    safe_limit = max(1, min(int(limit), 50))
+    try:
+        database = client.get_database_client(args.cosmos_database)
+        manifests = list(
+            database.get_container_client("manifests").query_items(
+                query=(
+                    f"SELECT TOP {safe_limit} c.manifest_id, c.id, c.forest_version, c.generation, "
+                    "c.created_at_unix, c.metadata FROM c WHERE c.tenant_id=@tenant AND c.user_id=@user "
+                    "AND c.status='committed' ORDER BY c.generation DESC"
+                ),
+                parameters=[
+                    {"name": "@tenant", "value": args.tenant_id},
+                    {"name": "@user", "value": user_id},
+                ],
+                enable_cross_partition_query=True,
+            )
+        )
+        return {
+            "records": [
+                {
+                    "manifest_id": manifest.get("manifest_id") or manifest.get("id"),
+                    "forest_version": manifest.get("forest_version"),
+                    "generation": manifest.get("generation"),
+                    "created_at_unix": manifest.get("created_at_unix"),
+                    "metadata": manifest.get("metadata") or {},
+                }
+                for manifest in sorted(manifests, key=lambda item: int(item.get("generation") or 0))
+            ]
+        }
+    finally:
+        _close_cosmos_client(credential, client)
+
+
+def _manifest_metadata_summary(manifest_metadata: dict[str, Any] | None) -> dict[str, Any]:
+    records = manifest_metadata.get("records") if isinstance(manifest_metadata, dict) else None
+    if not isinstance(records, list):
+        records = []
+    supported = 0
+    unsupported = 0
+    missing = 0
+    for record in records:
+        metadata = record.get("metadata") if isinstance(record, dict) else None
+        prediction = metadata.get("pre_ingest_scope_prediction") if isinstance(metadata, dict) else None
+        if isinstance(prediction, dict) and prediction.get("supported") is True:
+            supported += 1
+        elif isinstance(prediction, dict):
+            unsupported += 1
+        else:
+            missing += 1
+    return {
+        "record_count": len(records),
+        "pre_ingest_prediction_supported_count": supported,
+        "pre_ingest_prediction_unsupported_count": unsupported,
+        "pre_ingest_prediction_missing_count": missing,
+    }
+
+
 def _redact_artifact_for_error(artifact: dict[str, Any]) -> dict[str, Any]:
     redacted = dict(artifact)
     for session in redacted.get("sessions") or []:
@@ -438,8 +506,17 @@ def main() -> int:
     parser.add_argument("--job-source", choices=["cosmos", "api"], default="cosmos")
     parser.add_argument("--status-source", choices=["cosmos", "api"], default="cosmos")
     parser.add_argument("--skip-query", action="store_true")
-    parser.add_argument("--session-count", type=int, default=1)
+    parser.add_argument("--session-count", type=int, default=1, help="Number of sequential live sessions to ingest (1-50).")
     parser.add_argument("--verify-projection", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument(
+        "--export-manifest-metadata",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help=(
+            "Export latest committed manifest metadata for the smoke user. Use a fresh user_id for canaries so "
+            "the latest records correspond to this run; supported prediction counts are reported but not asserted here."
+        ),
+    )
     parser.add_argument("--query-timeout-seconds", type=int, default=300)
     parser.add_argument("--query-poll-seconds", type=int, default=10)
     parser.add_argument("--cosmos-endpoint")

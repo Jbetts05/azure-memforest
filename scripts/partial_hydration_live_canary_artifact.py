@@ -26,6 +26,9 @@ def _iter_objects(value: Any) -> list[Any]:
     if isinstance(value, list):
         return value
     if isinstance(value, dict):
+        manifest_metadata = value.get("manifest_metadata")
+        if isinstance(manifest_metadata, dict):
+            return _iter_objects(manifest_metadata)
         for key in ("records", "manifests", "items", "cases", "materializations"):
             nested = value.get(key)
             if isinstance(nested, list):
