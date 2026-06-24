@@ -1384,6 +1384,7 @@ def project_forest_snapshot(
                 )
             )
 
+    summary_cache_scopes = _summary_cache_scope_metadata(snapshot)
     summary_cache_entries = [
         SummaryCacheEntry(
             content_hash=content_hash,
@@ -1392,6 +1393,7 @@ def project_forest_snapshot(
                 "forest_version": forest_version,
                 "generation": generation,
                 "summary_key_hash": content_hash,
+                **summary_cache_scopes.get(content_hash, {}),
             },
         )
         for content_hash, summary in sorted(snapshot.summary_cache.items())
@@ -1644,6 +1646,7 @@ def _summary_cache_projection_refs(entries: list[SummaryCacheEntry]) -> tuple[Pr
             "summary_cache",
             entry.content_hash,
             content_hash=_sha256(entry.summary.encode("utf-8")),
+            metadata=dict(entry.metadata),
         )
         for entry in entries
     )
@@ -2639,13 +2642,30 @@ def _projection_scoped_equivalence_summary(
     unassessed_kinds: list[str] = []
     for kind in sorted(set(authoritative_refs) | set(shadow_refs)):
         if kind == "summary_cache":
-            unassessed_kinds.append(kind)
-            by_kind[kind] = {
-                "assessed": False,
-                "equivalent": None,
-                "reason": "no_tree_metadata",
+            all_summary_refs = [*authoritative_refs.get(kind, ()), *shadow_refs.get(kind, ())]
+            if not all(_summary_ref_has_tree_scope(ref) for ref in all_summary_refs):
+                unassessed_kinds.append(kind)
+                by_kind[kind] = {
+                    "assessed": False,
+                    "equivalent": None,
+                    "reason": "no_tree_metadata",
+                }
+                continue
+            auth_scoped = {
+                _projection_ref_fingerprint(ref)
+                for ref in authoritative_refs.get(kind, ())
+                if _summary_ref_in_scope(ref, tree_ids)
             }
-            continue
+            shadow_scoped = {
+                _projection_ref_fingerprint(ref)
+                for ref in shadow_refs.get(kind, ())
+                if _summary_ref_in_scope(ref, tree_ids)
+            }
+            shadow_out_of_scope = {
+                _projection_ref_fingerprint(ref)
+                for ref in shadow_refs.get(kind, ())
+                if not _summary_ref_in_scope(ref, tree_ids)
+            }
         else:
             auth_scoped = {
                 _projection_ref_fingerprint(ref)
@@ -2692,6 +2712,18 @@ def _projection_scoped_equivalence_summary(
 
 def _projection_ref_fingerprint(ref: ProjectionRecordRef) -> str:
     return "\x1f".join((ref.record_kind, ref.logical_id, ref.content_hash, ref.content_id))
+
+
+def _summary_ref_has_tree_scope(ref: ProjectionRecordRef) -> bool:
+    return bool(ref.metadata.get("tree_id") or ref.metadata.get("tree_ids"))
+
+
+def _summary_ref_in_scope(ref: ProjectionRecordRef, tree_ids: set[str]) -> bool:
+    tree_id = str(ref.metadata.get("tree_id") or "")
+    tree_ids_meta = {str(value) for value in (ref.metadata.get("tree_ids") or []) if str(value)}
+    if tree_id:
+        tree_ids_meta.add(tree_id)
+    return bool(tree_ids_meta & tree_ids)
 
 
 def _sorted_optional_tree_ids(tree_ids: Any) -> list[str] | None:
@@ -3002,6 +3034,41 @@ def _node_fact_ids(tree: Any, node_id: str) -> list[str]:
                 fact_ids.extend(leaf.fact_ids)
         return fact_ids
     return list(node.child_ids)
+
+
+def _summary_cache_scope_metadata(snapshot: ForestMaterializationSnapshot) -> dict[str, dict[str, Any]]:
+    scopes: dict[str, set[str]] = {}
+    for tree in snapshot.trees:
+        for node in tree.nodes.values():
+            if node.level == 0:
+                continue
+            payloads = _collect_descendant_payload_ids_for_summary(tree, node.node_id)
+            if not payloads:
+                continue
+            content_hash = _content_key(frozenset(payloads))
+            scopes.setdefault(content_hash, set()).add(tree.tree_id)
+    metadata: dict[str, dict[str, Any]] = {}
+    for content_hash, tree_ids in scopes.items():
+        ordered = sorted(tree_ids)
+        metadata[content_hash] = {"tree_ids": ordered}
+        if len(ordered) == 1:
+            metadata[content_hash]["tree_id"] = ordered[0]
+    return metadata
+
+
+def _collect_descendant_payload_ids_for_summary(tree: Any, node_id: str) -> set[str]:
+    payloads: set[str] = set()
+    stack = [node_id]
+    while stack:
+        current_id = stack.pop()
+        node = tree.nodes.get(current_id)
+        if node is None:
+            continue
+        if node.level == 0:
+            payloads.update(node.child_ids)
+            continue
+        stack.extend(node.child_ids)
+    return payloads
 
 
 def _snapshot_payload(

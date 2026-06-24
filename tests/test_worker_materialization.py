@@ -27,6 +27,7 @@ from src.worker.materialization import (
     MemForestMaterializationHandler,
     SNAPSHOT_POLICY_ALWAYS,
     SNAPSHOT_POLICY_CLOUD_CHECKPOINT,
+    content_hash_for_fact_ids,
     project_forest_snapshot,
 )
 from src.worker.consumer import PermanentHandlerError
@@ -692,6 +693,11 @@ def _snapshot_with_route_index_manifest():
             "suppression_currently_possible": False,
         },
     )
+
+
+def _snapshot_with_scoped_summary_cache():
+    content_hash = content_hash_for_fact_ids(["fact-1"])
+    return replace(_snapshot(), summary_cache={content_hash: "root summary"})
 
 
 def _managed_fact_for_session(fact_id: str, *, session_id: str = "session-1") -> ManagedFact:
@@ -2218,12 +2224,66 @@ async def test_materialization_handler_predicted_subset_scoped_equivalence_allow
     assert predicted_equivalence["scoped_comparison"]["equivalent"] is True
     assert predicted_equivalence["scoped_comparison"]["requires_under_selection_clearance"] is True
     assert "summary_cache" in predicted_equivalence["scoped_comparison"]["unassessed_kinds"]
-    assert predicted_equivalence["scoped_comparison"]["by_kind"]["summary_cache"] == {
-        "assessed": False,
-        "equivalent": None,
-        "reason": "no_tree_metadata",
-    }
+    assert predicted_equivalence["scoped_comparison"]["by_kind"]["summary_cache"]["assessed"] is False
     assert predicted_equivalence["comparison"]["by_kind"]["browse_embedding"]["missing_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_scoped_equivalence_assesses_tree_scoped_summary_cache() -> None:
+    snapshot = _snapshot_with_scoped_summary_cache()
+    manifest_store = FakeManifestStore()
+    manifest_store.latest = ForestManifest(
+        manifest_id="manifest-v1",
+        tenant_id="tenant-1",
+        user_id="user-1",
+        forest_version="v1",
+        generation=1,
+        status="committed",
+        created_at_unix=1.0,
+        metadata={
+            "job_id": "previous",
+            "job_type": "ingest_session",
+            "embedding_model_version": "embed-v1",
+            "route_index_manifest": _snapshot_with_route_index_manifest().route_index_manifest,
+        },
+    )
+    core = FakeIngestCore(snapshot)
+    core.pre_ingest_prediction = SimpleNamespace(
+        touched_facts=[],
+        route_hints=(),
+        route_risks=RouteRiskFlags(cluster_merge_possible=False, suppression_flip_possible=False),
+        pre_ingest_scope=PreIngestTreeScope(
+            full_hydration_required=False,
+            tree_ids_to_load=("entity:alice",),
+            escalation_reasons=(),
+            predicted_entity_tree_ids=("entity:alice",),
+            predicted_scene_tree_ids=(),
+        ),
+    )
+    core.partial_hydration_equivalence_snapshot = replace(snapshot, baseline_forest_version=None)
+    handler = _handler(
+        manifest_store=manifest_store,
+        core=core,
+        baseline_provider=MatchingProjectionBaselineProvider(),
+        config=MaterializationHandlerConfig(
+            owner_id="worker-1",
+            embedding_model_version="embed-v1",
+            code_version="test-sha",
+            prompt_config_hash="prompt-hash",
+            lease_renewal_seconds=9999,
+            enable_pre_ingest_route_prediction_prepass=True,
+            enable_partial_hydration_equivalence_shadow=True,
+        ),
+    )
+
+    await handler.handle(_envelope(), {"fencing_token": 1})
+
+    predicted_equivalence = manifest_store.latest.metadata["predicted_subset_equivalence_shadow"]
+    summary = predicted_equivalence["scoped_comparison"]["by_kind"]["summary_cache"]
+    assert "summary_cache" not in predicted_equivalence["scoped_comparison"]["unassessed_kinds"]
+    assert summary["assessed"] is True
+    assert summary["equivalent"] is True
+    assert summary["authoritative_scoped_count"] == 1
 
 
 @pytest.mark.asyncio
