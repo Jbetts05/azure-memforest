@@ -582,6 +582,12 @@ class MemForestMaterializationHandler:
                 shadow_projection,
                 embedding_model_version=self._config.embedding_model_version,
             )
+            scoped_comparison = _projection_scoped_equivalence_summary(
+                projection,
+                shadow_projection,
+                tree_ids=set(tree_ids),
+                embedding_model_version=self._config.embedding_model_version,
+            )
         except Exception as exc:
             return {
                 "schema_version": 1,
@@ -600,6 +606,7 @@ class MemForestMaterializationHandler:
             "oracle_deleted_tree_count": len(tuple(projection.deleted_tree_ids)),
             "id_arrays_truncated": len(tree_ids) > 100,
             "comparison": comparison,
+            "scoped_comparison": scoped_comparison,
         }
 
     async def _run_ingest_session(
@@ -2141,7 +2148,15 @@ def _partial_residency_projection_safety_summary(
             "changed_subset_of_resident": True,
         }
     resident_ids = tuple(sorted(str(tree_id) for tree_id in resident if str(tree_id)))
-    projected_ids = tuple(sorted({node.tree_id for node in projection.stored_nodes}))
+    projected_ids = tuple(
+        sorted(
+            {
+                str(getattr(record, "tree_id", "") or "")
+                for record in [*projection.stored_nodes, *projection.recall_documents, *projection.browse_embedding_records]
+                if str(getattr(record, "tree_id", "") or "")
+            }
+        )
+    )
     changed_ids = tuple(sorted(projection.changed_tree_ids or ()))
     resident_set = set(resident_ids)
     return {
@@ -2600,6 +2615,73 @@ def _projection_equivalence_summary(
             ids is not None and len(ids) > 100
             for ids in (authoritative_changed, shadow_changed, authoritative_deleted, shadow_deleted)
         ),
+        "by_kind": by_kind,
+    }
+
+
+def _projection_scoped_equivalence_summary(
+    authoritative: MaterializationProjection,
+    shadow: MaterializationProjection,
+    *,
+    tree_ids: set[str],
+    embedding_model_version: str,
+) -> dict[str, Any]:
+    authoritative_refs = _projection_refs_by_kind(authoritative, embedding_model_version=embedding_model_version)
+    shadow_refs = _projection_refs_by_kind(shadow, embedding_model_version=embedding_model_version)
+    authoritative_refs["summary_cache"] = _summary_cache_projection_refs(authoritative.summary_cache_entries)
+    shadow_refs["summary_cache"] = _summary_cache_projection_refs(shadow.summary_cache_entries)
+    by_kind: dict[str, Any] = {}
+    scoped_equivalent = True
+    unassessed_kinds: list[str] = []
+    for kind in sorted(set(authoritative_refs) | set(shadow_refs)):
+        if kind == "summary_cache":
+            unassessed_kinds.append(kind)
+            by_kind[kind] = {
+                "assessed": False,
+                "equivalent": None,
+                "reason": "no_tree_metadata",
+            }
+            continue
+        else:
+            auth_scoped = {
+                _projection_ref_fingerprint(ref)
+                for ref in filter_projection_refs_to_tree_scope(authoritative_refs.get(kind, ()), tree_ids=tree_ids)
+            }
+            shadow_scoped = {
+                _projection_ref_fingerprint(ref)
+                for ref in filter_projection_refs_to_tree_scope(shadow_refs.get(kind, ()), tree_ids=tree_ids)
+            }
+            shadow_out_of_scope = {
+                _projection_ref_fingerprint(ref)
+                for ref in shadow_refs.get(kind, ())
+                if str(ref.metadata.get("tree_id") or "") not in tree_ids
+            }
+        missing = sorted(auth_scoped - shadow_scoped)
+        extra = sorted(shadow_scoped - auth_scoped)
+        kind_equivalent = not missing and not extra and not shadow_out_of_scope
+        scoped_equivalent = scoped_equivalent and kind_equivalent
+        by_kind[kind] = {
+            "assessed": True,
+            "equivalent": kind_equivalent,
+            "authoritative_scoped_count": len(auth_scoped),
+            "shadow_scoped_count": len(shadow_scoped),
+            "missing_count": len(missing),
+            "extra_count": len(extra),
+            "shadow_out_of_scope_count": len(shadow_out_of_scope),
+            "missing_sample": missing[:20],
+            "extra_sample": extra[:20],
+            "shadow_out_of_scope_sample": sorted(shadow_out_of_scope)[:20],
+            "samples_truncated": len(missing) > 20 or len(extra) > 20 or len(shadow_out_of_scope) > 20,
+        }
+    return {
+        "schema_version": 1,
+        "equivalent": scoped_equivalent,
+        "comparison_basis": "projection_record_refs_within_predicted_tree_scope",
+        "requires_under_selection_clearance": True,
+        "unassessed_kinds": unassessed_kinds,
+        "tree_ids": sorted(tree_ids)[:100],
+        "tree_id_count": len(tree_ids),
+        "id_arrays_truncated": len(tree_ids) > 100,
         "by_kind": by_kind,
     }
 
