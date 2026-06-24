@@ -977,6 +977,8 @@ class MemForestMaterializationHandler:
                 residency_safety["projected_subset_of_resident"]
                 and residency_safety["changed_subset_of_resident"]
                 and residency_safety["deleted_subset_of_resident"]
+                and residency_safety["summary_cache_subset_of_resident"]
+                and residency_safety["summary_cache_close_delete_safe"]
             ):
                 raise PermanentHandlerError("partial-resident projection references non-resident trees")
         await asyncio.gather(
@@ -2181,6 +2183,8 @@ def _partial_residency_projection_safety_summary(
             "projected_subset_of_resident": True,
             "changed_subset_of_resident": True,
             "deleted_subset_of_resident": True,
+            "summary_cache_subset_of_resident": True,
+            "summary_cache_close_delete_safe": True,
         }
     resident_ids = tuple(sorted(str(tree_id) for tree_id in resident if str(tree_id)))
     projected_ids = tuple(
@@ -2195,6 +2199,13 @@ def _partial_residency_projection_safety_summary(
     changed_ids = tuple(sorted(str(tree_id) for tree_id in (projection.changed_tree_ids or ()) if str(tree_id)))
     deleted_ids = tuple(sorted(str(tree_id) for tree_id in projection.deleted_tree_ids if str(tree_id)))
     resident_set = set(resident_ids)
+    summary_plan = projection.projection_skip_plans.get("summary_cache")
+    summary_upsert_entries = _safe_upsert_summary_cache_entries(projection)
+    summary_cache_subset = all(
+        _summary_cache_entry_resident_scoped(entry, resident_set)
+        for entry in summary_upsert_entries
+    )
+    summary_close_delete_safe = summary_plan is None or (not summary_plan.delete and not summary_plan.superseded)
     return {
         "schema_version": 1,
         "partial_resident": True,
@@ -2208,9 +2219,21 @@ def _partial_residency_projection_safety_summary(
         "projected_subset_of_resident": set(projected_ids).issubset(resident_set),
         "changed_subset_of_resident": projection.changed_tree_ids is not None and set(changed_ids).issubset(resident_set),
         "deleted_subset_of_resident": set(deleted_ids).issubset(resident_set),
+        "summary_cache_subset_of_resident": summary_cache_subset,
+        "summary_cache_close_delete_safe": summary_close_delete_safe,
         "close_delete_safety": "not_authoritative_without_scoped_projection",
         "id_arrays_truncated": len(resident_ids) > 100 or len(projected_ids) > 100 or len(deleted_ids) > 100,
     }
+
+
+def _summary_cache_entry_resident_scoped(entry: SummaryCacheEntry, resident_tree_ids: set[str]) -> bool:
+    raw_tree_ids = entry.metadata.get("tree_ids")
+    if isinstance(raw_tree_ids, (list, tuple)):
+        tree_ids = {str(tree_id) for tree_id in raw_tree_ids if str(tree_id)}
+    else:
+        tree_id = str(entry.metadata.get("tree_id") or "")
+        tree_ids = {tree_id} if tree_id else set()
+    return bool(tree_ids) and tree_ids.issubset(resident_tree_ids)
 
 
 def _dirty_path_plan_summary(projection: MaterializationProjection) -> dict[str, Any]:

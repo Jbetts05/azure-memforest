@@ -711,6 +711,11 @@ def _snapshot_with_scoped_summary_cache():
     return replace(_snapshot(), summary_cache={content_hash: "root summary"})
 
 
+def _two_tree_incremental_snapshot_with_scoped_summary_cache():
+    content_hash = content_hash_for_fact_ids(["fact-1"])
+    return replace(_two_tree_incremental_snapshot(), summary_cache={content_hash: "root summary"})
+
+
 def _managed_fact_for_session(fact_id: str, *, session_id: str = "session-1") -> ManagedFact:
     return ManagedFact(
         fact_id=fact_id,
@@ -1452,6 +1457,8 @@ async def test_materialization_handler_commits_snapshot_pointer_metadata() -> No
         "projected_subset_of_resident": True,
         "changed_subset_of_resident": True,
         "deleted_subset_of_resident": True,
+        "summary_cache_subset_of_resident": True,
+        "summary_cache_close_delete_safe": True,
     }
     assert set(metadata["materialization_stage_timings_ms"]) >= {
         "hydrate",
@@ -1585,6 +1592,91 @@ async def test_materialization_handler_blocks_partial_resident_projection_outsid
         await handler.handle(_envelope(), {"fencing_token": 1})
 
     assert calls == ["source_session", "source_turns"]
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_blocks_partial_resident_unscoped_summary_cache() -> None:
+    calls = []
+    manifest_store = FakeManifestStore()
+    manifest_store.latest = ForestManifest(
+        manifest_id="manifest-v1",
+        tenant_id="tenant-1",
+        user_id="user-1",
+        forest_version="v1",
+        generation=1,
+        status="committed",
+        created_at_unix=1.0,
+        metadata={"job_id": "previous", "job_type": "ingest_session", "embedding_model_version": "embed-v1"},
+    )
+    handler = _handler(
+        manifest_store=manifest_store,
+        calls=calls,
+        core=FakeIngestCore(replace(_two_tree_incremental_snapshot(), partial_resident_tree_ids=frozenset({"entity:alice", "entity:bob"}))),
+        baseline_provider=lambda **kwargs: CommittedProjectionBaseline(
+            scope=kwargs["scope"],
+            records={
+                kind: tuple(plan.upsert) if kind != "summary_cache" else ()
+                for kind, plan in kwargs["projection"].projection_skip_plans.items()
+            },
+        ),
+        config=MaterializationHandlerConfig(
+            owner_id="worker-1",
+            embedding_model_version="embed-v1",
+            code_version="test-sha",
+            prompt_config_hash="prompt-hash",
+            lease_renewal_seconds=9999,
+            enable_tree_scoped_projection_writes=True,
+        ),
+    )
+
+    with pytest.raises(PermanentHandlerError, match="partial-resident projection references non-resident trees"):
+        await handler.handle(_envelope(), {"fencing_token": 1})
+
+    assert calls == ["source_session", "source_turns"]
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_allows_partial_resident_stale_summary_cache_key() -> None:
+    calls = []
+    manifest_store = FakeManifestStore()
+    manifest_store.latest = ForestManifest(
+        manifest_id="manifest-v1",
+        tenant_id="tenant-1",
+        user_id="user-1",
+        forest_version="v1",
+        generation=1,
+        status="committed",
+        created_at_unix=1.0,
+        metadata={"job_id": "previous", "job_type": "ingest_session", "embedding_model_version": "embed-v1"},
+    )
+    snapshot = _two_tree_incremental_snapshot_with_scoped_summary_cache()
+    snapshot = replace(
+        snapshot,
+        summary_cache={**snapshot.summary_cache, "stale-unreferenced-key": "stale summary"},
+        partial_resident_tree_ids=frozenset({"entity:alice", "entity:bob"}),
+    )
+    handler = _handler(
+        manifest_store=manifest_store,
+        calls=calls,
+        core=FakeIngestCore(snapshot),
+        baseline_provider=MatchingProjectionBaselineProvider(),
+        config=MaterializationHandlerConfig(
+            owner_id="worker-1",
+            embedding_model_version="embed-v1",
+            code_version="test-sha",
+            prompt_config_hash="prompt-hash",
+            lease_renewal_seconds=9999,
+            enable_tree_scoped_projection_writes=True,
+        ),
+    )
+
+    await handler.handle(_envelope(), {"fencing_token": 1})
+
+    assert manifest_store.committed
+    metadata = manifest_store.latest.metadata
+    assert metadata["partial_residency_projection_safety"]["summary_cache_subset_of_resident"] is True
+    assert metadata["projection_tree_scope_writes"]["applied"] is True
+    assert "summary_cache" not in calls
 
 
 @pytest.mark.asyncio
@@ -2921,7 +3013,7 @@ async def test_materialization_handler_applies_tree_scoped_writes_when_shadow_is
     handler = _handler(
         manifest_store=manifest_store,
         calls=calls,
-        core=FakeIngestCore(replace(_two_tree_incremental_snapshot(), partial_resident_tree_ids=frozenset({"entity:alice", "entity:bob"}))),
+        core=FakeIngestCore(replace(_two_tree_incremental_snapshot_with_scoped_summary_cache(), partial_resident_tree_ids=frozenset({"entity:alice", "entity:bob"}))),
         baseline_provider=MatchingProjectionBaselineProvider(),
         config=MaterializationHandlerConfig(
             owner_id="worker-1",
@@ -2941,6 +3033,8 @@ async def test_materialization_handler_applies_tree_scoped_writes_when_shadow_is
     assert safety["projected_subset_of_resident"] is True
     assert safety["changed_subset_of_resident"] is True
     assert safety["deleted_subset_of_resident"] is True
+    assert safety["summary_cache_subset_of_resident"] is True
+    assert safety["summary_cache_close_delete_safe"] is True
     assert metadata["projection_tree_scope_writes"]["enabled"] is True
     assert metadata["projection_tree_scope_writes"]["applied"] is True
     assert metadata["projection_tree_scope_writes"]["reason"] == "shadow_clean"
