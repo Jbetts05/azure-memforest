@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from scripts.durable_ingest_smoke import _manifest_metadata_summary
+from scripts.partial_hydration_authority_preflight import evaluate_authority_preflight
 from scripts.partial_hydration_canary_gate import evaluate_artifact
 from scripts.partial_hydration_live_canary_artifact import build_live_artifact, collect_metadata_records, summarize_live_metadata
 
@@ -102,6 +103,108 @@ def test_live_canary_collector_artifact_passes_gate_for_clean_metadata() -> None
         "total_latency_ms": 16.5,
     }
     assert artifact["live_canary"]["stage_timing_totals_ms"]["extract_build"] == 6.0
+
+
+def test_authority_preflight_requires_clean_canary_and_confirmations() -> None:
+    artifact = build_live_artifact(
+        local_evidence=_local_evidence(),
+        live_canary=summarize_live_metadata([_live_metadata(), _live_metadata(), _live_metadata()]),
+        producer="azure-memforest-live-canary",
+        run_channel="trusted-ci",
+    )
+
+    blocked = evaluate_authority_preflight(artifact, confirmations={})
+
+    assert blocked["canary_promotion_allowed"] is True
+    assert blocked["authority_allowed"] is False
+    assert "confirmation:rollback_switch_confirmed" in blocked["authority_blockers"]
+
+    allowed = evaluate_authority_preflight(
+        artifact,
+        confirmations={
+            "rollback_switch_confirmed": True,
+            "guarded_switch_config_confirmed": True,
+            "tree_scoped_projection_writes_confirmed": True,
+            "live_canary_reviewed": True,
+        },
+    )
+
+    assert allowed["authority_allowed"] is True
+    assert allowed["authority_blockers"] == []
+
+
+def test_authority_preflight_rejects_unknown_confirmations() -> None:
+    artifact = build_live_artifact(
+        local_evidence=_local_evidence(),
+        live_canary=summarize_live_metadata([_live_metadata(), _live_metadata(), _live_metadata()]),
+        producer="azure-memforest-live-canary",
+        run_channel="trusted-ci",
+    )
+
+    report = evaluate_authority_preflight(
+        artifact,
+        confirmations={
+            "rollback_switch_confirmed": True,
+            "guarded_switch_config_confirmed": True,
+            "tree_scoped_projection_writes_confirmed": True,
+            "live_canary_reviewed": True,
+            "rollbak_switch_confirmed": True,
+        },
+    )
+
+    assert report["authority_allowed"] is False
+    assert report["unknown_confirmations"] == ["rollbak_switch_confirmed"]
+    assert "unknown_confirmation:rollbak_switch_confirmed" in report["authority_blockers"]
+
+
+def test_authority_preflight_blocks_local_fake_artifact() -> None:
+    artifact = {
+        "run_id": "local-only",
+        "mode": "deterministic_local_fake_stores_no_live_services",
+        "provenance": {
+            "producer": "partial_hydration_shadow_evidence.py",
+            "run_channel": "local_fake_store_harness",
+            "live_services_used": False,
+            "fake_stores_used": True,
+        },
+        **_local_evidence(),
+    }
+
+    report = evaluate_authority_preflight(
+        artifact,
+        confirmations={
+            "rollback_switch_confirmed": True,
+            "guarded_switch_config_confirmed": True,
+            "tree_scoped_projection_writes_confirmed": True,
+            "live_canary_reviewed": True,
+        },
+    )
+
+    assert report["authority_allowed"] is False
+    assert "canary:live_canary_required" in report["authority_blockers"]
+    assert "canary:live_provenance:live_services_used" in report["authority_blockers"]
+
+
+def test_authority_preflight_blocks_failed_canary_even_with_confirmations() -> None:
+    artifact = build_live_artifact(
+        local_evidence=_local_evidence(),
+        live_canary=summarize_live_metadata([_live_metadata(under_selected=True), _live_metadata(), _live_metadata()]),
+        producer="azure-memforest-live-canary",
+        run_channel="trusted-ci",
+    )
+
+    report = evaluate_authority_preflight(
+        artifact,
+        confirmations={
+            "rollback_switch_confirmed": True,
+            "guarded_switch_config_confirmed": True,
+            "tree_scoped_projection_writes_confirmed": True,
+            "live_canary_reviewed": True,
+        },
+    )
+
+    assert report["authority_allowed"] is False
+    assert "canary:live_canary:under_selection_count" in report["authority_blockers"]
 
 
 def test_live_canary_collector_blocks_missing_timing_and_telemetry() -> None:
