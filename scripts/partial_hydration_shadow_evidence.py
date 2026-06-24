@@ -187,7 +187,7 @@ async def _run_commit_safety_case(*, dual: bool) -> dict[str, Any]:
     }
 
 
-async def build_artifact() -> dict[str, Any]:
+async def build_artifact(*, mode: str = "deterministic_local_fake_stores_no_live_services") -> dict[str, Any]:
     scoped_summary = _snapshot_with_scoped_summary_cache()
     base = replace(
         _two_tree_incremental_snapshot_with_fact_and_route_manifest(),
@@ -224,7 +224,7 @@ async def build_artifact() -> dict[str, Any]:
     return {
         "schema_version": 1,
         "run_id": f"partial-hydration-shadow-evidence-{int(time.time())}",
-        "mode": "deterministic_local_fake_stores_no_live_services",
+        "mode": mode,
         "gate": {
             "clean_case_no_under_selection": not cases[0]["pre_ingest_scope_prediction"]["under_selected_without_escalation"],
             "clean_case_covers_oracle": cases[0]["pre_ingest_scope_prediction"]["covers_oracle_canonical_input"],
@@ -250,9 +250,10 @@ async def build_artifact() -> dict[str, Any]:
 async def main() -> None:
     parser = argparse.ArgumentParser(description="Run bounded local partial-hydration shadow evidence.")
     parser.add_argument("--output-root", default=str(Path("artifacts") / "incremental-shadow-smoke"))
+    parser.add_argument("--mode", default="deterministic_local_fake_stores_no_live_services")
     parser.add_argument("--no-fail", action="store_true", help="Write the artifact even if gates fail, but exit 0.")
     args = parser.parse_args()
-    artifact = await build_artifact()
+    artifact = await build_artifact(mode=args.mode)
     out_dir = Path(args.output_root)
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{artifact['run_id']}.json"
