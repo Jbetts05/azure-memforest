@@ -1451,6 +1451,7 @@ async def test_materialization_handler_commits_snapshot_pointer_metadata() -> No
         "close_delete_safety": "authoritative",
         "projected_subset_of_resident": True,
         "changed_subset_of_resident": True,
+        "deleted_subset_of_resident": True,
     }
     assert set(metadata["materialization_stage_timings_ms"]) >= {
         "hydrate",
@@ -1535,24 +1536,55 @@ async def test_materialization_handler_records_model_call_telemetry() -> None:
 
 
 @pytest.mark.asyncio
-async def test_materialization_handler_records_partial_residency_projection_safety() -> None:
+async def test_materialization_handler_blocks_partial_resident_projection_without_scoped_writes() -> None:
+    calls = []
     manifest_store = FakeManifestStore()
     snapshot = replace(_snapshot(), partial_resident_tree_ids=frozenset({"entity:alice"}))
     handler = _handler(
         manifest_store=manifest_store,
+        calls=calls,
         core=FakeIngestCore(snapshot),
     )
 
-    await handler.handle(_envelope(), {"fencing_token": 1})
+    with pytest.raises(PermanentHandlerError, match="partial-resident projection requires clean tree-scoped writes"):
+        await handler.handle(_envelope(), {"fencing_token": 1})
 
-    safety = manifest_store.latest.metadata["partial_residency_projection_safety"]
-    assert safety["partial_resident"] is True
-    assert safety["status"] == "requires_scoped_projection"
-    assert safety["resident_tree_ids"] == ["entity:alice"]
-    assert safety["projected_tree_ids"] == ["entity:alice"]
-    assert safety["projected_subset_of_resident"] is True
-    assert safety["changed_subset_of_resident"] is False
-    assert safety["close_delete_safety"] == "not_authoritative_without_scoped_projection"
+    assert calls == ["source_session", "source_turns"]
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_blocks_partial_resident_projection_outside_resident_scope() -> None:
+    calls = []
+    manifest_store = FakeManifestStore()
+    manifest_store.latest = ForestManifest(
+        manifest_id="manifest-v1",
+        tenant_id="tenant-1",
+        user_id="user-1",
+        forest_version="v1",
+        generation=1,
+        status="committed",
+        created_at_unix=1.0,
+        metadata={"job_id": "previous", "job_type": "ingest_session", "embedding_model_version": "embed-v1"},
+    )
+    handler = _handler(
+        manifest_store=manifest_store,
+        calls=calls,
+        core=FakeIngestCore(replace(_two_tree_incremental_snapshot(), partial_resident_tree_ids=frozenset({"entity:alice"}))),
+        baseline_provider=MatchingProjectionBaselineProvider(),
+        config=MaterializationHandlerConfig(
+            owner_id="worker-1",
+            embedding_model_version="embed-v1",
+            code_version="test-sha",
+            prompt_config_hash="prompt-hash",
+            lease_renewal_seconds=9999,
+            enable_tree_scoped_projection_writes=True,
+        ),
+    )
+
+    with pytest.raises(PermanentHandlerError, match="partial-resident projection references non-resident trees"):
+        await handler.handle(_envelope(), {"fencing_token": 1})
+
+    assert calls == ["source_session", "source_turns"]
 
 
 @pytest.mark.asyncio
@@ -2888,7 +2920,7 @@ async def test_materialization_handler_applies_tree_scoped_writes_when_shadow_is
     handler = _handler(
         manifest_store=manifest_store,
         calls=calls,
-        core=FakeIngestCore(_two_tree_incremental_snapshot()),
+        core=FakeIngestCore(replace(_two_tree_incremental_snapshot(), partial_resident_tree_ids=frozenset({"entity:alice", "entity:bob"}))),
         baseline_provider=MatchingProjectionBaselineProvider(),
         config=MaterializationHandlerConfig(
             owner_id="worker-1",
@@ -2903,6 +2935,11 @@ async def test_materialization_handler_applies_tree_scoped_writes_when_shadow_is
     await handler.handle(_envelope(), {"fencing_token": 1})
 
     metadata = manifest_store.latest.metadata
+    safety = metadata["partial_residency_projection_safety"]
+    assert safety["partial_resident"] is True
+    assert safety["projected_subset_of_resident"] is True
+    assert safety["changed_subset_of_resident"] is True
+    assert safety["deleted_subset_of_resident"] is True
     assert metadata["projection_tree_scope_writes"]["enabled"] is True
     assert metadata["projection_tree_scope_writes"]["applied"] is True
     assert metadata["projection_tree_scope_writes"]["reason"] == "shadow_clean"
@@ -3701,6 +3738,46 @@ async def test_delete_handler_tombstones_sources_records_deletion_and_commits() 
     assert calls[-1] == "deletion_log"
     assert deletion_log.records[0]["deletion_type"] == "session"
     assert deletion_log.records[0]["metadata"]["deleted_session_id"] == "session-1"
+
+
+@pytest.mark.asyncio
+async def test_delete_handler_blocks_partial_resident_delete_outside_resident_scope() -> None:
+    calls = []
+    manifest_store = FakeManifestStore()
+    manifest_store.latest = ForestManifest(
+        manifest_id="manifest-v1",
+        tenant_id="tenant-1",
+        user_id="user-1",
+        forest_version="v1",
+        generation=1,
+        status="committed",
+        created_at_unix=1.0,
+        metadata={"job_id": "previous", "job_type": "ingest_session", "embedding_model_version": "embed-v1"},
+    )
+    snapshot = replace(
+        _two_tree_incremental_snapshot_with_deleted_tree(),
+        partial_resident_tree_ids=frozenset({"entity:alice", "entity:bob"}),
+    )
+    handler = _handler(
+        manifest_store=manifest_store,
+        calls=calls,
+        core=FakeIngestCore(snapshot),
+        baseline_provider=MatchingProjectionBaselineProvider(),
+        config=MaterializationHandlerConfig(
+            owner_id="worker-1",
+            embedding_model_version="embed-v1",
+            code_version="test-sha",
+            prompt_config_hash="prompt-hash",
+            lease_renewal_seconds=9999,
+            enable_tree_scoped_projection_writes=True,
+        ),
+    )
+
+    with pytest.raises(PermanentHandlerError, match="partial-resident projection references non-resident trees"):
+        await handler.handle(_envelope("delete_session"), {"fencing_token": 1})
+
+    assert calls == []
+    assert manifest_store.committed == []
 
 
 @pytest.mark.asyncio

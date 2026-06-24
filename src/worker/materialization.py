@@ -966,6 +966,17 @@ class MemForestMaterializationHandler:
             enabled=self._config.enable_tree_scoped_projection_writes,
             embedding_model_version=self._config.embedding_model_version,
         )
+        residency_safety = _partial_residency_projection_safety_summary(projection, snapshot=snapshot)
+        if residency_safety["partial_resident"]:
+            if tree_scope_write_plan.get("applied") is not True:
+                reason = str(tree_scope_write_plan.get("reason") or "scoped_projection_not_applied")
+                raise PermanentHandlerError(f"partial-resident projection requires clean tree-scoped writes: {reason}")
+            if not (
+                residency_safety["projected_subset_of_resident"]
+                and residency_safety["changed_subset_of_resident"]
+                and residency_safety["deleted_subset_of_resident"]
+            ):
+                raise PermanentHandlerError("partial-resident projection references non-resident trees")
         await asyncio.gather(
             self._call_store_method(self._stores.fact_store.upsert_facts, snapshot.facts),
             self._write_tree_nodes(forest_version, write_projection),
@@ -2167,6 +2178,7 @@ def _partial_residency_projection_safety_summary(
             "close_delete_safety": "authoritative",
             "projected_subset_of_resident": True,
             "changed_subset_of_resident": True,
+            "deleted_subset_of_resident": True,
         }
     resident_ids = tuple(sorted(str(tree_id) for tree_id in resident if str(tree_id)))
     projected_ids = tuple(
@@ -2178,7 +2190,8 @@ def _partial_residency_projection_safety_summary(
             }
         )
     )
-    changed_ids = tuple(sorted(projection.changed_tree_ids or ()))
+    changed_ids = tuple(sorted(str(tree_id) for tree_id in (projection.changed_tree_ids or ()) if str(tree_id)))
+    deleted_ids = tuple(sorted(str(tree_id) for tree_id in projection.deleted_tree_ids if str(tree_id)))
     resident_set = set(resident_ids)
     return {
         "schema_version": 1,
@@ -2192,8 +2205,9 @@ def _partial_residency_projection_safety_summary(
         "changed_tree_ids_known": projection.changed_tree_ids is not None,
         "projected_subset_of_resident": set(projected_ids).issubset(resident_set),
         "changed_subset_of_resident": projection.changed_tree_ids is not None and set(changed_ids).issubset(resident_set),
+        "deleted_subset_of_resident": set(deleted_ids).issubset(resident_set),
         "close_delete_safety": "not_authoritative_without_scoped_projection",
-        "id_arrays_truncated": len(resident_ids) > 100 or len(projected_ids) > 100,
+        "id_arrays_truncated": len(resident_ids) > 100 or len(projected_ids) > 100 or len(deleted_ids) > 100,
     }
 
 
