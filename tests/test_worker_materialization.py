@@ -1493,8 +1493,9 @@ async def test_materialization_handler_commits_snapshot_pointer_metadata() -> No
     assert metadata["partial_hydration_eligibility"]["eligible"] is False
     assert metadata["partial_hydration_eligibility"]["reason"] == "disabled"
     assert metadata["pre_ingest_hydration_strategy"] == {
-        "schema_version": 1,
+        "schema_version": 2,
         "enabled": False,
+        "authoritative_enabled": False,
         "selected": "none",
         "partial_applied": False,
         "reason": "no_committed_manifest",
@@ -1712,8 +1713,9 @@ async def test_materialization_handler_records_hydration_summary_when_manifest_e
         "used_snapshot_fallback": False,
     }
     assert manifest_store.latest.metadata["pre_ingest_hydration_strategy"] == {
-        "schema_version": 1,
+        "schema_version": 2,
         "enabled": False,
+        "authoritative_enabled": False,
         "selected": "full",
         "partial_applied": False,
         "reason": "disabled",
@@ -1755,9 +1757,10 @@ async def test_materialization_handler_guarded_partial_hydration_switch_falls_ba
     assert core.hydrated_from.forest_version == "v1"
     strategy = manifest_store.latest.metadata["pre_ingest_hydration_strategy"]
     assert strategy["enabled"] is True
+    assert strategy["authoritative_enabled"] is False
     assert strategy["selected"] == "full"
     assert strategy["partial_applied"] is False
-    assert strategy["reason"] == "pre_ingest_tree_scope_unavailable"
+    assert strategy["reason"] == "authoritative_switch_disabled"
     assert "trusted pre-ingest tree scope" in strategy["note"]
 
 

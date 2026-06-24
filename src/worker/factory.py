@@ -198,11 +198,14 @@ def fixed_materialization_config_factory(
     enable_partial_hydration_shadow: bool = False,
     enable_partial_hydration_equivalence_shadow: bool = False,
     enable_partial_hydration_guarded_switch: bool = False,
+    enable_partial_hydration_authoritative_switch: bool = False,
     enable_pre_ingest_route_prediction_prepass: bool = False,
     enable_partial_hydration_dual_compute_shadow: bool = False,
 ) -> Callable[[WriteJobEnvelope], MaterializationHandlerConfig]:
     if enable_partial_hydration_guarded_switch and not enable_tree_scoped_projection_writes:
         raise ValueError("partial hydration guarded switch requires tree-scoped projection writes")
+    if enable_partial_hydration_authoritative_switch and not enable_partial_hydration_guarded_switch:
+        raise ValueError("partial hydration authoritative switch requires guarded switch")
 
     def build(envelope: WriteJobEnvelope) -> MaterializationHandlerConfig:
         return MaterializationHandlerConfig(
@@ -222,6 +225,7 @@ def fixed_materialization_config_factory(
             enable_partial_hydration_shadow=enable_partial_hydration_shadow,
             enable_partial_hydration_equivalence_shadow=enable_partial_hydration_equivalence_shadow,
             enable_partial_hydration_guarded_switch=enable_partial_hydration_guarded_switch,
+            enable_partial_hydration_authoritative_switch=enable_partial_hydration_authoritative_switch,
             enable_pre_ingest_route_prediction_prepass=enable_pre_ingest_route_prediction_prepass,
             enable_partial_hydration_dual_compute_shadow=enable_partial_hydration_dual_compute_shadow,
         )
@@ -277,6 +281,11 @@ def build_scoped_materialization_handler_from_env(
     missing = [name for name in REQUIRED_MATERIALIZATION_ENV if not str(values.get(name, "")).strip()]
     if missing:
         raise RuntimeError(f"materialization environment is missing required settings: {', '.join(missing)}")
+    if (
+        _env_flag(values.get("AZURE_MEMFOREST_ENABLE_PARTIAL_HYDRATION_AUTHORITATIVE_SWITCH", ""))
+        and not _env_flag(values.get("AZURE_MEMFOREST_ENABLE_PARTIAL_HYDRATION_GUARDED_SWITCH", ""))
+    ):
+        raise ValueError("partial hydration authoritative switch requires guarded switch")
 
     from azure.cosmos.aio import CosmosClient
     from azure.identity import ManagedIdentityCredential, get_bearer_token_provider
@@ -341,6 +350,7 @@ def build_scoped_materialization_handler_from_env(
             enable_partial_hydration_shadow=_env_flag(values.get("AZURE_MEMFOREST_ENABLE_PARTIAL_HYDRATION_SHADOW", "")),
             enable_partial_hydration_equivalence_shadow=_env_flag(values.get("AZURE_MEMFOREST_ENABLE_PARTIAL_HYDRATION_EQUIVALENCE_SHADOW", "")),
             enable_partial_hydration_guarded_switch=_env_flag(values.get("AZURE_MEMFOREST_ENABLE_PARTIAL_HYDRATION_GUARDED_SWITCH", "")),
+            enable_partial_hydration_authoritative_switch=_env_flag(values.get("AZURE_MEMFOREST_ENABLE_PARTIAL_HYDRATION_AUTHORITATIVE_SWITCH", "")),
             enable_pre_ingest_route_prediction_prepass=_env_flag(values.get("AZURE_MEMFOREST_ENABLE_PRE_INGEST_ROUTE_PREDICTION_PREPASS", "")),
             enable_partial_hydration_dual_compute_shadow=_env_flag(values.get("AZURE_MEMFOREST_ENABLE_PARTIAL_HYDRATION_DUAL_COMPUTE_SHADOW", "")),
         ),

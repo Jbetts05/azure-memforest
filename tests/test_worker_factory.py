@@ -99,6 +99,7 @@ def test_fixed_materialization_config_factory_sets_owner_and_embedding_version()
         enable_partial_hydration_shadow=True,
         enable_partial_hydration_equivalence_shadow=True,
         enable_partial_hydration_guarded_switch=True,
+        enable_partial_hydration_authoritative_switch=True,
         enable_pre_ingest_route_prediction_prepass=True,
         enable_partial_hydration_dual_compute_shadow=True,
     )(_envelope())
@@ -110,6 +111,7 @@ def test_fixed_materialization_config_factory_sets_owner_and_embedding_version()
     assert config.enable_partial_hydration_shadow is True
     assert config.enable_partial_hydration_equivalence_shadow is True
     assert config.enable_partial_hydration_guarded_switch is True
+    assert config.enable_partial_hydration_authoritative_switch is True
     assert config.enable_pre_ingest_route_prediction_prepass is True
     assert config.enable_partial_hydration_dual_compute_shadow is True
 
@@ -130,6 +132,49 @@ def test_fixed_materialization_config_factory_requires_scoped_writes_for_guarded
             enable_partial_hydration_guarded_switch=True,
             enable_tree_scoped_projection_writes=False,
         )
+
+
+def test_fixed_materialization_config_factory_requires_guarded_switch_for_authoritative_switch() -> None:
+    with pytest.raises(ValueError, match="authoritative switch requires guarded switch"):
+        fixed_materialization_config_factory(
+            owner_id="worker-1",
+            embedding_model_version="embed-v1",
+            enable_tree_scoped_projection_writes=True,
+            enable_partial_hydration_authoritative_switch=True,
+        )
+
+    with pytest.raises(ValueError, match="authoritative switch requires guarded switch"):
+        MaterializationHandlerConfig(
+            owner_id="worker-1",
+            embedding_model_version="embed-v1",
+            enable_tree_scoped_projection_writes=True,
+            enable_partial_hydration_authoritative_switch=True,
+        )
+
+
+def test_materialization_env_rejects_authoritative_switch_without_guarded_switch() -> None:
+    environ = {name: "value" for name in (
+        "AZURE_CLIENT_ID",
+        "AZURE_COSMOS_ENDPOINT",
+        "AZURE_COSMOS_DATABASE_NAME",
+        "AZURE_SEARCH_ENDPOINT",
+        "AZURE_SEARCH_RECALL_INDEX_NAME",
+        "AZURE_OPENAI_ENDPOINT",
+        "AZURE_OPENAI_API_VERSION",
+        "AZURE_OPENAI_CHAT_DEPLOYMENT",
+        "AZURE_OPENAI_EMBEDDING_DEPLOYMENT",
+        "AZURE_OPENAI_EMBEDDING_DIMENSION",
+        "AZURE_OPENAI_EMBEDDING_MODEL_VERSION",
+        "AZURE_STORAGE_BLOB_ENDPOINT",
+        "AZURE_STORAGE_SNAPSHOT_CONTAINER",
+    )}
+    environ["AZURE_OPENAI_EMBEDDING_DIMENSION"] = "1536"
+    environ["AZURE_MEMFOREST_ENABLE_PARTIAL_HYDRATION_AUTHORITATIVE_SWITCH"] = "true"
+
+    from src.worker.factory import build_scoped_materialization_handler_from_env
+
+    with pytest.raises(ValueError, match="authoritative switch requires guarded switch"):
+        build_scoped_materialization_handler_from_env(environ)
 
 
 def test_fixed_materialization_config_factory_fails_closed_for_checkpoint_policy() -> None:

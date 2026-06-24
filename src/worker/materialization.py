@@ -138,6 +138,7 @@ class MaterializationHandlerConfig:
     enable_partial_hydration_equivalence_shadow: bool = False
     # Metadata-only until a trusted pre-ingest tree-scope planner exists.
     enable_partial_hydration_guarded_switch: bool = False
+    enable_partial_hydration_authoritative_switch: bool = False
     enable_pre_ingest_route_prediction_prepass: bool = False
     enable_partial_hydration_dual_compute_shadow: bool = False
 
@@ -155,6 +156,8 @@ class MaterializationHandlerConfig:
             )
         if self.enable_partial_hydration_guarded_switch and not self.enable_tree_scoped_projection_writes:
             raise ValueError("partial hydration guarded switch requires tree-scoped projection writes")
+        if self.enable_partial_hydration_authoritative_switch and not self.enable_partial_hydration_guarded_switch:
+            raise ValueError("partial hydration authoritative switch requires guarded switch")
 
 
 class MemForestMaterializationHandler:
@@ -1224,8 +1227,9 @@ class MemForestMaterializationHandler:
 
     async def _hydrate_core_from_manifest(self, manifest: Any | None) -> dict[str, Any]:
         strategy = {
-            "schema_version": 1,
+            "schema_version": 2,
             "enabled": bool(self._config.enable_partial_hydration_guarded_switch),
+            "authoritative_enabled": bool(self._config.enable_partial_hydration_authoritative_switch),
             "selected": "none",
             "partial_applied": False,
             "reason": "no_committed_manifest",
@@ -1237,7 +1241,7 @@ class MemForestMaterializationHandler:
             raise PermanentHandlerError("latest committed manifest embedding_model_version does not match worker configuration")
         if self._config.enable_partial_hydration_guarded_switch:
             strategy["selected"] = "full"
-            strategy["reason"] = "pre_ingest_tree_scope_unavailable"
+            strategy["reason"] = "authoritative_switch_disabled" if not self._config.enable_partial_hydration_authoritative_switch else "pre_ingest_tree_scope_unavailable"
             strategy["note"] = "partial hydration requires a trusted pre-ingest tree scope; post-ingest eligibility is metadata-only"
         else:
             strategy["selected"] = "full"
