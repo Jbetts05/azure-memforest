@@ -289,7 +289,17 @@ def _validate_authority_preflight_report_from_env(values: dict[str, str]) -> Non
         raise ValueError("partial hydration authoritative switch requires AZURE_MEMFOREST_GIT_SHA")
     report_path = Path(path)
     try:
-        report = json.loads(report_path.read_text(encoding="utf-8"))
+        report_payload = report_path.read_bytes()
+    except Exception as exc:
+        raise ValueError("partial hydration authority preflight report is unreadable") from exc
+    expected_sha256 = str(values.get("AZURE_MEMFOREST_PARTIAL_HYDRATION_AUTHORITY_PREFLIGHT_REPORT_SHA256") or "").strip().lower()
+    if not expected_sha256:
+        raise ValueError("partial hydration authoritative switch requires authority preflight report sha256")
+    actual_sha256 = hashlib.sha256(report_payload).hexdigest()
+    if actual_sha256 != expected_sha256:
+        raise ValueError("partial hydration authority preflight report sha256 mismatch")
+    try:
+        report = json.loads(report_payload.decode("utf-8"))
     except Exception as exc:
         raise ValueError("partial hydration authority preflight report is unreadable") from exc
     if not isinstance(report, dict) or report.get("authority_allowed") is not True:

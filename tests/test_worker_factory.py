@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+import hashlib
 import json
 import sys
 import time
@@ -234,46 +235,42 @@ def test_materialization_env_requires_approved_authority_preflight_report(tmp_pa
             }
         )
 
+    def write_report(path, payload: str) -> None:
+        path.write_text(payload, encoding="utf-8")
+        environ["AZURE_MEMFOREST_PARTIAL_HYDRATION_AUTHORITY_PREFLIGHT_REPORT"] = str(path)
+        environ["AZURE_MEMFOREST_PARTIAL_HYDRATION_AUTHORITY_PREFLIGHT_REPORT_SHA256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+
     with pytest.raises(ValueError, match="requires authority preflight report"):
         build_scoped_materialization_handler_from_env(environ)
 
     rejected = tmp_path / "rejected.json"
-    rejected.write_text('{"authority_allowed": false}', encoding="utf-8")
-    environ["AZURE_MEMFOREST_PARTIAL_HYDRATION_AUTHORITY_PREFLIGHT_REPORT"] = str(rejected)
+    write_report(rejected, '{"authority_allowed": false}')
     with pytest.raises(ValueError, match="not approved"):
         build_scoped_materialization_handler_from_env(environ)
 
     mismatch = tmp_path / "mismatch.json"
-    mismatch.write_text(
-        json.dumps({**json.loads(approved_report()), "expected_code_version": "other", "artifact_code_version": "other"}),
-        encoding="utf-8",
-    )
-    environ["AZURE_MEMFOREST_PARTIAL_HYDRATION_AUTHORITY_PREFLIGHT_REPORT"] = str(mismatch)
+    write_report(mismatch, json.dumps({**json.loads(approved_report()), "expected_code_version": "other", "artifact_code_version": "other"}))
     with pytest.raises(ValueError, match="code version mismatch"):
         build_scoped_materialization_handler_from_env(environ)
 
     stale = tmp_path / "stale.json"
-    stale.write_text(approved_report(created_at=1), encoding="utf-8")
-    environ["AZURE_MEMFOREST_PARTIAL_HYDRATION_AUTHORITY_PREFLIGHT_REPORT"] = str(stale)
+    write_report(stale, approved_report(created_at=1))
     with pytest.raises(ValueError, match="preflight report is stale"):
         build_scoped_materialization_handler_from_env(environ)
 
     zero_window = tmp_path / "zero_window.json"
-    zero_window.write_text(json.dumps({**json.loads(approved_report()), "max_age_seconds": 0}), encoding="utf-8")
-    environ["AZURE_MEMFOREST_PARTIAL_HYDRATION_AUTHORITY_PREFLIGHT_REPORT"] = str(zero_window)
+    write_report(zero_window, json.dumps({**json.loads(approved_report()), "max_age_seconds": 0}))
     with pytest.raises(ValueError, match="freshness metadata is invalid"):
         build_scoped_materialization_handler_from_env(environ)
 
     env_capped = tmp_path / "env_capped.json"
-    env_capped.write_text(approved_report(created_at=time.time() - 10), encoding="utf-8")
-    environ["AZURE_MEMFOREST_PARTIAL_HYDRATION_AUTHORITY_PREFLIGHT_REPORT"] = str(env_capped)
+    write_report(env_capped, approved_report(created_at=time.time() - 10))
     environ["AZURE_MEMFOREST_PARTIAL_HYDRATION_AUTHORITY_PREFLIGHT_MAX_AGE_SECONDS"] = "1"
     with pytest.raises(ValueError, match="preflight report is stale"):
         build_scoped_materialization_handler_from_env(environ)
 
     tampered = tmp_path / "tampered.json"
-    tampered.write_text(approved_report(canary_ok=False), encoding="utf-8")
-    environ["AZURE_MEMFOREST_PARTIAL_HYDRATION_AUTHORITY_PREFLIGHT_REPORT"] = str(tampered)
+    write_report(tampered, approved_report(canary_ok=False))
     environ.pop("AZURE_MEMFOREST_PARTIAL_HYDRATION_AUTHORITY_PREFLIGHT_MAX_AGE_SECONDS", None)
     with pytest.raises(ValueError, match="canary is not approved"):
         build_scoped_materialization_handler_from_env(environ)
@@ -281,17 +278,36 @@ def test_materialization_env_requires_approved_authority_preflight_report(tmp_pa
     nested_blockers = tmp_path / "nested_blockers.json"
     nested_payload = json.loads(approved_report())
     nested_payload["canary_report"]["promotion_blockers"] = ["live_canary:under_selection_count"]
-    nested_blockers.write_text(json.dumps(nested_payload), encoding="utf-8")
-    environ["AZURE_MEMFOREST_PARTIAL_HYDRATION_AUTHORITY_PREFLIGHT_REPORT"] = str(nested_blockers)
+    write_report(nested_blockers, json.dumps(nested_payload))
     with pytest.raises(ValueError, match="canary report has blockers"):
         build_scoped_materialization_handler_from_env(environ)
 
     missing_confirmation = tmp_path / "missing_confirmation.json"
     missing_payload = json.loads(approved_report())
     missing_payload["missing_confirmations"] = ["rollback_switch_confirmed"]
-    missing_confirmation.write_text(json.dumps(missing_payload), encoding="utf-8")
-    environ["AZURE_MEMFOREST_PARTIAL_HYDRATION_AUTHORITY_PREFLIGHT_REPORT"] = str(missing_confirmation)
+    write_report(missing_confirmation, json.dumps(missing_payload))
     with pytest.raises(ValueError, match="has blockers: missing_confirmations"):
+        build_scoped_materialization_handler_from_env(environ)
+
+    missing_hash = tmp_path / "missing_hash.json"
+    missing_hash.write_text(approved_report(), encoding="utf-8")
+    environ["AZURE_MEMFOREST_PARTIAL_HYDRATION_AUTHORITY_PREFLIGHT_REPORT"] = str(missing_hash)
+    environ.pop("AZURE_MEMFOREST_PARTIAL_HYDRATION_AUTHORITY_PREFLIGHT_REPORT_SHA256", None)
+    with pytest.raises(ValueError, match="requires authority preflight report sha256"):
+        build_scoped_materialization_handler_from_env(environ)
+
+    wrong_hash = tmp_path / "wrong_hash.json"
+    wrong_hash.write_text(approved_report(), encoding="utf-8")
+    environ["AZURE_MEMFOREST_PARTIAL_HYDRATION_AUTHORITY_PREFLIGHT_REPORT"] = str(wrong_hash)
+    environ["AZURE_MEMFOREST_PARTIAL_HYDRATION_AUTHORITY_PREFLIGHT_REPORT_SHA256"] = "0" * 64
+    with pytest.raises(ValueError, match="sha256 mismatch"):
+        build_scoped_materialization_handler_from_env(environ)
+
+    malformed_wrong_hash = tmp_path / "malformed_wrong_hash.json"
+    malformed_wrong_hash.write_text("{not json", encoding="utf-8")
+    environ["AZURE_MEMFOREST_PARTIAL_HYDRATION_AUTHORITY_PREFLIGHT_REPORT"] = str(malformed_wrong_hash)
+    environ["AZURE_MEMFOREST_PARTIAL_HYDRATION_AUTHORITY_PREFLIGHT_REPORT_SHA256"] = "0" * 64
+    with pytest.raises(ValueError, match="sha256 mismatch"):
         build_scoped_materialization_handler_from_env(environ)
 
 
@@ -323,6 +339,7 @@ def test_materialization_env_accepts_fresh_authority_preflight_report_then_build
     environ["AZURE_MEMFOREST_ENABLE_PARTIAL_HYDRATION_GUARDED_SWITCH"] = "true"
     environ["AZURE_MEMFOREST_ENABLE_PARTIAL_HYDRATION_AUTHORITATIVE_SWITCH"] = "true"
     environ["AZURE_MEMFOREST_PARTIAL_HYDRATION_AUTHORITY_PREFLIGHT_REPORT"] = str(approved)
+    environ["AZURE_MEMFOREST_PARTIAL_HYDRATION_AUTHORITY_PREFLIGHT_REPORT_SHA256"] = hashlib.sha256(approved.read_bytes()).hexdigest()
 
     class BoomCosmosClient:
         def __init__(self, *args, **kwargs):
