@@ -23,9 +23,12 @@ REQUIRED_ENV = (
 REQUIRED_DIAGNOSTIC_FLAGS = {
     "AZURE_MEMFOREST_ENABLE_PRE_INGEST_ROUTE_PREDICTION_PREPASS": "true",
     "AZURE_MEMFOREST_ENABLE_PARTIAL_HYDRATION_SHADOW": "true",
-    "AZURE_MEMFOREST_ENABLE_PARTIAL_HYDRATION_DUAL_COMPUTE_SHADOW": "true",
+    "AZURE_MEMFOREST_ENABLE_PARTIAL_HYDRATION_EQUIVALENCE_SHADOW": "true",
     "AZURE_MEMFOREST_ENABLE_PARTIAL_HYDRATION_GUARDED_SWITCH": "false",
     "AZURE_MEMFOREST_ENABLE_PARTIAL_HYDRATION_AUTHORITATIVE_SWITCH": "false",
+}
+ADVISORY_DIAGNOSTIC_FLAGS = {
+    "AZURE_MEMFOREST_ENABLE_PARTIAL_HYDRATION_DUAL_COMPUTE_SHADOW": "true",
 }
 
 
@@ -42,6 +45,19 @@ def _missing_env(values: dict[str, str]) -> list[str]:
     return sorted(set(missing))
 
 
+def _env_flag(value: str | None) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _diagnostic_flag_mismatches(values: dict[str, str]) -> list[str]:
+    mismatches = []
+    for name, expected in REQUIRED_DIAGNOSTIC_FLAGS.items():
+        expected_enabled = expected == "true"
+        if _env_flag(values.get(name)) is not expected_enabled:
+            mismatches.append(f"{name}={expected}")
+    return sorted(mismatches)
+
+
 def build_runbook(
     values: dict[str, str],
     *,
@@ -51,6 +67,7 @@ def build_runbook(
     run_channel: str = "trusted-ci",
 ) -> dict[str, Any]:
     missing = _missing_env(values)
+    flag_mismatches = _diagnostic_flag_mismatches(values)
     git_sha = str(values.get("AZURE_MEMFOREST_GIT_SHA") or "").strip()
     output = str(output_root).rstrip("/\\")
     local_artifact = "<path printed by partial_hydration_shadow_evidence.py>"
@@ -95,9 +112,11 @@ def build_runbook(
     ]
     return {
         "schema_version": 1,
-        "ready": not missing,
+        "ready": not missing and not flag_mismatches,
         "missing_env": missing,
         "required_diagnostic_flags": REQUIRED_DIAGNOSTIC_FLAGS,
+        "advisory_diagnostic_flags": ADVISORY_DIAGNOSTIC_FLAGS,
+        "diagnostic_flag_mismatches": flag_mismatches,
         "session_count": int(session_count),
         "code_version": git_sha,
         "artifacts": {
@@ -110,6 +129,7 @@ def build_runbook(
         "commands": commands,
         "notes": [
             "Enable diagnostic flags in the deployed worker/API environment before the live run.",
+            "Flag readiness uses local env as a checklist proxy; the canary gate remains authoritative because it reads worker-produced metadata.",
             "Keep authoritative switch disabled until authority preflight passes and rollout approval is explicit.",
             "Use a fresh user_id for the durable smoke so exported manifests correspond to this run.",
             "Use the exact artifact paths printed by partial_hydration_shadow_evidence.py and durable_ingest_smoke.py; both filenames are dynamic.",

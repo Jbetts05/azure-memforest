@@ -240,23 +240,33 @@ def test_live_canary_runbook_requires_env_and_emits_commands() -> None:
         "AZURE_MEMFOREST_COSMOS_DATABASE": "db",
         "AZURE_CLIENT_ID": "client",
         "AZURE_MEMFOREST_GIT_SHA": "abc123",
+        "AZURE_MEMFOREST_ENABLE_PRE_INGEST_ROUTE_PREDICTION_PREPASS": "true",
+        "AZURE_MEMFOREST_ENABLE_PARTIAL_HYDRATION_SHADOW": "1",
+        "AZURE_MEMFOREST_ENABLE_PARTIAL_HYDRATION_EQUIVALENCE_SHADOW": "yes",
     }
 
     runbook = build_runbook(base_env, output_root="out", session_count=3)
 
     assert runbook["ready"] is True
     assert runbook["missing_env"] == []
+    assert runbook["diagnostic_flag_mismatches"] == []
     assert runbook["code_version"] == "abc123"
     assert runbook["artifacts"]["local_evidence"] == "<path printed by partial_hydration_shadow_evidence.py>"
     assert runbook["artifacts"]["durable_smoke"] == "<path printed by durable_ingest_smoke.py>"
     assert any("partial_hydration_authority_preflight.py" in command for command in runbook["commands"])
     assert "<path printed by durable_ingest_smoke.py>" in runbook["commands"][2]
     assert "<path printed by partial_hydration_shadow_evidence.py>" in runbook["commands"][2]
+    assert runbook["required_diagnostic_flags"]["AZURE_MEMFOREST_ENABLE_PARTIAL_HYDRATION_EQUIVALENCE_SHADOW"] == "true"
     assert runbook["required_diagnostic_flags"]["AZURE_MEMFOREST_ENABLE_PARTIAL_HYDRATION_AUTHORITATIVE_SWITCH"] == "false"
+    assert runbook["advisory_diagnostic_flags"]["AZURE_MEMFOREST_ENABLE_PARTIAL_HYDRATION_DUAL_COMPUTE_SHADOW"] == "true"
 
     blocked = build_runbook({**base_env, "AZURE_MEMFOREST_GIT_SHA": "unknown"})
     assert blocked["ready"] is False
     assert "AZURE_MEMFOREST_GIT_SHA(non-unknown)" in blocked["missing_env"]
+
+    wrong_flag = build_runbook({**base_env, "AZURE_MEMFOREST_ENABLE_PARTIAL_HYDRATION_GUARDED_SWITCH": "true"})
+    assert wrong_flag["ready"] is False
+    assert "AZURE_MEMFOREST_ENABLE_PARTIAL_HYDRATION_GUARDED_SWITCH=false" in wrong_flag["diagnostic_flag_mismatches"]
 
 
 def test_live_canary_collector_blocks_manifest_code_version_mismatch() -> None:
