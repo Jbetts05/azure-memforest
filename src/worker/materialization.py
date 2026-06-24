@@ -139,6 +139,7 @@ class MaterializationHandlerConfig:
     # Metadata-only until a trusted pre-ingest tree-scope planner exists.
     enable_partial_hydration_guarded_switch: bool = False
     enable_partial_hydration_authoritative_switch: bool = False
+    partial_hydration_authority_preflight_report_path: str | None = None
     enable_pre_ingest_route_prediction_prepass: bool = False
     enable_partial_hydration_dual_compute_shadow: bool = False
 
@@ -158,6 +159,8 @@ class MaterializationHandlerConfig:
             raise ValueError("partial hydration guarded switch requires tree-scoped projection writes")
         if self.enable_partial_hydration_authoritative_switch and not self.enable_partial_hydration_guarded_switch:
             raise ValueError("partial hydration authoritative switch requires guarded switch")
+        if self.enable_partial_hydration_authoritative_switch and not str(self.partial_hydration_authority_preflight_report_path or "").strip():
+            raise ValueError("partial hydration authoritative switch requires authority preflight report")
 
 
 class MemForestMaterializationHandler:

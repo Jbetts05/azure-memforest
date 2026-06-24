@@ -100,6 +100,7 @@ def test_fixed_materialization_config_factory_sets_owner_and_embedding_version()
         enable_partial_hydration_equivalence_shadow=True,
         enable_partial_hydration_guarded_switch=True,
         enable_partial_hydration_authoritative_switch=True,
+        partial_hydration_authority_preflight_report_path="approved-preflight.json",
         enable_pre_ingest_route_prediction_prepass=True,
         enable_partial_hydration_dual_compute_shadow=True,
     )(_envelope())
@@ -112,6 +113,7 @@ def test_fixed_materialization_config_factory_sets_owner_and_embedding_version()
     assert config.enable_partial_hydration_equivalence_shadow is True
     assert config.enable_partial_hydration_guarded_switch is True
     assert config.enable_partial_hydration_authoritative_switch is True
+    assert config.partial_hydration_authority_preflight_report_path == "approved-preflight.json"
     assert config.enable_pre_ingest_route_prediction_prepass is True
     assert config.enable_partial_hydration_dual_compute_shadow is True
 
@@ -152,7 +154,27 @@ def test_fixed_materialization_config_factory_requires_guarded_switch_for_author
         )
 
 
-def test_materialization_env_rejects_authoritative_switch_without_guarded_switch() -> None:
+def test_fixed_materialization_config_factory_requires_report_for_authoritative_switch() -> None:
+    with pytest.raises(ValueError, match="authoritative switch requires authority preflight report"):
+        fixed_materialization_config_factory(
+            owner_id="worker-1",
+            embedding_model_version="embed-v1",
+            enable_tree_scoped_projection_writes=True,
+            enable_partial_hydration_guarded_switch=True,
+            enable_partial_hydration_authoritative_switch=True,
+        )
+
+    with pytest.raises(ValueError, match="authoritative switch requires authority preflight report"):
+        MaterializationHandlerConfig(
+            owner_id="worker-1",
+            embedding_model_version="embed-v1",
+            enable_tree_scoped_projection_writes=True,
+            enable_partial_hydration_guarded_switch=True,
+            enable_partial_hydration_authoritative_switch=True,
+        )
+
+
+def _required_materialization_env() -> dict[str, str]:
     environ = {name: "value" for name in (
         "AZURE_CLIENT_ID",
         "AZURE_COSMOS_ENDPOINT",
@@ -169,11 +191,63 @@ def test_materialization_env_rejects_authoritative_switch_without_guarded_switch
         "AZURE_STORAGE_SNAPSHOT_CONTAINER",
     )}
     environ["AZURE_OPENAI_EMBEDDING_DIMENSION"] = "1536"
+    environ["AZURE_MEMFOREST_GIT_SHA"] = "test-sha"
+    return environ
+
+
+def test_materialization_env_rejects_authoritative_switch_without_guarded_switch() -> None:
+    environ = _required_materialization_env()
     environ["AZURE_MEMFOREST_ENABLE_PARTIAL_HYDRATION_AUTHORITATIVE_SWITCH"] = "true"
 
     from src.worker.factory import build_scoped_materialization_handler_from_env
 
     with pytest.raises(ValueError, match="authoritative switch requires guarded switch"):
+        build_scoped_materialization_handler_from_env(environ)
+
+
+def test_materialization_env_requires_approved_authority_preflight_report(tmp_path) -> None:
+    from src.worker.factory import build_scoped_materialization_handler_from_env
+
+    environ = _required_materialization_env()
+    environ["AZURE_MEMFOREST_ENABLE_TREE_SCOPED_PROJECTION_WRITES"] = "true"
+    environ["AZURE_MEMFOREST_ENABLE_PARTIAL_HYDRATION_GUARDED_SWITCH"] = "true"
+    environ["AZURE_MEMFOREST_ENABLE_PARTIAL_HYDRATION_AUTHORITATIVE_SWITCH"] = "true"
+
+    with pytest.raises(ValueError, match="requires authority preflight report"):
+        build_scoped_materialization_handler_from_env(environ)
+
+    rejected = tmp_path / "rejected.json"
+    rejected.write_text('{"authority_allowed": false}', encoding="utf-8")
+    environ["AZURE_MEMFOREST_PARTIAL_HYDRATION_AUTHORITY_PREFLIGHT_REPORT"] = str(rejected)
+    with pytest.raises(ValueError, match="not approved"):
+        build_scoped_materialization_handler_from_env(environ)
+
+    mismatch = tmp_path / "mismatch.json"
+    mismatch.write_text(
+        '{"authority_allowed": true, "expected_code_version": "other", "artifact_code_version": "other"}',
+        encoding="utf-8",
+    )
+    environ["AZURE_MEMFOREST_PARTIAL_HYDRATION_AUTHORITY_PREFLIGHT_REPORT"] = str(mismatch)
+    with pytest.raises(ValueError, match="code version mismatch"):
+        build_scoped_materialization_handler_from_env(environ)
+
+
+def test_materialization_env_requires_git_sha_for_authoritative_switch(tmp_path) -> None:
+    from src.worker.factory import build_scoped_materialization_handler_from_env
+
+    report = tmp_path / "approved.json"
+    report.write_text(
+        '{"authority_allowed": true, "expected_code_version": "unknown", "artifact_code_version": "unknown"}',
+        encoding="utf-8",
+    )
+    environ = _required_materialization_env()
+    environ["AZURE_MEMFOREST_GIT_SHA"] = "unknown"
+    environ["AZURE_MEMFOREST_ENABLE_TREE_SCOPED_PROJECTION_WRITES"] = "true"
+    environ["AZURE_MEMFOREST_ENABLE_PARTIAL_HYDRATION_GUARDED_SWITCH"] = "true"
+    environ["AZURE_MEMFOREST_ENABLE_PARTIAL_HYDRATION_AUTHORITATIVE_SWITCH"] = "true"
+    environ["AZURE_MEMFOREST_PARTIAL_HYDRATION_AUTHORITY_PREFLIGHT_REPORT"] = str(report)
+
+    with pytest.raises(ValueError, match="requires AZURE_MEMFOREST_GIT_SHA"):
         build_scoped_materialization_handler_from_env(environ)
 
 

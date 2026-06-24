@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import hashlib
+import json
 from pathlib import Path
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -199,6 +200,7 @@ def fixed_materialization_config_factory(
     enable_partial_hydration_equivalence_shadow: bool = False,
     enable_partial_hydration_guarded_switch: bool = False,
     enable_partial_hydration_authoritative_switch: bool = False,
+    partial_hydration_authority_preflight_report_path: str | None = None,
     enable_pre_ingest_route_prediction_prepass: bool = False,
     enable_partial_hydration_dual_compute_shadow: bool = False,
 ) -> Callable[[WriteJobEnvelope], MaterializationHandlerConfig]:
@@ -206,6 +208,8 @@ def fixed_materialization_config_factory(
         raise ValueError("partial hydration guarded switch requires tree-scoped projection writes")
     if enable_partial_hydration_authoritative_switch and not enable_partial_hydration_guarded_switch:
         raise ValueError("partial hydration authoritative switch requires guarded switch")
+    if enable_partial_hydration_authoritative_switch and not str(partial_hydration_authority_preflight_report_path or "").strip():
+        raise ValueError("partial hydration authoritative switch requires authority preflight report")
 
     def build(envelope: WriteJobEnvelope) -> MaterializationHandlerConfig:
         return MaterializationHandlerConfig(
@@ -226,6 +230,7 @@ def fixed_materialization_config_factory(
             enable_partial_hydration_equivalence_shadow=enable_partial_hydration_equivalence_shadow,
             enable_partial_hydration_guarded_switch=enable_partial_hydration_guarded_switch,
             enable_partial_hydration_authoritative_switch=enable_partial_hydration_authoritative_switch,
+            partial_hydration_authority_preflight_report_path=partial_hydration_authority_preflight_report_path,
             enable_pre_ingest_route_prediction_prepass=enable_pre_ingest_route_prediction_prepass,
             enable_partial_hydration_dual_compute_shadow=enable_partial_hydration_dual_compute_shadow,
         )
@@ -272,6 +277,26 @@ def build_worker_runtime_from_env(environ: dict[str, str] | None = None) -> Work
     return WorkerRuntime(receiver_loop=receiver_loop, closeables=[*materialization.closeables, servicebus_client, async_credential])
 
 
+def _validate_authority_preflight_report_from_env(values: dict[str, str]) -> None:
+    path = str(values.get("AZURE_MEMFOREST_PARTIAL_HYDRATION_AUTHORITY_PREFLIGHT_REPORT") or "").strip()
+    if not path:
+        raise ValueError("partial hydration authoritative switch requires authority preflight report")
+    expected_code_version = str(values.get("AZURE_MEMFOREST_GIT_SHA") or "").strip()
+    if not expected_code_version or expected_code_version.lower() == "unknown":
+        raise ValueError("partial hydration authoritative switch requires AZURE_MEMFOREST_GIT_SHA")
+    report_path = Path(path)
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        raise ValueError("partial hydration authority preflight report is unreadable") from exc
+    if not isinstance(report, dict) or report.get("authority_allowed") is not True:
+        raise ValueError("partial hydration authority preflight report is not approved")
+    if str(report.get("expected_code_version") or "").strip() != expected_code_version:
+        raise ValueError("partial hydration authority preflight report code version mismatch")
+    if str(report.get("artifact_code_version") or "").strip() != expected_code_version:
+        raise ValueError("partial hydration authority preflight artifact code version mismatch")
+
+
 def build_scoped_materialization_handler_from_env(
     environ: dict[str, str] | None = None,
     *,
@@ -286,6 +311,8 @@ def build_scoped_materialization_handler_from_env(
         and not _env_flag(values.get("AZURE_MEMFOREST_ENABLE_PARTIAL_HYDRATION_GUARDED_SWITCH", ""))
     ):
         raise ValueError("partial hydration authoritative switch requires guarded switch")
+    if _env_flag(values.get("AZURE_MEMFOREST_ENABLE_PARTIAL_HYDRATION_AUTHORITATIVE_SWITCH", "")):
+        _validate_authority_preflight_report_from_env(values)
 
     from azure.cosmos.aio import CosmosClient
     from azure.identity import ManagedIdentityCredential, get_bearer_token_provider
@@ -351,6 +378,7 @@ def build_scoped_materialization_handler_from_env(
             enable_partial_hydration_equivalence_shadow=_env_flag(values.get("AZURE_MEMFOREST_ENABLE_PARTIAL_HYDRATION_EQUIVALENCE_SHADOW", "")),
             enable_partial_hydration_guarded_switch=_env_flag(values.get("AZURE_MEMFOREST_ENABLE_PARTIAL_HYDRATION_GUARDED_SWITCH", "")),
             enable_partial_hydration_authoritative_switch=_env_flag(values.get("AZURE_MEMFOREST_ENABLE_PARTIAL_HYDRATION_AUTHORITATIVE_SWITCH", "")),
+            partial_hydration_authority_preflight_report_path=values.get("AZURE_MEMFOREST_PARTIAL_HYDRATION_AUTHORITY_PREFLIGHT_REPORT"),
             enable_pre_ingest_route_prediction_prepass=_env_flag(values.get("AZURE_MEMFOREST_ENABLE_PRE_INGEST_ROUTE_PREDICTION_PREPASS", "")),
             enable_partial_hydration_dual_compute_shadow=_env_flag(values.get("AZURE_MEMFOREST_ENABLE_PARTIAL_HYDRATION_DUAL_COMPUTE_SHADOW", "")),
         ),
