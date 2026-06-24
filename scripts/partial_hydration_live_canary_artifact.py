@@ -96,6 +96,7 @@ def summarize_live_metadata(
     *,
     input_object_count: int | None = None,
     unparsed_record_count: int = 0,
+    code_version: str | None = None,
 ) -> dict[str, Any]:
     unsupported_prediction_count = 0
     under_selection_count = 0
@@ -105,6 +106,9 @@ def summarize_live_metadata(
     partial_resident_commit_count = 0
     missing_model_telemetry_count = 0
     missing_stage_timing_count = 0
+    missing_code_version_count = 0
+    mismatched_code_version_count = 0
+    expected_code_version = str(code_version or "").strip()
     total_model_calls = 0
     total_model_failures = 0
     total_model_started_calls = 0
@@ -115,6 +119,11 @@ def summarize_live_metadata(
         shadow = _mapping(metadata.get("predicted_subset_equivalence_shadow"))
         scoped = _mapping(shadow.get("scoped_comparison"))
         safety = _mapping(metadata.get("partial_residency_projection_safety"))
+        record_code_version = str(metadata.get("code_version") or "").strip()
+        if not record_code_version:
+            missing_code_version_count += 1
+        elif expected_code_version and record_code_version != expected_code_version:
+            mismatched_code_version_count += 1
         if prediction.get("supported") is not True:
             unsupported_prediction_count += 1
         if prediction.get("under_selected_without_escalation") is True:
@@ -162,6 +171,9 @@ def summarize_live_metadata(
         "partial_resident_commit_count": partial_resident_commit_count,
         "missing_model_telemetry_count": missing_model_telemetry_count,
         "missing_stage_timing_count": missing_stage_timing_count,
+        "expected_code_version": expected_code_version or None,
+        "missing_code_version_count": missing_code_version_count,
+        "mismatched_code_version_count": mismatched_code_version_count,
         "model_call_totals": {
             "total_calls": total_model_calls,
             "total_failures": total_model_failures,
@@ -182,6 +194,9 @@ def summarize_live_metadata(
             "no_unparsed_records": unparsed_record_count == 0,
             "all_model_telemetry_present": missing_model_telemetry_count == 0,
             "all_stage_timings_present": missing_stage_timing_count == 0,
+            "all_records_match_code_version": bool(expected_code_version)
+            and missing_code_version_count == 0
+            and mismatched_code_version_count == 0,
         },
     }
 
@@ -233,6 +248,7 @@ def main() -> None:
             list(collected["records"]),
             input_object_count=int(collected["input_object_count"]),
             unparsed_record_count=int(collected["unparsed_record_count"]),
+            code_version=args.code_version,
         ),
         producer=args.producer,
         run_channel=args.run_channel,

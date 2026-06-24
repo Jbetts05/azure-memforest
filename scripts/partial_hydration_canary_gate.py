@@ -58,6 +58,8 @@ def _live_canary_failures(live_canary: dict[str, Any]) -> list[str]:
         "unparsed_record_count",
         "missing_model_telemetry_count",
         "missing_stage_timing_count",
+        "missing_code_version_count",
+        "mismatched_code_version_count",
     )
     for name in zero_count_checks:
         value = _coverage_int(live_canary, name)
@@ -73,11 +75,20 @@ def _live_canary_failures(live_canary: dict[str, Any]) -> list[str]:
         "no_unparsed_records",
         "all_model_telemetry_present",
         "all_stage_timings_present",
+        "all_records_match_code_version",
     )
     for name in required_checks:
         if checks.get(name) is not True:
             failures.append(name)
     return failures
+
+
+def _code_version_failures(*, provenance: dict[str, Any], live_canary: dict[str, Any]) -> list[str]:
+    live_expected = str(live_canary.get("expected_code_version") or "").strip()
+    provenance_version = str(provenance.get("code_version") or "").strip()
+    if live_expected and provenance_version != live_expected:
+        return ["provenance_live_canary_mismatch"]
+    return []
 
 
 def evaluate_artifact(artifact: dict[str, Any], *, require_live_canary: bool) -> dict[str, Any]:
@@ -122,7 +133,9 @@ def evaluate_artifact(artifact: dict[str, Any], *, require_live_canary: bool) ->
     live_required_failed = require_live_canary and not trusted_live
     live_provenance_failed = bool(live_provenance_failures)
     live_canary_failures = _live_canary_failures(live_canary) if require_live_canary else []
+    code_version_failures = _code_version_failures(provenance=provenance, live_canary=live_canary) if require_live_canary else []
     live_canary_failed = bool(live_canary_failures)
+    code_version_failed = bool(code_version_failures)
     return {
         "schema_version": 1,
         "artifact_run_id": artifact.get("run_id"),
@@ -139,12 +152,14 @@ def evaluate_artifact(artifact: dict[str, Any], *, require_live_canary: bool) ->
         "live_provenance_failures": live_provenance_failures,
         "live_canary_checks_satisfied": not live_canary_failed,
         "live_canary_failures": live_canary_failures,
+        "code_version_failures": code_version_failures,
         "promotion_allowed": not missing
         and not failed
         and not coverage_failures
         and not live_required_failed
         and not live_provenance_failed
-        and not live_canary_failed,
+        and not live_canary_failed
+        and not code_version_failed,
         "promotion_blockers": [
             *[f"missing_gate:{name}" for name in missing],
             *[f"failed_gate:{name}" for name in failed],
@@ -152,6 +167,7 @@ def evaluate_artifact(artifact: dict[str, Any], *, require_live_canary: bool) ->
             *(["live_canary_required"] if live_required_failed else []),
             *[f"live_provenance:{name}" for name in live_provenance_failures],
             *[f"live_canary:{name}" for name in live_canary_failures],
+            *[f"code_version:{name}" for name in code_version_failures],
         ],
     }
 

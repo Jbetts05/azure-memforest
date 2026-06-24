@@ -42,8 +42,9 @@ def _confirmations() -> dict[str, bool]:
     }
 
 
-def _live_metadata(*, under_selected: bool = False) -> dict:
+def _live_metadata(*, under_selected: bool = False, code_version: str = "abc123") -> dict:
     return {
+        "code_version": code_version,
         "pre_ingest_scope_prediction": {
             "supported": True,
             "under_selected_without_escalation": under_selected,
@@ -78,7 +79,10 @@ def _live_metadata(*, under_selected: bool = False) -> dict:
 def _clean_live_artifact(*, code_version: str = "abc123") -> dict:
     return build_live_artifact(
         local_evidence=_local_evidence(),
-        live_canary=summarize_live_metadata([_live_metadata(), _live_metadata(), _live_metadata()]),
+        live_canary=summarize_live_metadata(
+            [_live_metadata(code_version=code_version), _live_metadata(code_version=code_version), _live_metadata(code_version=code_version)],
+            code_version=code_version,
+        ),
         producer="azure-memforest-live-canary",
         run_channel="trusted-ci",
         code_version=code_version,
@@ -222,6 +226,35 @@ def test_authority_preflight_blocks_code_version_mismatch_and_stale_artifact() -
     assert report["authority_allowed"] is False
     assert "code_version:code_version_mismatch" in report["authority_blockers"]
     assert "freshness:artifact_too_old" in report["authority_blockers"]
+
+
+def test_live_canary_collector_blocks_manifest_code_version_mismatch() -> None:
+    artifact = build_live_artifact(
+        local_evidence=_local_evidence(),
+        live_canary=summarize_live_metadata(
+            [_live_metadata(), _live_metadata(code_version="other-sha"), _live_metadata()],
+            code_version="abc123",
+        ),
+        producer="azure-memforest-live-canary",
+        run_channel="trusted-ci",
+        code_version="abc123",
+    )
+
+    report = evaluate_artifact(artifact, require_live_canary=True)
+
+    assert report["promotion_allowed"] is False
+    assert "live_canary:mismatched_code_version_count" in report["promotion_blockers"]
+    assert "live_canary:all_records_match_code_version" in report["promotion_blockers"]
+
+
+def test_live_canary_gate_blocks_provenance_and_live_expected_code_version_mismatch() -> None:
+    artifact = _clean_live_artifact(code_version="abc123")
+    artifact["provenance"]["code_version"] = "other-sha"
+
+    report = evaluate_artifact(artifact, require_live_canary=True)
+
+    assert report["promotion_allowed"] is False
+    assert "code_version:provenance_live_canary_mismatch" in report["promotion_blockers"]
 
 
 def test_authority_preflight_blocks_empty_expected_version_and_future_artifact() -> None:
