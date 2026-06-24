@@ -131,6 +131,9 @@ def _run_ingest_smoke_session(
     }
     if args.job_source == "api":
         start = {"id": job_id, "status": "started_by_api", "deduped": False}
+    elif args.start_source == "servicebus":
+        asyncio.run(_send_envelope_servicebus(args, envelope))
+        start = {"id": job_id, "status": "started_by_servicebus", "deduped": False}
     else:
         start = _post_json(
             args.durable_start_url,
@@ -410,23 +413,82 @@ async def _create_accepted_job_cosmos(
         _close_cosmos_client(credential, client)
 
 
+async def _send_envelope_servicebus(args: argparse.Namespace, envelope: dict[str, Any]) -> None:
+    from azure.servicebus import ServiceBusMessage
+    from azure.servicebus.aio import ServiceBusClient
+    from src.service.jobs import WriteJobEnvelope, service_bus_session_id
+
+    if not args.servicebus_namespace or not args.servicebus_queue:
+        raise RuntimeError("--start-source servicebus requires --servicebus-namespace and --servicebus-queue.")
+    credential = _azure_credential(args, async_credential=True)
+    envelope_obj = WriteJobEnvelope(**envelope)
+    body = envelope_obj.to_json()
+    message = ServiceBusMessage(
+        body,
+        content_type="application/json",
+        session_id=service_bus_session_id(envelope_obj),
+        message_id=envelope_obj.job_id,
+        application_properties={
+            "schema_version": envelope_obj.schema_version,
+            "job_id": envelope_obj.job_id,
+            "tenant_id": envelope_obj.tenant_id,
+            "user_id": envelope_obj.user_id,
+            "job_type": envelope_obj.job_type,
+            "idempotency_key": envelope_obj.idempotency_key,
+        },
+    )
+    client = ServiceBusClient(args.servicebus_namespace, credential=credential)
+    try:
+        sender = client.get_queue_sender(queue_name=args.servicebus_queue)
+        async with sender:
+            await sender.send_messages(message)
+    finally:
+        await client.close()
+        close = getattr(credential, "close", None)
+        if close is not None:
+            await close()
+
+
 def _cosmos_client(args: argparse.Namespace):
     from azure.cosmos import CosmosClient
-    from azure.identity import DefaultAzureCredential
 
     if not args.cosmos_endpoint or not args.cosmos_database or not args.azure_client_id:
         raise RuntimeError("Cosmos access requires --cosmos-endpoint, --cosmos-database, and --azure-client-id.")
-    credential = DefaultAzureCredential(
+    credential = _azure_credential(args)
+    return credential, CosmosClient(args.cosmos_endpoint, credential=credential)
+
+
+def _azure_credential(args: argparse.Namespace, *, async_credential: bool = False):
+    if args.azure_credential == "cli":
+        if async_credential:
+            from azure.identity.aio import AzureCliCredential as AsyncAzureCliCredential
+
+            return AsyncAzureCliCredential()
+        from azure.identity import AzureCliCredential
+
+        return AzureCliCredential()
+    if async_credential:
+        from azure.identity.aio import ManagedIdentityCredential as AsyncManagedIdentityCredential
+
+        return AsyncManagedIdentityCredential(client_id=args.azure_client_id)
+    from azure.identity import DefaultAzureCredential
+
+    return DefaultAzureCredential(
         managed_identity_client_id=args.azure_client_id,
         exclude_interactive_browser_credential=True,
     )
-    return credential, CosmosClient(args.cosmos_endpoint, credential=credential)
 
 
 def _close_cosmos_client(credential: Any, client: Any) -> None:
     close_client = getattr(client, "close", None)
     if close_client is not None:
         close_client()
+    close = getattr(credential, "close", None)
+    if close is not None:
+        close()
+
+
+def _close_credential(credential: Any) -> None:
     close = getattr(credential, "close", None)
     if close is not None:
         close()
@@ -504,6 +566,7 @@ def main() -> int:
     parser.add_argument("--function-key")
     parser.add_argument("--auth-mode", choices=["dev", "benchmark"], default="dev")
     parser.add_argument("--job-source", choices=["cosmos", "api"], default="cosmos")
+    parser.add_argument("--start-source", choices=["durable", "servicebus"], default="durable")
     parser.add_argument("--status-source", choices=["cosmos", "api"], default="cosmos")
     parser.add_argument("--skip-query", action="store_true")
     parser.add_argument("--session-count", type=int, default=1, help="Number of sequential live sessions to ingest (1-50).")
@@ -522,6 +585,9 @@ def main() -> int:
     parser.add_argument("--cosmos-endpoint")
     parser.add_argument("--cosmos-database")
     parser.add_argument("--azure-client-id")
+    parser.add_argument("--azure-credential", choices=["managed_identity", "cli"], default="managed_identity")
+    parser.add_argument("--servicebus-namespace")
+    parser.add_argument("--servicebus-queue", default="memforest-writes")
     parser.add_argument("--benchmark-secret")
     parser.add_argument("--benchmark-secret-path", type=Path)
     parser.add_argument("--durable-hub", default="MemForestWrites")
