@@ -1987,6 +1987,69 @@ async def test_materialization_handler_records_pre_ingest_scope_prediction_when_
 
 
 @pytest.mark.asyncio
+async def test_materialization_handler_dual_compute_flag_runs_predicted_shadow_without_oracle_shadow() -> None:
+    snapshot = _two_tree_incremental_snapshot_with_fact_and_route_manifest()
+    manifest_store = FakeManifestStore()
+    manifest_store.latest = ForestManifest(
+        manifest_id="manifest-v1",
+        tenant_id="tenant-1",
+        user_id="user-1",
+        forest_version="v1",
+        generation=1,
+        status="committed",
+        created_at_unix=1.0,
+        metadata={
+            "job_id": "previous",
+            "job_type": "ingest_session",
+            "embedding_model_version": "embed-v1",
+            "route_index_manifest": snapshot.route_index_manifest,
+        },
+    )
+    core = FakeIngestCore(snapshot)
+    core.pre_ingest_prediction = SimpleNamespace(
+        touched_facts=snapshot.facts,
+        route_hints=(),
+        route_risks=RouteRiskFlags(cluster_merge_possible=False, suppression_flip_possible=False),
+        pre_ingest_scope=PreIngestTreeScope(
+            full_hydration_required=False,
+            tree_ids_to_load=("entity:alice",),
+            escalation_reasons=(),
+            predicted_entity_tree_ids=("entity:alice",),
+            predicted_scene_tree_ids=(),
+        ),
+    )
+    core.partial_hydration_equivalence_snapshot = replace(_snapshot(), baseline_forest_version=None)
+    handler = _handler(
+        manifest_store=manifest_store,
+        core=core,
+        baseline_provider=MatchingProjectionBaselineProvider(),
+        config=MaterializationHandlerConfig(
+            owner_id="worker-1",
+            embedding_model_version="embed-v1",
+            code_version="test-sha",
+            prompt_config_hash="prompt-hash",
+            lease_renewal_seconds=9999,
+            enable_pre_ingest_route_prediction_prepass=True,
+            enable_partial_hydration_dual_compute_shadow=True,
+        ),
+    )
+
+    await handler.handle(_envelope(), {"fencing_token": 1})
+
+    assert manifest_store.latest.metadata["partial_hydration_equivalence_shadow"] == {
+        "schema_version": 1,
+        "enabled": False,
+        "supported": False,
+        "reason": "disabled",
+    }
+    predicted = manifest_store.latest.metadata["predicted_subset_equivalence_shadow"]
+    assert predicted["enabled"] is True
+    assert predicted["supported"] is True
+    assert len(core.partial_hydration_equivalence_checks) == 1
+    assert core.partial_hydration_equivalence_checks[0]["tree_ids"] == ("entity:alice",)
+
+
+@pytest.mark.asyncio
 async def test_materialization_handler_pre_ingest_prediction_flags_under_selection_without_escalation() -> None:
     snapshot = _two_tree_incremental_snapshot_with_fact_and_route_manifest()
     manifest_store = FakeManifestStore()

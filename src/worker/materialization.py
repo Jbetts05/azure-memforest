@@ -139,6 +139,7 @@ class MaterializationHandlerConfig:
     # Metadata-only until a trusted pre-ingest tree-scope planner exists.
     enable_partial_hydration_guarded_switch: bool = False
     enable_pre_ingest_route_prediction_prepass: bool = False
+    enable_partial_hydration_dual_compute_shadow: bool = False
 
     def __post_init__(self) -> None:
         policy = _normalize_snapshot_policy(self.snapshot_policy)
@@ -540,7 +541,10 @@ class MemForestMaterializationHandler:
         generation: int,
         pre_ingest_prediction: Any | None,
     ) -> dict[str, Any]:
-        if not self._config.enable_partial_hydration_equivalence_shadow:
+        if not (
+            self._config.enable_partial_hydration_equivalence_shadow
+            or self._config.enable_partial_hydration_dual_compute_shadow
+        ):
             return {"schema_version": 1, "enabled": False, "supported": False, "reason": "disabled"}
         if pre_ingest_prediction is None:
             return {"schema_version": 1, "enabled": True, "supported": False, "reason": "pre_ingest_prediction_missing"}
