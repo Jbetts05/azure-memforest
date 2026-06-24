@@ -3,6 +3,7 @@ from __future__ import annotations
 from scripts.durable_ingest_smoke import _manifest_metadata_summary
 from scripts.partial_hydration_authority_preflight import evaluate_authority_preflight
 from scripts.partial_hydration_canary_gate import evaluate_artifact
+from scripts.partial_hydration_live_canary_runbook import build_runbook
 from scripts.partial_hydration_live_canary_artifact import build_live_artifact, collect_metadata_records, summarize_live_metadata
 
 
@@ -226,6 +227,36 @@ def test_authority_preflight_blocks_code_version_mismatch_and_stale_artifact() -
     assert report["authority_allowed"] is False
     assert "code_version:code_version_mismatch" in report["authority_blockers"]
     assert "freshness:artifact_too_old" in report["authority_blockers"]
+
+
+def test_live_canary_runbook_requires_env_and_emits_commands() -> None:
+    base_env = {
+        "AZURE_MEMFOREST_LIVE_DURABLE_SMOKE": "1",
+        "AZURE_MEMFOREST_API_URL": "https://api.example",
+        "AZURE_MEMFOREST_DURABLE_START_URL": "https://func.example/api/start",
+        "AZURE_MEMFOREST_DURABLE_FUNCTION_KEY": "secret",
+        "AZURE_MEMFOREST_TENANT_ID": "tenant",
+        "AZURE_MEMFOREST_COSMOS_ENDPOINT": "https://cosmos.example",
+        "AZURE_MEMFOREST_COSMOS_DATABASE": "db",
+        "AZURE_CLIENT_ID": "client",
+        "AZURE_MEMFOREST_GIT_SHA": "abc123",
+    }
+
+    runbook = build_runbook(base_env, output_root="out", session_count=3)
+
+    assert runbook["ready"] is True
+    assert runbook["missing_env"] == []
+    assert runbook["code_version"] == "abc123"
+    assert runbook["artifacts"]["local_evidence"] == "<path printed by partial_hydration_shadow_evidence.py>"
+    assert runbook["artifacts"]["durable_smoke"] == "<path printed by durable_ingest_smoke.py>"
+    assert any("partial_hydration_authority_preflight.py" in command for command in runbook["commands"])
+    assert "<path printed by durable_ingest_smoke.py>" in runbook["commands"][2]
+    assert "<path printed by partial_hydration_shadow_evidence.py>" in runbook["commands"][2]
+    assert runbook["required_diagnostic_flags"]["AZURE_MEMFOREST_ENABLE_PARTIAL_HYDRATION_AUTHORITATIVE_SWITCH"] == "false"
+
+    blocked = build_runbook({**base_env, "AZURE_MEMFOREST_GIT_SHA": "unknown"})
+    assert blocked["ready"] is False
+    assert "AZURE_MEMFOREST_GIT_SHA(non-unknown)" in blocked["missing_env"]
 
 
 def test_live_canary_collector_blocks_manifest_code_version_mismatch() -> None:
