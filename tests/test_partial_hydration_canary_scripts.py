@@ -33,6 +33,15 @@ def _local_evidence() -> dict:
     }
 
 
+def _confirmations() -> dict[str, bool]:
+    return {
+        "rollback_switch_confirmed": True,
+        "guarded_switch_config_confirmed": True,
+        "tree_scoped_projection_writes_confirmed": True,
+        "live_canary_reviewed": True,
+    }
+
+
 def _live_metadata(*, under_selected: bool = False) -> dict:
     return {
         "pre_ingest_scope_prediction": {
@@ -66,6 +75,16 @@ def _live_metadata(*, under_selected: bool = False) -> dict:
     }
 
 
+def _clean_live_artifact(*, code_version: str = "abc123") -> dict:
+    return build_live_artifact(
+        local_evidence=_local_evidence(),
+        live_canary=summarize_live_metadata([_live_metadata(), _live_metadata(), _live_metadata()]),
+        producer="azure-memforest-live-canary",
+        run_channel="trusted-ci",
+        code_version=code_version,
+    )
+
+
 def test_gate_rejects_mode_only_live_artifact_without_live_canary_metrics() -> None:
     artifact = {
         "mode": "live_canary",
@@ -85,12 +104,7 @@ def test_gate_rejects_mode_only_live_artifact_without_live_canary_metrics() -> N
 
 
 def test_live_canary_collector_artifact_passes_gate_for_clean_metadata() -> None:
-    artifact = build_live_artifact(
-        local_evidence=_local_evidence(),
-        live_canary=summarize_live_metadata([_live_metadata(), _live_metadata(), _live_metadata()]),
-        producer="azure-memforest-live-canary",
-        run_channel="trusted-ci",
-    )
+    artifact = _clean_live_artifact()
 
     report = evaluate_artifact(artifact, require_live_canary=True)
 
@@ -106,12 +120,7 @@ def test_live_canary_collector_artifact_passes_gate_for_clean_metadata() -> None
 
 
 def test_authority_preflight_requires_clean_canary_and_confirmations() -> None:
-    artifact = build_live_artifact(
-        local_evidence=_local_evidence(),
-        live_canary=summarize_live_metadata([_live_metadata(), _live_metadata(), _live_metadata()]),
-        producer="azure-memforest-live-canary",
-        run_channel="trusted-ci",
-    )
+    artifact = _clean_live_artifact()
 
     blocked = evaluate_authority_preflight(artifact, confirmations={})
 
@@ -122,11 +131,10 @@ def test_authority_preflight_requires_clean_canary_and_confirmations() -> None:
     allowed = evaluate_authority_preflight(
         artifact,
         confirmations={
-            "rollback_switch_confirmed": True,
-            "guarded_switch_config_confirmed": True,
-            "tree_scoped_projection_writes_confirmed": True,
-            "live_canary_reviewed": True,
+            **_confirmations(),
         },
+        expected_code_version="abc123",
+        max_age_seconds=3600,
     )
 
     assert allowed["authority_allowed"] is True
@@ -134,22 +142,16 @@ def test_authority_preflight_requires_clean_canary_and_confirmations() -> None:
 
 
 def test_authority_preflight_rejects_unknown_confirmations() -> None:
-    artifact = build_live_artifact(
-        local_evidence=_local_evidence(),
-        live_canary=summarize_live_metadata([_live_metadata(), _live_metadata(), _live_metadata()]),
-        producer="azure-memforest-live-canary",
-        run_channel="trusted-ci",
-    )
+    artifact = _clean_live_artifact()
 
     report = evaluate_authority_preflight(
         artifact,
         confirmations={
-            "rollback_switch_confirmed": True,
-            "guarded_switch_config_confirmed": True,
-            "tree_scoped_projection_writes_confirmed": True,
-            "live_canary_reviewed": True,
+            **_confirmations(),
             "rollbak_switch_confirmed": True,
         },
+        expected_code_version="abc123",
+        max_age_seconds=3600,
     )
 
     assert report["authority_allowed"] is False
@@ -173,11 +175,10 @@ def test_authority_preflight_blocks_local_fake_artifact() -> None:
     report = evaluate_authority_preflight(
         artifact,
         confirmations={
-            "rollback_switch_confirmed": True,
-            "guarded_switch_config_confirmed": True,
-            "tree_scoped_projection_writes_confirmed": True,
-            "live_canary_reviewed": True,
+            **_confirmations(),
         },
+        expected_code_version="abc123",
+        max_age_seconds=3600,
     )
 
     assert report["authority_allowed"] is False
@@ -191,20 +192,52 @@ def test_authority_preflight_blocks_failed_canary_even_with_confirmations() -> N
         live_canary=summarize_live_metadata([_live_metadata(under_selected=True), _live_metadata(), _live_metadata()]),
         producer="azure-memforest-live-canary",
         run_channel="trusted-ci",
+        code_version="abc123",
     )
 
     report = evaluate_authority_preflight(
         artifact,
         confirmations={
-            "rollback_switch_confirmed": True,
-            "guarded_switch_config_confirmed": True,
-            "tree_scoped_projection_writes_confirmed": True,
-            "live_canary_reviewed": True,
+            **_confirmations(),
         },
+        expected_code_version="abc123",
+        max_age_seconds=3600,
     )
 
     assert report["authority_allowed"] is False
     assert "canary:live_canary:under_selection_count" in report["authority_blockers"]
+
+
+def test_authority_preflight_blocks_code_version_mismatch_and_stale_artifact() -> None:
+    artifact = _clean_live_artifact(code_version="old-sha")
+    artifact["provenance"]["created_at_unix"] = 1.0
+
+    report = evaluate_authority_preflight(
+        artifact,
+        confirmations=_confirmations(),
+        expected_code_version="new-sha",
+        max_age_seconds=3600,
+    )
+
+    assert report["authority_allowed"] is False
+    assert "code_version:code_version_mismatch" in report["authority_blockers"]
+    assert "freshness:artifact_too_old" in report["authority_blockers"]
+
+
+def test_authority_preflight_blocks_empty_expected_version_and_future_artifact() -> None:
+    artifact = _clean_live_artifact()
+    artifact["provenance"]["created_at_unix"] = 9_999_999_999.0
+
+    report = evaluate_authority_preflight(
+        artifact,
+        confirmations=_confirmations(),
+        expected_code_version="",
+        max_age_seconds=3600,
+    )
+
+    assert report["authority_allowed"] is False
+    assert "code_version:expected_code_version_missing" in report["authority_blockers"]
+    assert "freshness:created_at_unix_in_future" in report["authority_blockers"]
 
 
 def test_live_canary_collector_blocks_missing_timing_and_telemetry() -> None:
@@ -216,6 +249,7 @@ def test_live_canary_collector_blocks_missing_timing_and_telemetry() -> None:
         live_canary=summarize_live_metadata([bad_metadata, _live_metadata(), _live_metadata()]),
         producer="azure-memforest-live-canary",
         run_channel="trusted-ci",
+        code_version="abc123",
     )
 
     report = evaluate_artifact(artifact, require_live_canary=True)
@@ -236,6 +270,7 @@ def test_live_canary_collector_blocks_non_numeric_timing_and_telemetry() -> None
         live_canary=summarize_live_metadata([bad_metadata, _live_metadata(), _live_metadata()]),
         producer="azure-memforest-live-canary",
         run_channel="trusted-ci",
+        code_version="abc123",
     )
 
     report = evaluate_artifact(artifact, require_live_canary=True)
@@ -251,6 +286,7 @@ def test_live_canary_collector_blocks_under_selection() -> None:
         live_canary=summarize_live_metadata([_live_metadata(under_selected=True), _live_metadata(), _live_metadata()]),
         producer="azure-memforest-live-canary",
         run_channel="trusted-ci",
+        code_version="abc123",
     )
 
     report = evaluate_artifact(artifact, require_live_canary=True)
@@ -271,6 +307,7 @@ def test_live_canary_collector_blocks_unparsed_records() -> None:
         ),
         producer="azure-memforest-live-canary",
         run_channel="trusted-ci",
+        code_version="abc123",
     )
 
     report = evaluate_artifact(artifact, require_live_canary=True)

@@ -192,6 +192,7 @@ def build_live_artifact(
     live_canary: dict[str, Any],
     producer: str,
     run_channel: str,
+    code_version: str,
     mode: str = "live_canary",
 ) -> dict[str, Any]:
     return {
@@ -203,6 +204,8 @@ def build_live_artifact(
             "run_channel": run_channel,
             "live_services_used": True,
             "fake_stores_used": False,
+            "code_version": code_version,
+            "created_at_unix": time.time(),
         },
         "coverage": _mapping(local_evidence.get("coverage")),
         "gate": _mapping(local_evidence.get("gate")),
@@ -219,6 +222,7 @@ def main() -> None:
     parser.add_argument("--output", required=True, help="Output artifact path.")
     parser.add_argument("--producer", default="azure-memforest-live-canary", choices=sorted(TRUSTED_LIVE_PRODUCERS))
     parser.add_argument("--run-channel", required=True, help="Trusted CI/canary channel identifier.")
+    parser.add_argument("--code-version", required=True, help="Git SHA or immutable code version represented by this canary.")
     args = parser.parse_args()
 
     local_evidence = _mapping(_load_json(Path(args.local_evidence)))
@@ -232,6 +236,7 @@ def main() -> None:
         ),
         producer=args.producer,
         run_channel=args.run_channel,
+        code_version=args.code_version,
     )
     output = Path(args.output)
     output.parent.mkdir(parents=True, exist_ok=True)
