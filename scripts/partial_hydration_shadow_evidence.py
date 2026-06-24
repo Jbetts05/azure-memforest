@@ -16,6 +16,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from scripts.partial_hydration_canary_gate import TRUSTED_LIVE_MODES
 from tests.test_worker_materialization import (
     FactRouteHint,
     FakeIngestCore,
@@ -33,6 +34,8 @@ from tests.test_worker_materialization import (
     _two_tree_incremental_snapshot_with_fact_and_route_manifest,
 )
 
+LOCAL_FAKE_STORE_MODE = "deterministic_local_fake_stores_no_live_services"
+
 
 def _stable(value: Any) -> Any:
     if isinstance(value, bytes):
@@ -46,6 +49,19 @@ def _stable(value: Any) -> Any:
     if hasattr(value, "__dict__"):
         return _stable(vars(value))
     return value
+
+
+def _dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _get_path(value: Any, *keys: str) -> Any:
+    current = value
+    for key in keys:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
 
 
 def _manifest_store(route_index_manifest: dict[str, Any] | None) -> FakeManifestStore:
@@ -187,7 +203,7 @@ async def _run_commit_safety_case(*, dual: bool) -> dict[str, Any]:
     }
 
 
-async def build_artifact(*, mode: str = "deterministic_local_fake_stores_no_live_services") -> dict[str, Any]:
+async def build_artifact(*, mode: str = LOCAL_FAKE_STORE_MODE) -> dict[str, Any]:
     scoped_summary = _snapshot_with_scoped_summary_cache()
     base = replace(
         _two_tree_incremental_snapshot_with_fact_and_route_manifest(),
@@ -221,11 +237,14 @@ async def build_artifact(*, mode: str = "deterministic_local_fake_stores_no_live
     ]
     commit_control = await _run_commit_safety_case(dual=False)
     commit_dual = await _run_commit_safety_case(dual=True)
-    clean_scoped = cases[0]["predicted_subset_equivalence_shadow"]["scoped_comparison"]
+    clean_prediction = _dict(cases[0].get("pre_ingest_scope_prediction"))
+    negative_prediction = _dict(cases[1].get("pre_ingest_scope_prediction"))
+    clean_shadow = _dict(cases[0].get("predicted_subset_equivalence_shadow"))
+    clean_scoped = _dict(clean_shadow.get("scoped_comparison"))
     assessed_kinds = [
         kind
         for kind, details in clean_scoped.get("by_kind", {}).items()
-        if details.get("assessed") is True
+        if isinstance(details, dict) and details.get("assessed") is True
     ]
     return {
         "schema_version": 1,
@@ -233,22 +252,22 @@ async def build_artifact(*, mode: str = "deterministic_local_fake_stores_no_live
         "mode": mode,
         "coverage": {
             "case_count": len(cases),
-            "clean_case_actual_tree_count": cases[0]["pre_ingest_scope_prediction"]["actual_tree_count"],
-            "clean_case_planned_tree_count": cases[0]["pre_ingest_scope_prediction"]["planned_tree_load_count"],
+            "clean_case_actual_tree_count": clean_prediction.get("actual_tree_count") or 0,
+            "clean_case_planned_tree_count": clean_prediction.get("planned_tree_load_count") or 0,
             "clean_case_assessed_kind_count": len(assessed_kinds),
             "clean_case_assessed_kinds": assessed_kinds,
-            "negative_case_missing_tree_count": cases[1]["pre_ingest_scope_prediction"]["missing_tree_count"],
+            "negative_case_missing_tree_count": negative_prediction.get("missing_tree_count") or 0,
             "commit_safety_store_count": len(commit_dual["stores"]),
         },
         "gate": {
-            "clean_case_no_under_selection": not cases[0]["pre_ingest_scope_prediction"]["under_selected_without_escalation"],
-            "clean_case_covers_oracle": cases[0]["pre_ingest_scope_prediction"]["covers_oracle_canonical_input"],
-            "clean_case_predicted_shadow_supported": cases[0]["predicted_subset_equivalence_shadow"]["supported"],
-            "clean_case_scoped_equivalent": cases[0]["predicted_subset_equivalence_shadow"]["scoped_comparison"]["equivalent"],
-            "clean_case_no_unassessed_kinds": cases[0]["predicted_subset_equivalence_shadow"]["scoped_comparison"]["unassessed_kinds"] == [],
-            "under_selection_detected": cases[1]["pre_ingest_scope_prediction"]["under_selected_without_escalation"],
-            "escalation_blocks_predicted_shadow": cases[2]["predicted_subset_equivalence_shadow"]["reason"] == "predicted_scope_requires_full_hydration",
-            "full_commit_path_used": all(case["partial_residency_projection_safety"]["partial_resident"] is False for case in cases),
+            "clean_case_no_under_selection": clean_prediction.get("under_selected_without_escalation") is False,
+            "clean_case_covers_oracle": clean_prediction.get("covers_oracle_canonical_input") is True,
+            "clean_case_predicted_shadow_supported": clean_shadow.get("supported") is True,
+            "clean_case_scoped_equivalent": clean_scoped.get("equivalent") is True,
+            "clean_case_no_unassessed_kinds": clean_scoped.get("unassessed_kinds") == [],
+            "under_selection_detected": negative_prediction.get("under_selected_without_escalation") is True,
+            "escalation_blocks_predicted_shadow": _get_path(cases[2], "predicted_subset_equivalence_shadow", "reason") == "predicted_scope_requires_full_hydration",
+            "full_commit_path_used": all(_get_path(case, "partial_residency_projection_safety", "partial_resident") is False for case in cases),
             "dual_commit_store_outputs_equal": commit_control["stores"] == commit_dual["stores"],
             "dual_commit_metadata_without_shadow_equal": commit_control["metadata_without_shadow"] == commit_dual["metadata_without_shadow"],
             "dual_commit_oracle_shadow_disabled": commit_control["oracle_shadow_enabled"] is False and commit_dual["oracle_shadow_enabled"] is False,
@@ -265,10 +284,17 @@ async def build_artifact(*, mode: str = "deterministic_local_fake_stores_no_live
 async def main() -> None:
     parser = argparse.ArgumentParser(description="Run bounded local partial-hydration shadow evidence.")
     parser.add_argument("--output-root", default=str(Path("artifacts") / "incremental-shadow-smoke"))
-    parser.add_argument("--mode", default="deterministic_local_fake_stores_no_live_services")
+    parser.add_argument(
+        "--mode",
+        default=LOCAL_FAKE_STORE_MODE,
+        help="Artifact mode label for local diagnostics. Trusted live modes are refused by this fake-store harness.",
+    )
     parser.add_argument("--no-fail", action="store_true", help="Write the artifact even if gates fail, but exit 0.")
     args = parser.parse_args()
-    artifact = await build_artifact(mode=args.mode)
+    mode = str(args.mode or "").strip().lower()
+    if mode in TRUSTED_LIVE_MODES:
+        parser.error("this fake-store harness cannot emit trusted live canary modes")
+    artifact = await build_artifact(mode=mode or LOCAL_FAKE_STORE_MODE)
     out_dir = Path(args.output_root)
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{artifact['run_id']}.json"

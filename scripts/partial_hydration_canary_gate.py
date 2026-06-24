@@ -26,6 +26,16 @@ MIN_ASSESSED_KINDS = 4
 MIN_COMMIT_STORE_COUNT = 4
 
 
+def _coverage_int(coverage: dict[str, Any], name: str) -> int | None:
+    value = coverage.get(name)
+    if value is None or value == "":
+        return 0
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def evaluate_artifact(artifact: dict[str, Any], *, require_live_canary: bool) -> dict[str, Any]:
     # The live mode is self-asserted by the artifact. Use the non-local path
     # only for artifacts produced by a trusted canary/CI channel; do not accept
@@ -37,18 +47,18 @@ def evaluate_artifact(artifact: dict[str, Any], *, require_live_canary: bool) ->
     missing = [name for name in REQUIRED_LOCAL_GATES if name not in gates]
     failed = [name for name in REQUIRED_LOCAL_GATES if gates.get(name) is not True]
     coverage_failures = []
-    if int(coverage.get("case_count") or 0) < 3:
-        coverage_failures.append("case_count")
-    if int(coverage.get("clean_case_actual_tree_count") or 0) <= 0:
-        coverage_failures.append("clean_case_actual_tree_count")
-    if int(coverage.get("clean_case_planned_tree_count") or 0) <= 0:
-        coverage_failures.append("clean_case_planned_tree_count")
-    if int(coverage.get("clean_case_assessed_kind_count") or 0) < MIN_ASSESSED_KINDS:
-        coverage_failures.append("clean_case_assessed_kind_count")
-    if int(coverage.get("negative_case_missing_tree_count") or 0) <= 0:
-        coverage_failures.append("negative_case_missing_tree_count")
-    if int(coverage.get("commit_safety_store_count") or 0) < MIN_COMMIT_STORE_COUNT:
-        coverage_failures.append("commit_safety_store_count")
+    coverage_thresholds = (
+        ("case_count", 3),
+        ("clean_case_actual_tree_count", 1),
+        ("clean_case_planned_tree_count", 1),
+        ("clean_case_assessed_kind_count", MIN_ASSESSED_KINDS),
+        ("negative_case_missing_tree_count", 1),
+        ("commit_safety_store_count", MIN_COMMIT_STORE_COUNT),
+    )
+    for name, minimum in coverage_thresholds:
+        value = _coverage_int(coverage, name)
+        if value is None or value < minimum:
+            coverage_failures.append(name)
     mode = str(artifact.get("mode") or "").strip().lower()
     trusted_live = mode in TRUSTED_LIVE_MODES
     live_required_failed = require_live_canary and not trusted_live
