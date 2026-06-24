@@ -294,6 +294,18 @@ def _validate_authority_preflight_report_from_env(values: dict[str, str]) -> Non
         raise ValueError("partial hydration authority preflight report is unreadable") from exc
     if not isinstance(report, dict) or report.get("authority_allowed") is not True:
         raise ValueError("partial hydration authority preflight report is not approved")
+    if report.get("canary_promotion_allowed") is not True:
+        raise ValueError("partial hydration authority preflight canary is not approved")
+    canary_report = report.get("canary_report")
+    if not isinstance(canary_report, dict) or canary_report.get("promotion_allowed") is not True:
+        raise ValueError("partial hydration authority preflight canary report is not approved")
+    if canary_report.get("promotion_blockers") not in ([], ()):
+        raise ValueError("partial hydration authority preflight canary report has blockers")
+    if report.get("authority_blockers") not in ([], ()):
+        raise ValueError("partial hydration authority preflight report has blockers")
+    for name in ("missing_confirmations", "unknown_confirmations", "code_version_failures", "freshness_failures"):
+        if report.get(name) not in ([], ()):
+            raise ValueError(f"partial hydration authority preflight report has blockers: {name}")
     if str(report.get("expected_code_version") or "").strip() != expected_code_version:
         raise ValueError("partial hydration authority preflight report code version mismatch")
     if str(report.get("artifact_code_version") or "").strip() != expected_code_version:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+import json
 import sys
 import time
 
@@ -215,6 +216,24 @@ def test_materialization_env_requires_approved_authority_preflight_report(tmp_pa
     environ["AZURE_MEMFOREST_ENABLE_PARTIAL_HYDRATION_GUARDED_SWITCH"] = "true"
     environ["AZURE_MEMFOREST_ENABLE_PARTIAL_HYDRATION_AUTHORITATIVE_SWITCH"] = "true"
 
+    def approved_report(*, created_at: float | None = None, canary_ok: bool = True) -> str:
+        return json.dumps(
+            {
+                "authority_allowed": True,
+                "canary_promotion_allowed": canary_ok,
+                "canary_report": {"promotion_allowed": canary_ok, "promotion_blockers": [] if canary_ok else ["failed"]},
+                "authority_blockers": [],
+                "missing_confirmations": [],
+                "unknown_confirmations": [],
+                "code_version_failures": [],
+                "freshness_failures": [],
+                "expected_code_version": "test-sha",
+                "artifact_code_version": "test-sha",
+                "artifact_created_at_unix": time.time() if created_at is None else created_at,
+                "max_age_seconds": 3600,
+            }
+        )
+
     with pytest.raises(ValueError, match="requires authority preflight report"):
         build_scoped_materialization_handler_from_env(environ)
 
@@ -226,7 +245,7 @@ def test_materialization_env_requires_approved_authority_preflight_report(tmp_pa
 
     mismatch = tmp_path / "mismatch.json"
     mismatch.write_text(
-        '{"authority_allowed": true, "expected_code_version": "other", "artifact_code_version": "other"}',
+        json.dumps({**json.loads(approved_report()), "expected_code_version": "other", "artifact_code_version": "other"}),
         encoding="utf-8",
     )
     environ["AZURE_MEMFOREST_PARTIAL_HYDRATION_AUTHORITY_PREFLIGHT_REPORT"] = str(mismatch)
@@ -234,35 +253,45 @@ def test_materialization_env_requires_approved_authority_preflight_report(tmp_pa
         build_scoped_materialization_handler_from_env(environ)
 
     stale = tmp_path / "stale.json"
-    stale.write_text(
-        '{"authority_allowed": true, "expected_code_version": "test-sha", "artifact_code_version": "test-sha", "artifact_created_at_unix": 1, "max_age_seconds": 3600}',
-        encoding="utf-8",
-    )
+    stale.write_text(approved_report(created_at=1), encoding="utf-8")
     environ["AZURE_MEMFOREST_PARTIAL_HYDRATION_AUTHORITY_PREFLIGHT_REPORT"] = str(stale)
     with pytest.raises(ValueError, match="preflight report is stale"):
         build_scoped_materialization_handler_from_env(environ)
 
     zero_window = tmp_path / "zero_window.json"
-    zero_window.write_text(
-        '{"authority_allowed": true, "expected_code_version": "test-sha", "artifact_code_version": "test-sha", "artifact_created_at_unix": 1, "max_age_seconds": 0}',
-        encoding="utf-8",
-    )
+    zero_window.write_text(json.dumps({**json.loads(approved_report()), "max_age_seconds": 0}), encoding="utf-8")
     environ["AZURE_MEMFOREST_PARTIAL_HYDRATION_AUTHORITY_PREFLIGHT_REPORT"] = str(zero_window)
     with pytest.raises(ValueError, match="freshness metadata is invalid"):
         build_scoped_materialization_handler_from_env(environ)
 
     env_capped = tmp_path / "env_capped.json"
-    env_capped.write_text(
-        (
-            '{"authority_allowed": true, "expected_code_version": "test-sha", '
-            '"artifact_code_version": "test-sha", '
-            f'"artifact_created_at_unix": {time.time() - 10}, "max_age_seconds": 3600}}'
-        ),
-        encoding="utf-8",
-    )
+    env_capped.write_text(approved_report(created_at=time.time() - 10), encoding="utf-8")
     environ["AZURE_MEMFOREST_PARTIAL_HYDRATION_AUTHORITY_PREFLIGHT_REPORT"] = str(env_capped)
     environ["AZURE_MEMFOREST_PARTIAL_HYDRATION_AUTHORITY_PREFLIGHT_MAX_AGE_SECONDS"] = "1"
     with pytest.raises(ValueError, match="preflight report is stale"):
+        build_scoped_materialization_handler_from_env(environ)
+
+    tampered = tmp_path / "tampered.json"
+    tampered.write_text(approved_report(canary_ok=False), encoding="utf-8")
+    environ["AZURE_MEMFOREST_PARTIAL_HYDRATION_AUTHORITY_PREFLIGHT_REPORT"] = str(tampered)
+    environ.pop("AZURE_MEMFOREST_PARTIAL_HYDRATION_AUTHORITY_PREFLIGHT_MAX_AGE_SECONDS", None)
+    with pytest.raises(ValueError, match="canary is not approved"):
+        build_scoped_materialization_handler_from_env(environ)
+
+    nested_blockers = tmp_path / "nested_blockers.json"
+    nested_payload = json.loads(approved_report())
+    nested_payload["canary_report"]["promotion_blockers"] = ["live_canary:under_selection_count"]
+    nested_blockers.write_text(json.dumps(nested_payload), encoding="utf-8")
+    environ["AZURE_MEMFOREST_PARTIAL_HYDRATION_AUTHORITY_PREFLIGHT_REPORT"] = str(nested_blockers)
+    with pytest.raises(ValueError, match="canary report has blockers"):
+        build_scoped_materialization_handler_from_env(environ)
+
+    missing_confirmation = tmp_path / "missing_confirmation.json"
+    missing_payload = json.loads(approved_report())
+    missing_payload["missing_confirmations"] = ["rollback_switch_confirmed"]
+    missing_confirmation.write_text(json.dumps(missing_payload), encoding="utf-8")
+    environ["AZURE_MEMFOREST_PARTIAL_HYDRATION_AUTHORITY_PREFLIGHT_REPORT"] = str(missing_confirmation)
+    with pytest.raises(ValueError, match="has blockers: missing_confirmations"):
         build_scoped_materialization_handler_from_env(environ)
 
 
@@ -271,10 +300,21 @@ def test_materialization_env_accepts_fresh_authority_preflight_report_then_build
 
     approved = tmp_path / "approved.json"
     approved.write_text(
-        (
-            '{"authority_allowed": true, "expected_code_version": "test-sha", '
-            '"artifact_code_version": "test-sha", '
-            f'"artifact_created_at_unix": {time.time()}, "max_age_seconds": 3600}}'
+        json.dumps(
+            {
+                "authority_allowed": True,
+                "canary_promotion_allowed": True,
+                "canary_report": {"promotion_allowed": True, "promotion_blockers": []},
+                "authority_blockers": [],
+                "missing_confirmations": [],
+                "unknown_confirmations": [],
+                "code_version_failures": [],
+                "freshness_failures": [],
+                "expected_code_version": "test-sha",
+                "artifact_code_version": "test-sha",
+                "artifact_created_at_unix": time.time(),
+                "max_age_seconds": 3600,
+            }
         ),
         encoding="utf-8",
     )
