@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 
@@ -2139,6 +2140,82 @@ async def test_cloud_state_core_partial_hydration_shadow_snapshot_uses_isolated_
     assert {tree.tree_id for tree in shadow_snapshot.trees} == {"tree-2"}
     assert set(target._tree_builder.trees) == before_trees
     assert core.last_hydration_result is None
+
+
+@pytest.mark.asyncio
+async def test_cloud_state_core_partial_shadow_from_prediction_preserves_canonical_fact_ids(tmp_path) -> None:
+    dim = 4
+    target = _user_forest(tmp_path / "target-root", dim)
+    baseline_fact = _fact_for_cell("fact_1", dim, session_id="session-1", cell_id="session-1#cell-1")
+    updated_occurrence = replace(
+        baseline_fact.occurrences[0],
+        session_id="session-2",
+        cell_id="session-2#cell-1",
+        source_turn_ids=["session-2:0"],
+    )
+    updated_fact = replace(
+        baseline_fact,
+        occurrences=[*baseline_fact.occurrences, updated_occurrence],
+        time_end=3.0,
+    )
+    extraction_result = SessionExtractionResult(
+        session_id="session-2",
+        cells=[
+            MemCell(
+                cell_id="session-2#cell-1",
+                session_id="session-2",
+                cell_index=0,
+                start_turn_index=0,
+                end_turn_index=0,
+                turn_ids=["session-2:0"],
+                content_ids=[],
+                speaker_names=["user"],
+                time_start=3.0,
+                time_end=3.0,
+                text="still likes blue kayaks",
+            )
+        ],
+        memory_items=[],
+    )
+    prediction = SimpleNamespace(
+        session_id="session-2",
+        extraction_result=extraction_result,
+        fact_write_result=FactWriteResult(
+            input_count=1,
+            inserted_count=0,
+            merged_count=1,
+            skipped_count=0,
+            inserted_facts=[],
+            canonical_fact_ids=["fact_1"],
+        ),
+        touched_facts=[updated_fact],
+    )
+    core = CloudStateHydratingUserForestCore(
+        user_forest=target,
+        tree_store=FakeTreeStore(
+            {
+                "entity:user": [
+                    _node("root", child_ids=("leaf",), tree_id="entity:user", tree_type="entity", tree_key="entity:user", tree_label="user"),
+                    _node("leaf", parent_id="root", level="L0", child_ids=("fact_1",), tree_id="entity:user", tree_type="entity", tree_key="entity:user", tree_label="user"),
+                ]
+            }
+        ),
+        fact_store=FakeFactStore({"fact_1": baseline_fact}),
+        browse_embedding_store=FakeBrowseEmbeddingStore({"root": _embedding(dim)}),
+        snapshot_store=None,
+        enable_cloud_state_hydration=True,
+    )
+
+    shadow_snapshot = await core.partial_hydration_shadow_snapshot_from_prediction(
+        FakeManifest({"forest_version": "v7", "embedding_model_version": "embed-v1"}),
+        tree_ids=["entity:user"],
+        prediction=prediction,
+    )
+
+    facts = {fact.fact_id: fact for fact in shadow_snapshot.facts}
+    assert set(facts) == {"fact_1"}
+    assert {occ.session_id for occ in facts["fact_1"].occurrences} == {"session-1", "session-2"}
+    assert "fact_1" in {fact_id for tree in shadow_snapshot.trees for fact_id in tree.fact_ids_ordered}
 
 
 @pytest.mark.asyncio

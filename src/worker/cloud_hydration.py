@@ -250,6 +250,52 @@ class CloudStateHydratingUserForestCore:
             await shadow_core.merge_from_manifest(manifest, tree_ids=requested_tree_ids)
             return shadow_core.ingest_session(session_id=session_id, turns=turns, metadata=metadata)
 
+    async def partial_hydration_shadow_snapshot_from_prediction(
+        self,
+        manifest: Any,
+        *,
+        tree_ids: list[str] | tuple[str, ...] | set[str],
+        prediction: Any,
+    ) -> Any:
+        """Run partial hydrate plus precomputed prepass finalization in an isolated forest."""
+
+        if not self.enable_cloud_state_hydration:
+            raise CloudStateHydrationIncomplete("cloud state hydration is disabled")
+        requested_tree_ids = tuple(str(tree_id) for tree_id in tree_ids if str(tree_id))
+        if not requested_tree_ids:
+            raise ValueError("tree_ids must contain at least one tree id for partial hydration shadow")
+        from src.forest.user_forest import UserForest
+
+        with tempfile.TemporaryDirectory(prefix="azure-memforest-partial-shadow-") as tmp_dir:
+            shadow_forest = UserForest(
+                self.user_forest.user_id,
+                Path(tmp_dir) / self.user_forest.user_id,
+                self.user_forest._config,
+                chat_client=self.user_forest._chat_client,
+                embedding_client=self.user_forest._embedding_client,
+            )
+            shadow_core = CloudStateHydratingUserForestCore(
+                user_forest=shadow_forest,
+                tree_store=self.tree_store,
+                tree_store_factory=self.tree_store_factory,
+                fact_store=self.fact_store,
+                summary_cache=self.summary_cache,
+                browse_embedding_store=self.browse_embedding_store,
+                browse_embedding_store_factory=self.browse_embedding_store_factory,
+                snapshot_store=None,
+                enable_cloud_state_hydration=True,
+                fallback_to_snapshot=False,
+                cloud_state_read_attempts=self.cloud_state_read_attempts,
+            )
+            await shadow_core.merge_from_manifest(manifest, tree_ids=requested_tree_ids)
+            touched_facts = list(getattr(prediction, "touched_facts", ()) or ())
+            if touched_facts:
+                managed_touched_facts = [_managed_fact_from_any(fact) for fact in touched_facts]
+                _upsert_facts_into_fact_manager(shadow_forest._fact_manager, managed_touched_facts)
+                for fact in managed_touched_facts:
+                    shadow_forest._tree_builder._fact_catalog[fact.fact_id] = fact
+            return shadow_core.finalize_pre_ingest_route_prediction(prediction)
+
     def ingest_session(self, *, session_id: str, turns: list[dict[str, Any]], metadata: dict[str, Any]) -> Any:
         self.user_forest.ingest_session(session_id, turns)
         return self.user_forest.snapshot_for_materialization()

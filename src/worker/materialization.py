@@ -580,8 +580,9 @@ class MemForestMaterializationHandler:
             }
         if latest is None:
             return {"schema_version": 1, "enabled": True, "supported": False, "reason": "no_committed_manifest"}
+        prediction_checker = getattr(self._ingest_core, "partial_hydration_shadow_snapshot_from_prediction", None)
         checker = getattr(self._ingest_core, "partial_hydration_shadow_snapshot_from_manifest", None)
-        if checker is None or not callable(checker):
+        if (prediction_checker is None or not callable(prediction_checker)) and (checker is None or not callable(checker)):
             return {"schema_version": 1, "enabled": True, "supported": False, "reason": "partial_hydration_equivalence_checker_missing"}
         try:
             scope = _scope_with_deleted_trees(getattr(pre_ingest_prediction, "pre_ingest_scope", None), projection.deleted_tree_ids)
@@ -594,15 +595,24 @@ class MemForestMaterializationHandler:
                     "escalation_reasons": list(getattr(scope, "escalation_reasons", ()) or ()),
                 }
             tree_ids = tuple(getattr(scope, "tree_ids_to_load", ()) or ())
-            shadow_snapshot = await _maybe_await(
-                checker(
-                    latest,
-                    tree_ids=tree_ids,
-                    session_id=envelope.session_id,
-                    turns=turns,
-                    metadata=metadata,
+            if prediction_checker is not None and callable(prediction_checker):
+                shadow_snapshot = await _maybe_await(
+                    prediction_checker(
+                        latest,
+                        tree_ids=tree_ids,
+                        prediction=pre_ingest_prediction,
+                    )
                 )
-            )
+            else:
+                shadow_snapshot = await _maybe_await(
+                    checker(
+                        latest,
+                        tree_ids=tree_ids,
+                        session_id=envelope.session_id,
+                        turns=turns,
+                        metadata=metadata,
+                    )
+                )
             shadow_projection = project_forest_snapshot(
                 shadow_snapshot,
                 tenant_id=envelope.tenant_id,
