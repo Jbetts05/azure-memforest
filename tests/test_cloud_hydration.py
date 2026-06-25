@@ -326,7 +326,18 @@ def test_user_forest_pre_ingest_route_prediction_dedupes_without_building_trees(
         scene_bootstrap_initialized=True,
         scene_scores_include_time_bonus=True,
         entity_records=(EntityRouteRecord("user", "entity:user", "active", 0, 0),),
-        scene_records=(),
+        scene_records=(
+            SceneRouteRecord(
+                cluster_id="scene:travel",
+                tree_id="tree:scene:travel",
+                scope_key="travel",
+                fact_count=3,
+                centroid_hash="hash",
+                centroid=tuple(_embedding(4)),
+                latest_fact_time=1.0,
+                fact_ids=("prior-1", "prior-2", "prior-3"),
+            ),
+        ),
         cluster_merge_possible=False,
         suppression_flip_possible=False,
     )
@@ -342,6 +353,8 @@ def test_user_forest_pre_ingest_route_prediction_dedupes_without_building_trees(
     assert prediction.touched_facts
     assert prediction.route_hints
     assert prediction.route_hints[0].new_session_id == "session-1"
+    assert prediction.route_hints[0].embedding == tuple(_embedding(4))
+    assert prediction.route_hints[0].scene_similarities
     assert "entity:user" in prediction.pre_ingest_scope.tree_ids_to_load
     assert forest.snapshot_for_materialization().trees == []
 

@@ -247,6 +247,7 @@ class UserForest:
             route_hints = build_fact_route_hints(
                 route_index=route_index,
                 facts=touched_facts,
+                fact_embeddings=self._fact_manager.fact_embeddings(),
                 current_session_id=session_id,
             )
             route_risks = analyze_batch_route_risks(
