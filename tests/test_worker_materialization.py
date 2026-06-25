@@ -2351,6 +2351,7 @@ async def test_materialization_handler_pre_ingest_prediction_flags_under_selecti
             prompt_config_hash="prompt-hash",
             lease_renewal_seconds=9999,
             enable_pre_ingest_route_prediction_prepass=True,
+            enable_partial_hydration_equivalence_shadow=True,
         ),
     )
 
@@ -2571,6 +2572,7 @@ async def test_materialization_handler_pre_ingest_prepass_falls_back_before_muta
             prompt_config_hash="prompt-hash",
             lease_renewal_seconds=9999,
             enable_pre_ingest_route_prediction_prepass=True,
+            enable_partial_hydration_equivalence_shadow=True,
         ),
     )
 
@@ -2613,6 +2615,7 @@ async def test_materialization_handler_pre_ingest_prepass_falls_back_on_stale_ro
             prompt_config_hash="prompt-hash",
             lease_renewal_seconds=9999,
             enable_pre_ingest_route_prediction_prepass=True,
+            enable_partial_hydration_equivalence_shadow=True,
         ),
     )
 
@@ -2621,6 +2624,49 @@ async def test_materialization_handler_pre_ingest_prepass_falls_back_on_stale_ro
     assert core.route_index_match_checks
     assert core.pre_ingest_prediction_calls == []
     assert core.called is True
+    assert manifest_store.latest.metadata["predicted_subset_equivalence_shadow"]["reason"] == "route_metadata_stale"
+
+
+@pytest.mark.asyncio
+async def test_materialization_handler_pre_ingest_prepass_prepare_failure_is_terminal() -> None:
+    snapshot = _two_tree_incremental_snapshot_with_fact_and_route_manifest()
+    manifest_store = FakeManifestStore()
+    manifest_store.latest = ForestManifest(
+        manifest_id="manifest-v1",
+        tenant_id="tenant-1",
+        user_id="user-1",
+        forest_version="v1",
+        generation=1,
+        status="committed",
+        created_at_unix=1.0,
+        metadata={
+            "job_id": "previous",
+            "job_type": "ingest_session",
+            "embedding_model_version": "embed-v1",
+            "route_index_manifest": snapshot.route_index_manifest,
+        },
+    )
+    core = FakeIngestCore(snapshot)
+    core.pre_ingest_prediction = None
+    handler = _handler(
+        manifest_store=manifest_store,
+        core=core,
+        baseline_provider=MatchingProjectionBaselineProvider(),
+        config=MaterializationHandlerConfig(
+            owner_id="worker-1",
+            embedding_model_version="embed-v1",
+            code_version="test-sha",
+            prompt_config_hash="prompt-hash",
+            lease_renewal_seconds=9999,
+            enable_pre_ingest_route_prediction_prepass=True,
+        ),
+    )
+
+    with pytest.raises(TransientHandlerError, match="pre-ingest route prediction prepass failed"):
+        await handler.handle(_envelope(), {"fencing_token": 1})
+
+    assert core.pre_ingest_prediction_calls
+    assert core.called is False
 
 
 @pytest.mark.asyncio

@@ -263,7 +263,7 @@ class MemForestMaterializationHandler:
                 model_telemetry = {}
                 with collect_model_telemetry() as telemetry:
                     extract_build_started = time.perf_counter()
-                    snapshot, pre_ingest_prediction = await self._run_ingest_session(
+                    snapshot, pre_ingest_prediction, pre_ingest_prepass_unavailable_reason = await self._run_ingest_session(
                         envelope,
                         fencing_token=fencing_token,
                         budget=budget_from_document(claimed_job) or budget_for_envelope(envelope),
@@ -357,6 +357,7 @@ class MemForestMaterializationHandler:
                 forest_version=forest_version,
                 generation=generation,
                 pre_ingest_prediction=pre_ingest_prediction,
+                pre_ingest_prepass_unavailable_reason=pre_ingest_prepass_unavailable_reason,
             )
             await self._update_job_stage(envelope, fencing_token=fencing_token, stage="write_projection", detail="Writing facts, trees, embeddings, recall documents, and snapshot.", telemetry=telemetry)
             write_projection_started = time.perf_counter()
@@ -563,6 +564,7 @@ class MemForestMaterializationHandler:
         forest_version: str,
         generation: int,
         pre_ingest_prediction: Any | None,
+        pre_ingest_prepass_unavailable_reason: str | None = None,
     ) -> dict[str, Any]:
         if not (
             self._config.enable_partial_hydration_equivalence_shadow
@@ -570,7 +572,12 @@ class MemForestMaterializationHandler:
         ):
             return {"schema_version": 1, "enabled": False, "supported": False, "reason": "disabled"}
         if pre_ingest_prediction is None:
-            return {"schema_version": 1, "enabled": True, "supported": False, "reason": "pre_ingest_prediction_missing"}
+            return {
+                "schema_version": 1,
+                "enabled": True,
+                "supported": False,
+                "reason": pre_ingest_prepass_unavailable_reason or "pre_ingest_prediction_missing",
+            }
         if latest is None:
             return {"schema_version": 1, "enabled": True, "supported": False, "reason": "no_committed_manifest"}
         checker = getattr(self._ingest_core, "partial_hydration_shadow_snapshot_from_manifest", None)
@@ -647,7 +654,7 @@ class MemForestMaterializationHandler:
         metadata: dict[str, Any],
         telemetry: dict[str, Any],
         route_index_manifest: dict[str, Any] | None = None,
-    ) -> tuple[ForestMaterializationSnapshot, Any | None]:
+    ) -> tuple[ForestMaterializationSnapshot, Any | None, str | None]:
         stop_monitor = asyncio.Event()
         ingest_task = asyncio.create_task(
             asyncio.to_thread(
@@ -698,7 +705,7 @@ class MemForestMaterializationHandler:
         turns: list[dict[str, Any]],
         metadata: dict[str, Any],
         route_index_manifest: dict[str, Any] | None,
-    ) -> tuple[ForestMaterializationSnapshot, Any | None]:
+    ) -> tuple[ForestMaterializationSnapshot, Any | None, str | None]:
         prepare = getattr(self._ingest_core, "prepare_pre_ingest_route_prediction", None)
         finalize = getattr(self._ingest_core, "finalize_pre_ingest_route_prediction", None)
         matches_route_index = getattr(self._ingest_core, "route_index_manifest_matches_current", None)
@@ -716,26 +723,35 @@ class MemForestMaterializationHandler:
             try:
                 route_index_manifest_from_dict(route_index_manifest)
             except Exception:
-                return self._ingest_core.ingest_session(session_id=session_id, turns=turns, metadata=metadata), None
+                return self._ingest_core.ingest_session(session_id=session_id, turns=turns, metadata=metadata), None, "route_metadata_malformed"
             if not callable(matches_route_index):
-                return self._ingest_core.ingest_session(session_id=session_id, turns=turns, metadata=metadata), None
+                return self._ingest_core.ingest_session(session_id=session_id, turns=turns, metadata=metadata), None, "staleness_checker_missing"
             try:
                 if not matches_route_index(
                     route_index_manifest=route_index_manifest,
                     embedding_model_version=self._config.embedding_model_version,
                 ):
-                    return self._ingest_core.ingest_session(session_id=session_id, turns=turns, metadata=metadata), None
-            except Exception:
-                return self._ingest_core.ingest_session(session_id=session_id, turns=turns, metadata=metadata), None
-            prediction = prepare(
-                session_id=session_id,
-                turns=turns,
-                route_index_manifest=route_index_manifest,
-                embedding_model_version=self._config.embedding_model_version,
-            )
-            snapshot = finalize(prediction)
-            return snapshot, prediction
-        return self._ingest_core.ingest_session(session_id=session_id, turns=turns, metadata=metadata), None
+                    return self._ingest_core.ingest_session(session_id=session_id, turns=turns, metadata=metadata), None, "route_metadata_stale"
+            except Exception as exc:
+                return self._ingest_core.ingest_session(session_id=session_id, turns=turns, metadata=metadata), None, f"route_metadata_staleness_check_failed:{type(exc).__name__}"
+            try:
+                prediction = prepare(
+                    session_id=session_id,
+                    turns=turns,
+                    route_index_manifest=route_index_manifest,
+                    embedding_model_version=self._config.embedding_model_version,
+                )
+                snapshot = finalize(prediction)
+            except Exception as exc:
+                raise TransientHandlerError(f"pre-ingest route prediction prepass failed: {type(exc).__name__}:{exc}") from exc
+            return snapshot, prediction, None
+        if not self._config.enable_pre_ingest_route_prediction_prepass:
+            reason = "prepass_disabled"
+        elif not route_index_manifest:
+            reason = "route_index_manifest_missing"
+        else:
+            reason = "prepass_methods_missing"
+        return self._ingest_core.ingest_session(session_id=session_id, turns=turns, metadata=metadata), None, reason
 
     async def _monitor_extract_build(
         self,
