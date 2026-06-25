@@ -5,7 +5,7 @@ from dataclasses import replace
 import pytest
 
 from src.cloud.contracts import StoredTreeNode
-from src.cloud.projection_plan import EntityRouteRecord, RouteIndexManifest, route_index_manifest_to_dict
+from src.cloud.projection_plan import EntityRouteRecord, RouteIndexManifest, SceneRouteRecord, route_index_manifest_to_dict
 from src.config.config import load_default_config
 from src.build.tree_types import TreeBuildResult
 from src.forest.memforest import _content_key
@@ -819,6 +819,172 @@ async def test_cloud_hydration_applies_state_to_real_user_forest(tmp_path) -> No
     assert user_forest._node_index.get_embedding("root") is not None
     assert [fact.fact_id for fact in snapshot.facts] == ["fact_1"]
     assert [tree.tree_id for tree in snapshot.trees] == ["tree-1"]
+
+
+@pytest.mark.asyncio
+async def test_cloud_hydration_restores_route_state_from_manifest(tmp_path) -> None:
+    dim = 4
+    target = _user_forest(tmp_path, dim)
+    cfg = target._config.tree
+    scene_tree_id = "tree:scene:memory_alpha"
+    route_index = RouteIndexManifest(
+        embedding_model_version="embed-v1",
+        entity_active_min_facts=cfg.entity.active_min_facts,
+        entity_active_min_sessions=cfg.entity.active_min_sessions,
+        entity_suppress_below_facts=cfg.entity.suppress_below_facts,
+        scene_assign_threshold=cfg.scene.theta_assign,
+        scene_secondary_threshold=cfg.scene.theta_second,
+        scene_spawn_threshold=cfg.scene.theta_spawn,
+        scene_max_cluster_size=cfg.scene.max_cluster_size,
+        scene_merge_threshold=cfg.scene.theta_merge,
+        scene_max_time_gap_days=cfg.scene.max_time_gap_days,
+        scene_bootstrap_initialized=True,
+        scene_scores_include_time_bonus=True,
+        entity_records=(
+            EntityRouteRecord(
+                entity_key="alice",
+                tree_id="entity:alice",
+                state="active",
+                distinct_fact_count=2,
+                distinct_session_count=3,
+                fact_ids=("fact_1", "fact_2"),
+            ),
+            EntityRouteRecord(
+                entity_key="user",
+                tree_id="entity:user",
+                state="active",
+                distinct_fact_count=0,
+                distinct_session_count=0,
+                fact_ids=(),
+            ),
+        ),
+        scene_records=(
+            SceneRouteRecord(
+                cluster_id="scene:memory_alpha",
+                tree_id=scene_tree_id,
+                scope_key="general",
+                fact_count=2,
+                centroid_hash="1c402f25d1c0409ad401ed8aa213b3e075ac92265694c616eb2ffce8c64e2435",
+                centroid=tuple(_embedding(dim)),
+                latest_fact_time=2.0,
+                fact_ids=("fact_1", "fact_2"),
+            ),
+        ),
+        cluster_merge_possible=True,
+        suppression_flip_possible=True,
+        suppression_currently_possible=True,
+        suppression_candidate_count=1,
+    )
+    core = CloudStateHydratingUserForestCore(
+        user_forest=target,
+        tree_store_factory=lambda forest_version: FakeTreeStore(
+            {
+                scene_tree_id: [
+                    _node(
+                        "scene-root",
+                        child_ids=("scene-leaf-1", "scene-leaf-2"),
+                        tree_id=scene_tree_id,
+                        tree_type="scene",
+                        tree_key="scene:memory_alpha",
+                        tree_label="memory alpha",
+                    ),
+                    _node(
+                        "scene-leaf-1",
+                        parent_id="scene-root",
+                        level="L0",
+                        child_ids=("fact_1",),
+                        tree_id=scene_tree_id,
+                        tree_type="scene",
+                        tree_key="scene:memory_alpha",
+                        tree_label="memory alpha",
+                    ),
+                    _node(
+                        "scene-leaf-2",
+                        parent_id="scene-root",
+                        level="L0",
+                        child_ids=("fact_2",),
+                        tree_id=scene_tree_id,
+                        tree_type="scene",
+                        tree_key="scene:memory_alpha",
+                        tree_label="memory alpha",
+                    ),
+                ],
+                "entity:alice": [
+                    _node(
+                        "entity-root",
+                        child_ids=("entity-leaf-1", "entity-leaf-2"),
+                        tree_id="entity:alice",
+                        tree_type="entity",
+                        tree_key="entity:alice",
+                        tree_label="alice",
+                    ),
+                    _node(
+                        "entity-leaf-1",
+                        parent_id="entity-root",
+                        level="L0",
+                        child_ids=("fact_1",),
+                        tree_id="entity:alice",
+                        tree_type="entity",
+                        tree_key="entity:alice",
+                        tree_label="alice",
+                    ),
+                    _node(
+                        "entity-leaf-2",
+                        parent_id="entity-root",
+                        level="L0",
+                        child_ids=("fact_2",),
+                        tree_id="entity:alice",
+                        tree_type="entity",
+                        tree_key="entity:alice",
+                        tree_label="alice",
+                    ),
+                ]
+            }
+        ),
+        fact_store=FakeFactStore(
+            {
+                "fact_1": _fact_for_cell("fact_1", dim, session_id="session-1", cell_id="session-1#cell-1"),
+                "fact_2": replace(
+                    _fact_for_cell("fact_2", dim, session_id="session-2", cell_id="session-2#cell-1"),
+                    first_session_id="session-2",
+                ),
+            }
+        ),
+        summary_cache=FakeSummaryCache({_content_key(frozenset({"fact_1", "fact_2"})): "cached root"}),
+        browse_embedding_store_factory=lambda forest_version: FakeBrowseEmbeddingStore(
+            {"scene-root": _embedding(dim), "entity-root": _embedding(dim)}
+        ),
+        enable_cloud_state_hydration=True,
+        fallback_to_snapshot=False,
+    )
+    route_index_manifest = route_index_manifest_to_dict(route_index)
+
+    await core.hydrate_from_manifest(
+        FakeManifest(
+            {
+                "forest_version": "v7",
+                "embedding_model_version": "embed-v1",
+                "route_index_manifest": route_index_manifest,
+            }
+        )
+    )
+
+    assert target.route_index_manifest_matches_current(
+        route_index_manifest,
+        embedding_model_version="embed-v1",
+    )
+    target._tree_builder.entity_router.assign(
+        replace(
+            _fact_for_cell("fact_3", dim, session_id="session-3", cell_id="session-3#cell-1"),
+            first_session_id="session-3",
+            time_start=3.0,
+            time_end=3.0,
+        )
+    )
+    candidate = target._tree_builder.entity_router.candidate("alice")
+    assert candidate is not None
+    assert candidate.distinct_session_count == 4
+    assert candidate.state == "active"
 
 
 @pytest.mark.asyncio

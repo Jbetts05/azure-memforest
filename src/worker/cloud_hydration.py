@@ -20,7 +20,7 @@ import numpy as np
 
 from src.build.node_index import NodeEntry, NodeIndex
 from src.build.tree import validate_tree_structure
-from src.build.tree_types import MemTree, MemTreeNode, SessionLeaf
+from src.build.tree_types import EntityCandidate, MemTree, MemTreeNode, SceneBootstrapState, SceneCluster, SessionLeaf
 from src.forest.memforest import _content_key
 from src.forest.session_registry import CellRecord, SessionRecord, TurnRecord
 from src.utils.types import FactOccurrence, ManagedFact
@@ -130,6 +130,7 @@ class CloudStateHydratingUserForestCore:
             if _cloud_state_missing_prerequisites(state):
                 raise CloudStateHydrationIncomplete("cloud state hydration is incomplete")
             self.last_hydration_result = apply_cloud_state_to_user_forest(self.user_forest, state)
+            _restore_route_state_from_manifest(self.user_forest, manifest)
             self.user_forest._record_projection_baseline(forest_version)
         except Exception:
             if not self.fallback_to_snapshot or not _manifest_has_snapshot(manifest):
@@ -162,6 +163,7 @@ class CloudStateHydratingUserForestCore:
         if _cloud_state_missing_prerequisites(state):
             raise CloudStateHydrationIncomplete("partial cloud state hydration is incomplete")
         self.last_hydration_result = merge_cloud_state_into_user_forest(self.user_forest, state)
+        _restore_route_state_from_manifest(self.user_forest, manifest)
         self.user_forest._mark_projection_delta_unknown()
 
     async def check_partial_hydration_from_manifest(self, manifest: Any, *, tree_ids: list[str] | tuple[str, ...] | set[str]) -> dict[str, Any]:
@@ -870,6 +872,100 @@ def _apply_cloud_state_locked(user_forest: Any, state: CloudUserForestState) -> 
         missing_summary_cache_keys=state.missing_summary_cache_keys,
         missing_node_embedding_ids=state.missing_node_embedding_ids,
     )
+
+
+def _restore_route_state_from_manifest(user_forest: Any, manifest: Any) -> None:
+    metadata = dict(getattr(manifest, "metadata", {}) or {})
+    route_index_raw = metadata.get("route_index_manifest")
+    if not isinstance(route_index_raw, dict) or not route_index_raw:
+        return
+    from src.build.entity_router import _normalise_entity, _surface_is_specific
+    from src.cloud.projection_plan import route_index_manifest_from_dict
+
+    route_index = route_index_manifest_from_dict(route_index_raw)
+    trees_by_id = {tree.tree_id: tree for tree in user_forest._tree_builder._trees.values()}
+    facts_by_id = {
+        fact.fact_id: fact
+        for fact in user_forest._fact_manager.iter_facts()
+        if str(getattr(fact, "fact_id", "") or "")
+    }
+
+    entity_candidates: dict[str, EntityCandidate] = {}
+    for record in route_index.entity_records:
+        if record.entity_key == "user":
+            continue
+        record_facts = [facts_by_id[fact_id] for fact_id in record.fact_ids if fact_id in facts_by_id]
+        display_label = record.entity_key.replace("_", " ")
+        if record.state == "active":
+            display_label = display_label.title()
+        first_seen_values: list[float] = []
+        last_seen_values: list[float] = []
+        session_ids: list[str] = []
+        for fact in record_facts:
+            for entity in getattr(fact, "entities", ()) or ():
+                if _normalise_entity(str(entity)) == record.entity_key:
+                    candidate_label = str(entity).strip()
+                    if _surface_is_specific(candidate_label):
+                        display_label = candidate_label
+                    break
+            if getattr(fact, "time_start", None) is not None:
+                first_seen_values.append(float(fact.time_start))
+            fact_last_seen = getattr(fact, "time_end", None)
+            if fact_last_seen is None:
+                fact_last_seen = getattr(fact, "time_start", None)
+            if fact_last_seen is not None:
+                last_seen_values.append(float(fact_last_seen))
+            for occurrence in getattr(fact, "occurrences", ()) or ():
+                session_id = str(getattr(occurrence, "session_id", "") or "")
+                if session_id and session_id not in session_ids:
+                    session_ids.append(session_id)
+            first_session_id = str(getattr(fact, "first_session_id", "") or "")
+            if first_session_id and first_session_id not in session_ids:
+                session_ids.append(first_session_id)
+        while len(session_ids) < int(record.distinct_session_count):
+            session_ids.append(f"__route_manifest_session_{record.entity_key}_{len(session_ids) + 1}")
+        entity_candidates[record.entity_key] = EntityCandidate(
+            entity_key=record.entity_key,
+            display_label=display_label,
+            support_count=len(record.fact_ids),
+            distinct_fact_count=int(record.distinct_fact_count),
+            distinct_session_count=int(record.distinct_session_count),
+            first_seen_at=min(first_seen_values) if first_seen_values else None,
+            last_seen_at=max(last_seen_values) if last_seen_values else None,
+            fact_ids=list(record.fact_ids),
+            session_ids=list(session_ids),
+            state=record.state,
+        )
+
+    scene_clusters: dict[str, SceneCluster] = {}
+    now = time.time()
+    for record in route_index.scene_records:
+        tree = trees_by_id.get(record.tree_id)
+        scene_clusters[record.cluster_id] = SceneCluster(
+            cluster_id=record.cluster_id,
+            label=str(getattr(tree, "label", "") or record.cluster_id.removeprefix("scene:")),
+            scope_key=record.scope_key,
+            centroid=list(record.centroid),
+            fact_count=int(record.fact_count),
+            fact_ids=list(record.fact_ids),
+            created_at=float(getattr(tree, "created_at", None) or now),
+            updated_at=float(getattr(tree, "updated_at", None) or now),
+            latest_fact_time=record.latest_fact_time,
+            parent_cluster_id=None,
+        )
+
+    entity_router = user_forest._tree_builder.entity_router
+    scene_router = user_forest._tree_builder.scene_router
+    with entity_router._lock:
+        entity_router._candidates = entity_candidates
+    with scene_router._lock:
+        scene_router._clusters = scene_clusters
+        scene_router._bootstrap_state = SceneBootstrapState(
+            initialized=bool(route_index.scene_bootstrap_initialized),
+            buffered_fact_ids=[],
+            cluster_count=len(scene_clusters),
+        )
+        scene_router._bootstrap_buffer = []
 
 
 def _merge_cloud_state_locked(user_forest: Any, state: CloudUserForestState) -> CloudHydrationApplyResult:
