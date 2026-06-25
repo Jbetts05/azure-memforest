@@ -288,6 +288,7 @@ class CloudStateHydratingUserForestCore:
                 cloud_state_read_attempts=self.cloud_state_read_attempts,
             )
             await shadow_core.merge_from_manifest(manifest, tree_ids=requested_tree_ids)
+            _seed_prediction_session_alias(shadow_forest, prediction)
             touched_facts = list(getattr(prediction, "touched_facts", ()) or ())
             if touched_facts:
                 managed_touched_facts = [_managed_fact_from_any(fact) for fact in touched_facts]
@@ -397,6 +398,23 @@ def _store_for_manifest_version(store: Any | None, factory: Any | None, forest_v
 def _manifest_has_snapshot(manifest: Any) -> bool:
     metadata = getattr(manifest, "metadata", {}) or {}
     return bool(metadata.get("snapshot_id") and metadata.get("snapshot_content_sha256"))
+
+
+def _seed_prediction_session_alias(user_forest: Any, prediction: Any) -> None:
+    session_id = str(getattr(prediction, "session_id", "") or "")
+    if not session_id:
+        return
+    scope = getattr(prediction, "pre_ingest_scope", None)
+    predicted = tuple(getattr(scope, "predicted_session_tree_ids", ()) or ())
+    aliases = [
+        str(tree_id).removeprefix("session:")
+        for tree_id in predicted
+        if str(tree_id).startswith("session:")
+    ]
+    if len(aliases) != 1:
+        return
+    with user_forest._tree_builder._lock:
+        user_forest._tree_builder._session_alias_map[session_id] = aliases[0]
 
 
 async def load_memtrees_from_tree_store(tree_store: Any, *, tree_ids: list[str] | tuple[str, ...] | set[str] | None = None) -> list[MemTree]:

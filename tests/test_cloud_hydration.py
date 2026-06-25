@@ -7,6 +7,7 @@ import pytest
 
 from src.cloud.contracts import StoredTreeNode
 from src.cloud.projection_plan import EntityRouteRecord, RouteIndexManifest, SceneRouteRecord, route_index_manifest_to_dict
+from src.cloud.projection_plan import PreIngestTreeScope
 from src.config.config import load_default_config
 from src.build.tree_types import TreeBuildResult
 from src.forest.memforest import _content_key
@@ -2189,6 +2190,14 @@ async def test_cloud_state_core_partial_shadow_from_prediction_preserves_canonic
             canonical_fact_ids=["fact_1"],
         ),
         touched_facts=[updated_fact],
+        pre_ingest_scope=PreIngestTreeScope(
+            full_hydration_required=False,
+            tree_ids_to_load=("entity:user", "session:sess_0002"),
+            escalation_reasons=(),
+            predicted_entity_tree_ids=("entity:user",),
+            predicted_scene_tree_ids=(),
+            predicted_session_tree_ids=("session:sess_0002",),
+        ),
     )
     core = CloudStateHydratingUserForestCore(
         user_forest=target,
@@ -2216,6 +2225,7 @@ async def test_cloud_state_core_partial_shadow_from_prediction_preserves_canonic
     assert set(facts) == {"fact_1"}
     assert {occ.session_id for occ in facts["fact_1"].occurrences} == {"session-1", "session-2"}
     assert "fact_1" in {fact_id for tree in shadow_snapshot.trees for fact_id in tree.fact_ids_ordered}
+    assert "session:sess_0002" in {tree.tree_id for tree in shadow_snapshot.trees}
 
 
 @pytest.mark.asyncio
