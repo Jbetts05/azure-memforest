@@ -255,13 +255,16 @@ class TreeBuilder:
         if cells:
             self._ensure_session_aliases([cells[0].session_id])
 
-        if not self._scene_router.all_cluster_ids():
-            self._scene_router.bootstrap(sorted_facts)
-
         # ── scene routing + insert ───────────────────────────────────────
         scene_assignments = self._scene_router.assign_many(sorted_facts)
+        scene_facts = [
+            self._fact_catalog[fact_id]
+            for fact_id in sorted(scene_assignments)
+            if fact_id in self._fact_catalog
+        ]
         for fact in sorted_facts:
             self._entity_router.assign(fact)
+        for fact in sorted(scene_facts, key=lambda f: (f.time_start if f.time_start is not None else 0.0, f.fact_id)):
             for cluster_id in scene_assignments.get(fact.fact_id, []):
                 tree_id = f"tree:{cluster_id}"
                 tree = self._trees.get(tree_id)
@@ -278,7 +281,8 @@ class TreeBuilder:
                     )
                     self._trees[tree_id] = tree
                 else:
-                    insert_fact(tree, fact)
+                    if fact.fact_id not in set(tree.fact_ids_ordered):
+                        insert_fact(tree, fact)
                 dirty_trees.add(tree_id)
 
         # ── entity routing + insert ──────────────────────────────────────

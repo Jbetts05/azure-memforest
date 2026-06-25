@@ -121,9 +121,11 @@ class EntityRouteRecord:
     distinct_fact_count: int
     distinct_session_count: int
     fact_ids: tuple[str, ...] = ()
+    session_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "fact_ids", tuple(sorted({str(value) for value in self.fact_ids if str(value)})))
+        object.__setattr__(self, "session_ids", tuple(sorted({str(value) for value in self.session_ids if str(value)})))
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,6 +160,7 @@ class RouteIndexManifest:
     scene_max_time_gap_days: float
     scene_bootstrap_initialized: bool
     scene_scores_include_time_bonus: bool
+    scene_bootstrap_buffered_fact_ids: tuple[str, ...] = ()
     entity_records: tuple[EntityRouteRecord, ...] = ()
     scene_records: tuple[SceneRouteRecord, ...] = ()
     cluster_merge_possible: bool = False
@@ -544,6 +547,7 @@ def build_route_index_manifest(
                     distinct_fact_count=int(candidate.distinct_fact_count),
                     distinct_session_count=int(candidate.distinct_session_count),
                     fact_ids=tuple(getattr(candidate, "fact_ids", ()) or ()),
+                    session_ids=tuple(getattr(candidate, "session_ids", ()) or ()),
                 )
                 for candidate in entity_router.iter_candidates()
                 ),
@@ -581,6 +585,7 @@ def build_route_index_manifest(
         scene_max_time_gap_days=float(scene_cfg.max_time_gap_days),
         scene_bootstrap_initialized=bool(scene_router.bootstrap_initialized()),
         scene_scores_include_time_bonus=True,
+        scene_bootstrap_buffered_fact_ids=tuple(getattr(scene_router, "bootstrap_buffered_fact_ids", lambda: ())()),
         entity_records=tuple(entity_records),
         scene_records=tuple(scene_records),
         # Forward-looking batch risk is not proven by current router state, so
@@ -825,6 +830,7 @@ def route_index_manifest_from_dict(value: Mapping[str, Any]) -> RouteIndexManife
                 distinct_fact_count=int(record.get("distinct_fact_count") or 0),
                 distinct_session_count=int(record.get("distinct_session_count") or 0),
                 fact_ids=tuple(record.get("fact_ids") or ()),
+                session_ids=tuple(record.get("session_ids") or ()),
             )
             for record in value.get("entity_records", ())
         ),
@@ -841,6 +847,7 @@ def route_index_manifest_from_dict(value: Mapping[str, Any]) -> RouteIndexManife
             )
             for record in value.get("scene_records", ())
         ),
+        scene_bootstrap_buffered_fact_ids=tuple(value.get("scene_bootstrap_buffered_fact_ids") or ()),
         cluster_merge_possible=_fail_closed_bool(value, "cluster_merge_possible"),
         suppression_flip_possible=_fail_closed_bool(value, "suppression_flip_possible"),
         cluster_merge_currently_possible=bool(value.get("cluster_merge_currently_possible")),
@@ -867,6 +874,7 @@ def route_index_manifest_to_dict(manifest: RouteIndexManifest) -> dict[str, Any]
         "scene_max_time_gap_days": manifest.scene_max_time_gap_days,
         "scene_bootstrap_initialized": manifest.scene_bootstrap_initialized,
         "scene_scores_include_time_bonus": manifest.scene_scores_include_time_bonus,
+        "scene_bootstrap_buffered_fact_ids": list(manifest.scene_bootstrap_buffered_fact_ids),
         "cluster_merge_possible": manifest.cluster_merge_possible,
         "suppression_flip_possible": manifest.suppression_flip_possible,
         "cluster_merge_currently_possible": manifest.cluster_merge_currently_possible,
@@ -881,6 +889,7 @@ def route_index_manifest_to_dict(manifest: RouteIndexManifest) -> dict[str, Any]
                 "distinct_fact_count": record.distinct_fact_count,
                 "distinct_session_count": record.distinct_session_count,
                 "fact_ids": list(record.fact_ids),
+                "session_ids": list(record.session_ids),
             }
             for record in manifest.entity_records
         ],

@@ -126,6 +126,7 @@ class CloudStateHydratingUserForestCore:
                 tree_store=tree_store,
                 browse_embedding_store=browse_embedding_store,
                 tree_ids=tree_ids,
+                fact_scope="all" if tree_ids is None else "tree_refs",
             )
             if _cloud_state_missing_prerequisites(state):
                 raise CloudStateHydrationIncomplete("cloud state hydration is incomplete")
@@ -900,7 +901,7 @@ def _restore_route_state_from_manifest(user_forest: Any, manifest: Any) -> None:
             display_label = display_label.title()
         first_seen_values: list[float] = []
         last_seen_values: list[float] = []
-        session_ids: list[str] = []
+        session_ids: list[str] = list(record.session_ids)
         for fact in record_facts:
             for entity in getattr(fact, "entities", ()) or ():
                 if _normalise_entity(str(entity)) == record.entity_key:
@@ -915,21 +916,16 @@ def _restore_route_state_from_manifest(user_forest: Any, manifest: Any) -> None:
                 fact_last_seen = getattr(fact, "time_start", None)
             if fact_last_seen is not None:
                 last_seen_values.append(float(fact_last_seen))
-            for occurrence in getattr(fact, "occurrences", ()) or ():
-                session_id = str(getattr(occurrence, "session_id", "") or "")
-                if session_id and session_id not in session_ids:
-                    session_ids.append(session_id)
             first_session_id = str(getattr(fact, "first_session_id", "") or "")
             if first_session_id and first_session_id not in session_ids:
                 session_ids.append(first_session_id)
-        while len(session_ids) < int(record.distinct_session_count):
-            session_ids.append(f"__route_manifest_session_{record.entity_key}_{len(session_ids) + 1}")
+        distinct_session_count = len(session_ids)
         entity_candidates[record.entity_key] = EntityCandidate(
             entity_key=record.entity_key,
             display_label=display_label,
             support_count=len(record.fact_ids),
             distinct_fact_count=int(record.distinct_fact_count),
-            distinct_session_count=int(record.distinct_session_count),
+            distinct_session_count=distinct_session_count,
             first_seen_at=min(first_seen_values) if first_seen_values else None,
             last_seen_at=max(last_seen_values) if last_seen_values else None,
             fact_ids=list(record.fact_ids),
@@ -960,12 +956,17 @@ def _restore_route_state_from_manifest(user_forest: Any, manifest: Any) -> None:
         entity_router._candidates = entity_candidates
     with scene_router._lock:
         scene_router._clusters = scene_clusters
+        buffered_fact_ids = [
+            fact_id
+            for fact_id in route_index.scene_bootstrap_buffered_fact_ids
+            if fact_id in facts_by_id
+        ]
         scene_router._bootstrap_state = SceneBootstrapState(
             initialized=bool(route_index.scene_bootstrap_initialized),
-            buffered_fact_ids=[],
+            buffered_fact_ids=buffered_fact_ids,
             cluster_count=len(scene_clusters),
         )
-        scene_router._bootstrap_buffer = []
+        scene_router._bootstrap_buffer = [facts_by_id[fact_id] for fact_id in buffered_fact_ids]
 
 
 def _merge_cloud_state_locked(user_forest: Any, state: CloudUserForestState) -> CloudHydrationApplyResult:

@@ -334,6 +334,8 @@ def test_build_route_index_manifest_projects_live_router_state() -> None:
     assert alice.tree_id == "entity:alice"
     assert alice.state == "active"
     assert alice.distinct_fact_count == 3
+    assert alice.session_ids == ("session-1", "session-2", "session-3")
+    assert manifest.scene_bootstrap_buffered_fact_ids == tuple(scene_router.bootstrap_buffered_fact_ids())
     assert len(manifest.scene_records) == len(scene_router.all_cluster_ids())
     assert route_index_manifest_matches_router_state(
         manifest,
@@ -711,6 +713,7 @@ def _route_index(**overrides) -> RouteIndexManifest:
         "scene_max_time_gap_days": 45.0,
         "scene_bootstrap_initialized": True,
         "scene_scores_include_time_bonus": True,
+        "scene_bootstrap_buffered_fact_ids": (),
         "cluster_merge_possible": False,
         "suppression_flip_possible": False,
         "cluster_merge_currently_possible": False,
@@ -718,7 +721,7 @@ def _route_index(**overrides) -> RouteIndexManifest:
         "cluster_merge_pair_count": 0,
         "suppression_candidate_count": 0,
         "entity_records": (
-            EntityRouteRecord("alice", "entity:alice", "active", 3, 2, fact_ids=("fact-a", "fact-b", "fact-c")),
+            EntityRouteRecord("alice", "entity:alice", "active", 3, 2, fact_ids=("fact-a", "fact-b", "fact-c"), session_ids=("s1", "s2")),
             EntityRouteRecord("bob", "entity:bob", "lazy", 2, 1, fact_ids=("fact-bob-1", "fact-bob-2")),
         ),
         "scene_records": (

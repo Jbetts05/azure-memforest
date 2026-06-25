@@ -104,6 +104,8 @@ class SceneRouter:
         embeddings = self._embed_routing_texts(facts)
         assignments: dict[str, list[str]] = {}
         with self._lock:
+            route_facts = list(facts)
+            route_embeddings = list(embeddings)
             if not self._bootstrap_state.initialized:
                 self._bootstrap_buffer.extend(facts)
                 self._bootstrap_state = SceneBootstrapState(
@@ -111,12 +113,15 @@ class SceneRouter:
                     buffered_fact_ids=[f.fact_id for f in self._bootstrap_buffer],
                     cluster_count=len(self._clusters),
                 )
-                if len(self._bootstrap_buffer) >= self._config.bootstrap_min_facts:
-                    self._bootstrap_locked(
-                        self._bootstrap_buffer,
-                        self._embed_routing_texts(self._bootstrap_buffer),
-                    )
-            for fact, embedding in zip(facts, embeddings):
+                if len(self._bootstrap_buffer) < self._config.bootstrap_min_facts:
+                    return {}
+                route_facts = list(self._bootstrap_buffer)
+                route_embeddings = self._embed_routing_texts(route_facts)
+                self._bootstrap_locked(
+                    route_facts,
+                    route_embeddings,
+                )
+            for fact, embedding in zip(route_facts, route_embeddings):
                 assignments[fact.fact_id] = self._assign_locked(fact, embedding)
                 self._insert_count += 1
         # Post-assignment merge: collapse same-domain clusters that ended
@@ -641,6 +646,10 @@ class SceneRouter:
     def bootstrap_initialized(self) -> bool:
         with self._lock:
             return bool(self._bootstrap_state.initialized)
+
+    def bootstrap_buffered_fact_ids(self) -> list[str]:
+        with self._lock:
+            return list(self._bootstrap_state.buffered_fact_ids)
 
     def remove_cluster(self, cluster_id: str) -> None:
         with self._lock:

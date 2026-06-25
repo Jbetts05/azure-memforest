@@ -264,8 +264,10 @@ def test_user_forest_materialization_snapshot_includes_route_index_manifest(tmp_
             "distinct_fact_count": 0,
             "distinct_session_count": 0,
             "fact_ids": [],
+            "session_ids": [],
         }
     ]
+    assert route_index["scene_bootstrap_buffered_fact_ids"] == []
     assert route_index["scene_records"] == []
 
 
@@ -846,8 +848,9 @@ async def test_cloud_hydration_restores_route_state_from_manifest(tmp_path) -> N
                 tree_id="entity:alice",
                 state="active",
                 distinct_fact_count=2,
-                distinct_session_count=3,
+                distinct_session_count=2,
                 fact_ids=("fact_1", "fact_2"),
+                session_ids=("session-1", "session-2"),
             ),
             EntityRouteRecord(
                 entity_key="user",
@@ -983,8 +986,161 @@ async def test_cloud_hydration_restores_route_state_from_manifest(tmp_path) -> N
     )
     candidate = target._tree_builder.entity_router.candidate("alice")
     assert candidate is not None
-    assert candidate.distinct_session_count == 4
+    assert candidate.session_ids == ["session-1", "session-2", "session-3"]
+    assert candidate.distinct_session_count == 3
     assert candidate.state == "active"
+
+
+@pytest.mark.asyncio
+async def test_cloud_hydration_restores_scene_bootstrap_buffer_for_incremental_ingest(tmp_path) -> None:
+    dim = 4
+    config = load_default_config()
+    config = replace(
+        config,
+        api=replace(config.api, embedding=replace(config.api.embedding, dimension=dim)),
+        tree=replace(
+            config.tree,
+            scene=replace(
+                config.tree.scene,
+                bootstrap_min_facts=3,
+                bootstrap_cluster_count=1,
+            ),
+        ),
+    )
+    client = FakeModelClient(dim)
+    target = UserForest(
+        "user-1",
+        tmp_path / "user-1",
+        config,
+        chat_client=client,
+        embedding_client=client,
+    )
+    fact_1 = _fact_for_cell("fact_1", dim, session_id="session-1", cell_id="session-1#cell-1")
+    fact_2 = replace(
+        _fact_for_cell("fact_2", dim, session_id="session-2", cell_id="session-2#cell-1"),
+        first_session_id="session-2",
+        time_start=2.0,
+        time_end=2.0,
+    )
+    fact_3 = replace(
+        _fact_for_cell("fact_3", dim, session_id="session-3", cell_id="session-3#cell-1"),
+        first_session_id="session-3",
+        time_start=3.0,
+        time_end=3.0,
+    )
+    route_index = RouteIndexManifest(
+        embedding_model_version="embed-v1",
+        entity_active_min_facts=config.tree.entity.active_min_facts,
+        entity_active_min_sessions=config.tree.entity.active_min_sessions,
+        entity_suppress_below_facts=config.tree.entity.suppress_below_facts,
+        scene_assign_threshold=config.tree.scene.theta_assign,
+        scene_secondary_threshold=config.tree.scene.theta_second,
+        scene_spawn_threshold=config.tree.scene.theta_spawn,
+        scene_max_cluster_size=config.tree.scene.max_cluster_size,
+        scene_merge_threshold=config.tree.scene.theta_merge,
+        scene_max_time_gap_days=config.tree.scene.max_time_gap_days,
+        scene_bootstrap_initialized=False,
+        scene_scores_include_time_bonus=True,
+        scene_bootstrap_buffered_fact_ids=("fact_1", "fact_2"),
+        entity_records=(
+            EntityRouteRecord(
+                entity_key="user",
+                tree_id="entity:user",
+                state="active",
+                distinct_fact_count=0,
+                distinct_session_count=0,
+                fact_ids=(),
+            ),
+        ),
+        scene_records=(),
+        cluster_merge_possible=True,
+        suppression_flip_possible=True,
+    )
+    core = CloudStateHydratingUserForestCore(
+        user_forest=target,
+        tree_store_factory=lambda forest_version: FakeTreeStore({}),
+        fact_store=FakeFactStore({"fact_1": fact_1, "fact_2": fact_2}),
+        summary_cache=FakeSummaryCache({}),
+        browse_embedding_store_factory=lambda forest_version: FakeBrowseEmbeddingStore({}),
+        enable_cloud_state_hydration=True,
+        fallback_to_snapshot=False,
+    )
+
+    await core.hydrate_from_manifest(
+        FakeManifest(
+            {
+                "forest_version": "v7",
+                "embedding_model_version": "embed-v1",
+                "route_index_manifest": route_index_manifest_to_dict(route_index),
+            }
+        )
+    )
+
+    assert target._tree_builder.scene_router.bootstrap_buffered_fact_ids() == ["fact_1", "fact_2"]
+    assert not target._tree_builder.scene_router.bootstrap_initialized()
+
+    target._tree_builder.ingest_structure(new_facts=[fact_3], cells=[])
+
+    assert target._tree_builder.scene_router.bootstrap_initialized()
+    scene_trees = [tree for tree in target._tree_builder.trees.values() if tree.tree_type == "scene"]
+    assert scene_trees
+    assert set().union(*(set(tree.fact_ids_ordered) for tree in scene_trees)) == {"fact_1", "fact_2", "fact_3"}
+    scene_fact_counts: dict[str, int] = {}
+    for tree in scene_trees:
+        for fact_id in tree.fact_ids_ordered:
+            scene_fact_counts[fact_id] = scene_fact_counts.get(fact_id, 0) + 1
+    assert scene_fact_counts == {"fact_1": 1, "fact_2": 1, "fact_3": 1}
+    assert {tree.tree_key for tree in scene_trees}.issubset(set(target._tree_builder.scene_router.all_cluster_ids()))
+
+
+def test_tree_builder_buffers_sub_bootstrap_scene_facts_without_orphaning_trees(tmp_path) -> None:
+    dim = 4
+    config = load_default_config()
+    config = replace(
+        config,
+        api=replace(config.api, embedding=replace(config.api.embedding, dimension=dim)),
+        tree=replace(
+            config.tree,
+            scene=replace(
+                config.tree.scene,
+                bootstrap_min_facts=3,
+                bootstrap_cluster_count=1,
+            ),
+        ),
+    )
+    client = FakeModelClient(dim)
+    forest = UserForest("user-1", tmp_path / "user-1", config, chat_client=client, embedding_client=client)
+    fact_1 = _fact_for_cell("fact_1", dim, session_id="session-1", cell_id="session-1#cell-1")
+    fact_2 = replace(
+        _fact_for_cell("fact_2", dim, session_id="session-2", cell_id="session-2#cell-1"),
+        first_session_id="session-2",
+        time_start=2.0,
+        time_end=2.0,
+    )
+    fact_3 = replace(
+        _fact_for_cell("fact_3", dim, session_id="session-3", cell_id="session-3#cell-1"),
+        first_session_id="session-3",
+        time_start=3.0,
+        time_end=3.0,
+    )
+
+    forest._tree_builder.ingest_structure(new_facts=[fact_1, fact_2], cells=[])
+
+    assert not forest._tree_builder.scene_router.bootstrap_initialized()
+    assert forest._tree_builder.scene_router.bootstrap_buffered_fact_ids() == ["fact_1", "fact_2"]
+    assert [tree for tree in forest._tree_builder.trees.values() if tree.tree_type == "scene"] == []
+
+    forest._tree_builder.ingest_structure(new_facts=[fact_3], cells=[])
+
+    assert forest._tree_builder.scene_router.bootstrap_initialized()
+    scene_trees = [tree for tree in forest._tree_builder.trees.values() if tree.tree_type == "scene"]
+    assert scene_trees
+    scene_fact_counts: dict[str, int] = {}
+    for tree in scene_trees:
+        assert tree.tree_key in set(forest._tree_builder.scene_router.all_cluster_ids())
+        for fact_id in tree.fact_ids_ordered:
+            scene_fact_counts[fact_id] = scene_fact_counts.get(fact_id, 0) + 1
+    assert scene_fact_counts == {"fact_1": 1, "fact_2": 1, "fact_3": 1}
 
 
 @pytest.mark.asyncio
