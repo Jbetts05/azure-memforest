@@ -197,12 +197,13 @@ class PreIngestTreeScope:
     escalation_reasons: tuple[str, ...]
     predicted_entity_tree_ids: tuple[str, ...]
     predicted_scene_tree_ids: tuple[str, ...]
+    predicted_session_tree_ids: tuple[str, ...] = ()
     deleted_tree_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.full_hydration_required and not self.escalation_reasons:
             raise ValueError("full_hydration_required requires at least one escalation reason")
-        predicted = set(self.predicted_entity_tree_ids) | set(self.predicted_scene_tree_ids) | set(self.deleted_tree_ids)
+        predicted = set(self.predicted_entity_tree_ids) | set(self.predicted_scene_tree_ids) | set(self.predicted_session_tree_ids) | set(self.deleted_tree_ids)
         if not predicted.issubset(set(self.tree_ids_to_load)):
             raise ValueError("tree_ids_to_load must include predicted entity, scene, and deleted trees")
 
@@ -343,6 +344,7 @@ def plan_pre_ingest_tree_scope(
     route_index: RouteIndexManifest,
     new_fact_route_hints: Iterable[FactRouteHint],
     embedding_model_version: str,
+    current_session_tree_id: str | None = None,
     deleted_tree_ids: Iterable[str] = (),
 ) -> PreIngestTreeScope:
     """Plan a conservative pre-ingest tree subset, or fail closed to full.
@@ -363,6 +365,7 @@ def plan_pre_ingest_tree_scope(
     reasons: set[str] = set()
     predicted_entities: set[str] = set()
     predicted_scenes: set[str] = set()
+    predicted_sessions: set[str] = {str(current_session_tree_id)} if str(current_session_tree_id or "") else set()
     hints = tuple(new_fact_route_hints)
     entity_fact_ids: dict[str, set[str]] = {}
     entity_session_ids: dict[str, set[str]] = {}
@@ -449,13 +452,14 @@ def plan_pre_ingest_tree_scope(
         elif route_index.scene_records:
             reasons.add("missing_scene_similarity")
 
-    tree_ids = tuple(sorted(predicted_entities | predicted_scenes | set(deleted)))
+    tree_ids = tuple(sorted(predicted_entities | predicted_scenes | predicted_sessions | set(deleted)))
     return PreIngestTreeScope(
         full_hydration_required=bool(reasons),
         tree_ids_to_load=tree_ids,
         escalation_reasons=tuple(sorted(reasons)),
         predicted_entity_tree_ids=tuple(sorted(predicted_entities)),
         predicted_scene_tree_ids=tuple(sorted(predicted_scenes)),
+        predicted_session_tree_ids=tuple(sorted(predicted_sessions)),
         deleted_tree_ids=deleted,
     )
 

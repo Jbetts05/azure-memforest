@@ -746,6 +746,7 @@ def test_plan_pre_ingest_tree_scope_returns_safe_subset_for_active_entity_and_as
                 new_session_id="session-1",
             )
         ],
+        current_session_tree_id="session:sess_0001",
         deleted_tree_ids=["entity:old"],
     )
 
@@ -753,8 +754,9 @@ def test_plan_pre_ingest_tree_scope_returns_safe_subset_for_active_entity_and_as
     assert scope.escalation_reasons == ()
     assert scope.predicted_entity_tree_ids == ("entity:alice",)
     assert scope.predicted_scene_tree_ids == ("tree:scene:travel",)
+    assert scope.predicted_session_tree_ids == ("session:sess_0001",)
     assert scope.deleted_tree_ids == ("entity:old",)
-    assert scope.tree_ids_to_load == ("entity:alice", "entity:old", "tree:scene:travel")
+    assert scope.tree_ids_to_load == ("entity:alice", "entity:old", "session:sess_0001", "tree:scene:travel")
 
 
 @pytest.mark.parametrize(

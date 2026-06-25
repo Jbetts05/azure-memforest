@@ -2520,6 +2520,7 @@ def _pre_ingest_scope_prediction_summary(
                 route_index=planned_route_index,
                 new_fact_route_hints=hints,
                 embedding_model_version=embedding_model_version,
+                current_session_tree_id=_session_tree_id_from_session_id(snapshot, session_id),
                 deleted_tree_ids=projection.deleted_tree_ids,
             )
             input_basis = "post_ingest_canonical_facts"
@@ -2584,6 +2585,17 @@ def _facts_touched_by_session(snapshot: ForestMaterializationSnapshot, *, sessio
         if any(str(getattr(occ, "session_id", "") or "") == str(session_id) for occ in occurrences):
             touched.append(fact)
     return touched
+
+
+def _session_tree_id_from_session_id(snapshot: ForestMaterializationSnapshot, session_id: str) -> str:
+    prefix = f"{session_id}#"
+    for tree in snapshot.trees:
+        if getattr(tree, "tree_type", "") != "session":
+            continue
+        for cell_id in getattr(tree, "session_leaves", {}) or {}:
+            if str(cell_id).startswith(prefix):
+                return str(getattr(tree, "tree_id", "") or f"session:{session_id}")
+    return f"session:{session_id}"
 
 
 def _partial_hydration_check_summary(partial_hydration_shadow: Mapping[str, Any]) -> dict[str, Any] | None:

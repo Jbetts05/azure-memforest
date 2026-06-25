@@ -356,6 +356,7 @@ def test_user_forest_pre_ingest_route_prediction_dedupes_without_building_trees(
     assert prediction.route_hints[0].embedding == tuple(_embedding(4))
     assert prediction.route_hints[0].scene_similarities
     assert "entity:user" in prediction.pre_ingest_scope.tree_ids_to_load
+    assert "session:sess_0001" in prediction.pre_ingest_scope.tree_ids_to_load
     assert forest.snapshot_for_materialization().trees == []
 
     result = forest.finalize_pre_ingest_route_prediction(prediction)

@@ -263,6 +263,7 @@ class UserForest:
                 route_index=scoped_route_index,
                 new_fact_route_hints=route_hints,
                 embedding_model_version=embedding_model_version,
+                current_session_tree_id=f"session:{self._tree_builder._public_session_id(session_id)}",
             )
             return PreIngestRoutePrediction(
                 session_id=session_id,
