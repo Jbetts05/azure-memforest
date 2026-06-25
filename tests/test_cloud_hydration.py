@@ -1144,6 +1144,96 @@ def test_tree_builder_buffers_sub_bootstrap_scene_facts_without_orphaning_trees(
 
 
 @pytest.mark.asyncio
+async def test_cloud_hydrate_incremental_matches_continuous_scene_bootstrap(tmp_path) -> None:
+    dim = 4
+    config = load_default_config()
+    config = replace(
+        config,
+        api=replace(config.api, embedding=replace(config.api.embedding, dimension=dim)),
+        tree=replace(
+            config.tree,
+            scene=replace(
+                config.tree.scene,
+                bootstrap_min_facts=3,
+                bootstrap_cluster_count=1,
+            ),
+        ),
+    )
+    fact_1 = _fact_for_cell("fact_1", dim, session_id="session-1", cell_id="session-1#cell-1")
+    fact_2 = replace(
+        _fact_for_cell("fact_2", dim, session_id="session-2", cell_id="session-2#cell-1"),
+        first_session_id="session-2",
+        time_start=2.0,
+        time_end=2.0,
+    )
+    fact_3 = replace(
+        _fact_for_cell("fact_3", dim, session_id="session-3", cell_id="session-3#cell-1"),
+        first_session_id="session-3",
+        time_start=3.0,
+        time_end=3.0,
+    )
+    client = FakeModelClient(dim)
+    prior = UserForest("user-1", tmp_path / "prior", config, chat_client=client, embedding_client=client)
+    prior._fact_manager.load_managed_facts([fact_1, fact_2])
+    prior._tree_builder._fact_catalog = {"fact_1": fact_1, "fact_2": fact_2}
+    prior._tree_builder.ingest_structure(new_facts=[fact_1, fact_2], cells=[])
+    route_index_manifest = prior.snapshot_for_materialization().route_index_manifest
+    assert route_index_manifest is not None
+
+    continuous = UserForest("user-1", tmp_path / "continuous", config, chat_client=client, embedding_client=client)
+    continuous._fact_manager.load_managed_facts([fact_1, fact_2, fact_3])
+    continuous._tree_builder._fact_catalog = {"fact_1": fact_1, "fact_2": fact_2, "fact_3": fact_3}
+    continuous._tree_builder.ingest_structure(new_facts=[fact_1, fact_2], cells=[])
+    continuous._tree_builder.ingest_structure(new_facts=[fact_3], cells=[])
+
+    hydrated = UserForest("user-1", tmp_path / "hydrated", config, chat_client=client, embedding_client=client)
+    core = CloudStateHydratingUserForestCore(
+        user_forest=hydrated,
+        tree_store_factory=lambda forest_version: FakeTreeStore({}),
+        fact_store=FakeFactStore({"fact_1": fact_1, "fact_2": fact_2}),
+        summary_cache=FakeSummaryCache({}),
+        browse_embedding_store_factory=lambda forest_version: FakeBrowseEmbeddingStore({}),
+        enable_cloud_state_hydration=True,
+        fallback_to_snapshot=False,
+    )
+    await core.hydrate_from_manifest(
+        FakeManifest(
+            {
+                "forest_version": "v7",
+                "embedding_model_version": "embed-v1",
+                "route_index_manifest": route_index_manifest,
+            }
+        )
+    )
+    hydrated._fact_manager.load_managed_facts([fact_3])
+    hydrated._tree_builder._fact_catalog["fact_3"] = fact_3
+    hydrated._tree_builder.ingest_structure(new_facts=[fact_3], cells=[])
+
+    assert _scene_fact_counts(hydrated) == _scene_fact_counts(continuous) == {"fact_1": 1, "fact_2": 1, "fact_3": 1}
+    assert _scene_payload_partitions(hydrated) == _scene_payload_partitions(continuous)
+    assert hydrated._tree_builder.scene_router.bootstrap_initialized() == continuous._tree_builder.scene_router.bootstrap_initialized()
+    assert hydrated._tree_builder.scene_router.bootstrap_buffered_fact_ids() == continuous._tree_builder.scene_router.bootstrap_buffered_fact_ids()
+
+
+def _scene_fact_counts(forest: UserForest) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for tree in forest._tree_builder.trees.values():
+        if tree.tree_type != "scene":
+            continue
+        for fact_id in tree.fact_ids_ordered:
+            counts[fact_id] = counts.get(fact_id, 0) + 1
+    return counts
+
+
+def _scene_payload_partitions(forest: UserForest) -> list[tuple[str, ...]]:
+    return sorted(
+        tuple(tree.fact_ids_ordered)
+        for tree in forest._tree_builder.trees.values()
+        if tree.tree_type == "scene"
+    )
+
+
+@pytest.mark.asyncio
 async def test_cloud_hydration_applies_multi_leaf_entity_tree(tmp_path) -> None:
     dim = 4
     user_forest = _user_forest(tmp_path, dim)
