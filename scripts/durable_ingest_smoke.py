@@ -420,7 +420,7 @@ async def _send_envelope_servicebus(args: argparse.Namespace, envelope: dict[str
 
     if not args.servicebus_namespace or not args.servicebus_queue:
         raise RuntimeError("--start-source servicebus requires --servicebus-namespace and --servicebus-queue.")
-    credential = _azure_credential(args, async_credential=True)
+    credential = _servicebus_credential(args)
     envelope_obj = WriteJobEnvelope(**envelope)
     body = envelope_obj.to_json()
     message = ServiceBusMessage(
@@ -452,10 +452,48 @@ async def _send_envelope_servicebus(args: argparse.Namespace, envelope: dict[str
 def _cosmos_client(args: argparse.Namespace):
     from azure.cosmos import CosmosClient
 
-    if not args.cosmos_endpoint or not args.cosmos_database or not args.azure_client_id:
-        raise RuntimeError("Cosmos access requires --cosmos-endpoint, --cosmos-database, and --azure-client-id.")
+    if not args.cosmos_endpoint or not args.cosmos_database:
+        raise RuntimeError("Cosmos access requires --cosmos-endpoint and --cosmos-database.")
+    key = str(os.getenv(str(args.cosmos_key_env or "")) or "").strip() if args.cosmos_key_env else ""
+    if key:
+        return None, CosmosClient(args.cosmos_endpoint, credential=key)
+    token = str(os.getenv(str(args.cosmos_token_env or "")) or "").strip() if args.cosmos_token_env else ""
+    if token:
+        return None, CosmosClient(args.cosmos_endpoint, credential=_StaticTokenCredential(token))
+    if not args.azure_client_id:
+        raise RuntimeError("Cosmos managed identity access requires --azure-client-id.")
     credential = _azure_credential(args)
     return credential, CosmosClient(args.cosmos_endpoint, credential=credential)
+
+
+class _StaticTokenCredential:
+    def __init__(self, token: str) -> None:
+        self._token = token
+
+    def get_token(self, *scopes: str, **kwargs: Any):
+        from azure.core.credentials import AccessToken
+
+        return AccessToken(self._token, int(time.time()) + 3600)
+
+
+class _StaticAsyncTokenCredential:
+    def __init__(self, token: str) -> None:
+        self._token = token
+
+    async def get_token(self, *scopes: str, **kwargs: Any):
+        from azure.core.credentials import AccessToken
+
+        return AccessToken(self._token, int(time.time()) + 3600)
+
+    async def close(self) -> None:
+        return None
+
+
+def _servicebus_credential(args: argparse.Namespace):
+    token = str(os.getenv(str(args.servicebus_token_env or "")) or "").strip() if args.servicebus_token_env else ""
+    if token:
+        return _StaticAsyncTokenCredential(token)
+    return _azure_credential(args, async_credential=True)
 
 
 def _azure_credential(args: argparse.Namespace, *, async_credential: bool = False):
@@ -584,10 +622,13 @@ def main() -> int:
     parser.add_argument("--query-poll-seconds", type=int, default=10)
     parser.add_argument("--cosmos-endpoint")
     parser.add_argument("--cosmos-database")
+    parser.add_argument("--cosmos-key-env", help="Environment variable containing a Cosmos account key for local live smoke access.")
+    parser.add_argument("--cosmos-token-env", help="Environment variable containing a Cosmos AAD bearer token for local live smoke access.")
     parser.add_argument("--azure-client-id")
     parser.add_argument("--azure-credential", choices=["managed_identity", "cli"], default="managed_identity")
     parser.add_argument("--servicebus-namespace")
     parser.add_argument("--servicebus-queue", default="memforest-writes")
+    parser.add_argument("--servicebus-token-env", help="Environment variable containing a Service Bus AAD bearer token for local live smoke access.")
     parser.add_argument("--benchmark-secret")
     parser.add_argument("--benchmark-secret-path", type=Path)
     parser.add_argument("--durable-hub", default="MemForestWrites")
