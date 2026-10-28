@@ -35,3 +35,24 @@ docker run --rm -p 8000:8000 azure-memforest-api:local
 ## Azure deployment safety
 
 Do not create, modify, or deploy Azure resources until the deployment decisions in `docs/azure-decisions.md` are confirmed.
+
+## Public repository hygiene
+
+Deployment names, account identifiers, hosts, and firewall addresses in committed
+examples and historical experiment artifacts are sanitized examples, not live
+configuration. Set your own endpoints and identity values before running a cloud
+harness or following a deployment command. Historical image and commit references
+are provenance records, not deployment instructions.
+
+Keep credentials and telemetry connection strings in environment variables,
+managed configuration, or a secret store. Never commit Azure CLI settings dumps,
+access tokens, signed URLs, private keys, or unsanitized user-memory exports.
+Local `.env` files, Functions `local.settings.json`, and private-key containers
+are ignored; `.env.example` must contain placeholders only.
+
+Before sharing a branch, scan both its files and its complete Git history for
+secrets. Removing a value in a later commit does not remove its earlier copies.
+If a real credential was committed, revoke or rotate it before coordinating a
+history rewrite. Keep recovery bundles and unsanitized experiment outputs outside
+the repository; do not push recovery refs or restore old history into a sanitized
+branch.

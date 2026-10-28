@@ -684,6 +684,7 @@ def test_phase2_new_case_result_records_question_date(monkeypatch, tmp_path) -> 
     monkeypatch.setattr(harness, "save", lambda path, value: None)
     monkeypatch.setattr(harness, "residue_probe", lambda question, *, user_id: {})
     monkeypatch.setattr(harness, "api_post", lambda *args, **kwargs: {"job_id": "job-1"})
+    monkeypatch.setattr(harness, "judge", lambda *args, **kwargs: {"label": True})
     monkeypatch.setattr(
         harness,
         "wait_job_progress",
